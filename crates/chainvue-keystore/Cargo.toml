@@ -1,0 +1,32 @@
+[package]
+name = "chainvue-keystore"
+description = "Private keys on disk, encrypted. The only crate that may hold a PrivateKey."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# No `chainvue-store`, and no `rusqlite`. There is deliberately no code path
+# from a decrypted secret to a SQL statement, and the absence of the dependency
+# is what makes that true rather than a convention.
+[dependencies]
+chainvue-protocol = { path = "../chainvue-protocol" }
+verus-sdk = { workspace = true }
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+hex = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }

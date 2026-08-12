@@ -1,0 +1,300 @@
+import { Theme, Sp, R, Typo, Motion } from "../theme/theme.slint";
+import { StatusPill } from "base.slint";
+import { NavItem } from "../vm/structs.slint";
+
+// The left rail.
+//
+// Items for later phases are present and disabled rather than absent: reserving
+// the space visibly is a promise about where things will be, whereas hiding
+// them means the layout jumps the day they arrive.
+export component NavRail inherits Rectangle {
+    in property <[NavItem]> items;
+    in property <string> active;
+    in property <bool> expanded: true;
+    callback selected(string);
+
+    width: root.expanded ? 208px : 72px;
+    background: Theme.bg-sunken;
+    animate width { duration: Motion.base; easing: cubic-bezier(0.2, 0, 0, 1); enabled: Motion.enabled; }
+
+    // A hairline instead of a border, so the rail reads as a plane rather than
+    // a box.
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.border-subtle;
+    }
+
+    VerticalLayout {
+        padding: Sp.s4;
+        padding-top: Sp.s7;
+        spacing: Sp.s1;
+
+        for item[i] in root.items: Rectangle {
+            height: 40px;
+            border-radius: R.md;
+            background: root.active == item.id ? Theme.accent-soft
+                : (item.enabled && touch.has-hover) ? Theme.bg-hover
+                : transparent;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+            HorizontalLayout {
+                padding-left: Sp.s4;
+                padding-right: Sp.s4;
+                spacing: Sp.s4;
+
+                Text {
+                    text: item.glyph;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                    color: !item.enabled ? Theme.text-disabled
+                        : root.active == item.id ? Theme.accent
+                        : Theme.text-secondary;
+                }
+
+                if root.expanded: Text {
+                    text: item.label;
+                    font-size: Typo.body;
+                    font-weight: root.active == item.id ? Typo.w-medium : Typo.w-regular;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    color: !item.enabled ? Theme.text-disabled
+                        : root.active == item.id ? Theme.text-primary
+                        : Theme.text-secondary;
+                }
+
+                if root.expanded && item.badge != "": Rectangle {
+                    width: badge.preferred-width + Sp.s4;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: R.full;
+                    background: Theme.bg-inset;
+                    badge := Text {
+                        text: item.badge;
+                        font-size: Typo.micro;
+                        color: Theme.text-tertiary;
+                    }
+                }
+            }
+
+            touch := TouchArea {
+                enabled: item.enabled;
+                mouse-cursor: item.enabled ? MouseCursor.pointer : MouseCursor.default;
+                clicked => { root.selected(item.id); }
+            }
+
+            accessible-role: button;
+            accessible-label: item.label;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+// The bar above the content. Carries the app identity and the one fact a wallet
+// user always wants visible: which chain am I on.
+export component TitleBar inherits Rectangle {
+    in property <string> title;
+    in property <string> network;
+    in property <string> node-state: "unknown";
+    in property <bool> mock-mode: false;
+    callback toggle-theme();
+    callback lock();
+    callback refresh();
+    in property <bool> busy: false;
+    in property <bool> can-refresh: false;
+
+    height: 52px;
+    background: Theme.bg-base;
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border-subtle;
+    }
+
+    HorizontalLayout {
+        padding-left: Sp.s8;
+        padding-right: Sp.s8;
+        spacing: Sp.s5;
+
+        Text {
+            text: root.title;
+            font-size: Typo.title3;
+            font-weight: Typo.w-semibold;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        // Mock mode says so loudly and permanently. A demo build that looks
+        // like the real thing is how someone eventually trusts a fake balance.
+        if root.mock-mode: Rectangle {
+            width: mocklabel.preferred-width + Sp.s6;
+            height: 22px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.full;
+            background: Theme.warning-soft;
+            mocklabel := Text {
+                text: "MOCK DATA";
+                font-size: Typo.micro;
+                font-weight: Typo.w-semibold;
+                letter-spacing: 0.6px;
+                color: Theme.warning;
+            }
+        }
+
+        StatusPill {
+            state: root.node-state;
+            text: root.network == "" ? "Not connected" : root.network;
+            y: (parent.height - self.height) / 2;
+        }
+
+        if root.can-refresh: Rectangle {
+            width: refreshlabel.preferred-width + Sp.s5;
+            height: 26px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.sm;
+            background: refreshtouch.has-hover ? Theme.bg-hover : transparent;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+            refreshlabel := Text {
+                // No spinner: the word changing IS the feedback, and a spinner
+                // that appears for 200ms reads as a flicker rather than
+                // progress.
+                text: root.busy ? "Reading…" : "Refresh";
+                font-size: Typo.caption;
+                font-weight: Typo.w-medium;
+                color: root.busy ? Theme.text-tertiary
+                    : refreshtouch.has-hover ? Theme.text-primary
+                    : Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            refreshtouch := TouchArea {
+                enabled: !root.busy;
+                mouse-cursor: root.busy ? MouseCursor.default : MouseCursor.pointer;
+                clicked => { root.refresh(); }
+            }
+            accessible-role: button;
+            accessible-label: "Refresh balances";
+        }
+
+        // Locking has to be reachable in one click from anywhere, not buried in
+        // a settings page. It is the action someone reaches for when they are
+        // already walking away from the machine.
+        //
+        // A word, not a glyph. The padlock characters the system font is
+        // willing to draw are colour emoji, and the monochrome ones it is not:
+        // `◍` rendered as nothing at all here, which is the failure mode this
+        // file has hit twice already and which is invisible in the source.
+        Rectangle {
+            width: locklabel.preferred-width + Sp.s5;
+            height: 26px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.sm;
+            background: locktouch.has-hover ? Theme.bg-hover : transparent;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+            locklabel := Text {
+                text: "Lock";
+                font-size: Typo.caption;
+                font-weight: Typo.w-medium;
+                color: locktouch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            locktouch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.lock(); }
+            }
+            accessible-role: button;
+            accessible-label: "Lock the wallet";
+        }
+
+        Rectangle {
+            width: themelabel.preferred-width + Sp.s5;
+            height: 26px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.sm;
+            background: themetouch.has-hover ? Theme.bg-hover : transparent;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+            themelabel := Text {
+                // Named for what pressing it gives you, not for the state it
+                // is in — and a word rather than a symbol, because `☀` drew
+                // nothing in the light theme. The dark one rendered fine, so
+                // this was invisible until a light reference image existed.
+                text: Theme.dark ? "Light" : "Dark";
+                font-size: Typo.caption;
+                font-weight: Typo.w-medium;
+                color: themetouch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            themetouch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle-theme(); }
+            }
+            accessible-role: button;
+            accessible-label: "Toggle light and dark theme";
+        }
+    }
+}
+
+// The footer. Block height and latency belong here rather than in a dialog:
+// they are the two numbers that tell you whether what you are looking at is
+// current.
+export component StatusBar inherits Rectangle {
+    in property <string> tip;
+    in property <string> latency;
+    in property <string> endpoint;
+    in property <string> sdk-rev;
+
+    // 32px rather than 28: at 28 the 11px text sits hard against the window
+    // edge with no breathing room. Only visible in a screenshot.
+    height: 32px;
+    background: Theme.bg-sunken;
+
+    Rectangle {
+        height: 1px;
+        background: Theme.border-subtle;
+    }
+
+    HorizontalLayout {
+        padding-left: Sp.s8;
+        padding-right: Sp.s8;
+        spacing: Sp.s5;
+
+        Text {
+            text: root.tip == "" ? "no block height" : root.tip + " blocks";
+            font-family: Typo.mono;
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        if root.latency != "": Text {
+            text: root.latency;
+            font-family: Typo.mono;
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.endpoint;
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: "sdk " + root.sdk-rev;
+            font-family: Typo.mono;
+            font-size: Typo.micro;
+            color: Theme.text-disabled;
+            vertical-alignment: center;
+        }
+    }
+}

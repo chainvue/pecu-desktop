@@ -1,0 +1,31 @@
+[package]
+name = "chainvue-app"
+description = "The ChainVue desktop wallet binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "chainvue"
+path = "src/main.rs"
+
+[features]
+default = []
+# Runs against a scripted chain instead of a node. Off by default, so a release
+# build does not contain the mock backend at all.
+mock = ["chainvue-chain/mock", "chainvue-core/mock"]
+
+[dependencies]
+chainvue-protocol = { path = "../chainvue-protocol" }
+chainvue-chain = { path = "../chainvue-chain" }
+chainvue-core = { path = "../chainvue-core" }
+chainvue-ui = { path = "../chainvue-ui" }
+slint = "1.17"
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

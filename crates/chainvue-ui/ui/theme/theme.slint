@@ -1,0 +1,140 @@
+// Design tokens. No call site anywhere else writes a raw hex value or a pixel
+// constant — if you find yourself typing `#1A1D22` in a screen, add a token.
+//
+// Named `Theme`, not `Palette`: `Palette` is already exported by
+// `std-widgets.slint` and the two collide.
+
+export global Theme {
+    // The only switch. Everything below derives from it, so a theme change is
+    // one property write and every binding re-evaluates.
+    in-out property <bool> dark: true;
+
+    // ── Surfaces ────────────────────────────────────────────────────────
+    // A three-step ladder, not a flat plane. `#0B0C0E` rather than pure black:
+    // black kills the perception of soft radii and makes shadows invisible, so
+    // a "premium dark" UI painted on #000 reads as cheap.
+    out property <brush> bg-base:    dark ? #0B0C0E : #FBFBFC;
+    out property <brush> bg-sunken:  dark ? #08090A : #F4F5F7;
+    out property <brush> bg-surface: dark ? #121316 : #FFFFFF;
+    out property <brush> bg-raised:  dark ? #17191D : #FFFFFF;
+    out property <brush> bg-hover:   dark ? #1B1E22 : #F4F5F7;
+    out property <brush> bg-active:  dark ? #212429 : #EDEEF1;
+    out property <brush> bg-inset:   dark ? #0E0F12 : #F7F8F9;
+
+    // Dark leans on hairlines, light leans on shadow. Using both in both
+    // themes is what makes a UI look muddy.
+    out property <brush> border-subtle:  dark ? #1F2227 : #EBECEF;
+    out property <brush> border-default: dark ? #2A2E35 : #DDDFE4;
+    out property <brush> border-strong:  dark ? #3A3F48 : #C3C7CE;
+    out property <bool>  card-shadow: !dark;
+
+    // ── Text ────────────────────────────────────────────────────────────
+    // Never pure white on dark — #F2F3F5 is the ceiling. `tertiary` is the
+    // deliberate contrast floor at roughly 4.6:1; nothing dimmer carries text.
+    out property <brush> text-primary:   dark ? #F2F3F5 : #101114;
+    out property <brush> text-secondary: dark ? #A0A5AE : #5C626C;
+    out property <brush> text-tertiary:  dark ? #6E747E : #878D97;
+    out property <brush> text-disabled:  dark ? #4A4F58 : #AEB3BB;
+    out property <brush> text-on-accent: #FFFFFF;
+
+    // ── Accent ──────────────────────────────────────────────────────────
+    // One accent, used sparingly. Tuned per theme: the same blue that reads
+    // well on near-black is too pale on white.
+    out property <brush> accent:        dark ? #4D7CFE : #2D62E8;
+    out property <brush> accent-hover:  dark ? #6A92FF : #1F51D4;
+    out property <brush> accent-active: dark ? #3C68E0 : #1A46B8;
+    out property <brush> accent-soft:   dark ? #4D7CFE1F : #2D62E814;
+    out property <brush> accent-ring:   dark ? #4D7CFE73 : #2D62E866;
+
+    // ── Semantic ────────────────────────────────────────────────────────
+    // Deliberately desaturated. #35C083 reads as information; #00FF88 reads as
+    // a trading terminal, which is the thing this wallet is not.
+    out property <brush> positive:      dark ? #35C083 : #128A5A;
+    out property <brush> positive-soft: dark ? #35C0831F : #128A5A14;
+    out property <brush> negative:      dark ? #F0616D : #D63B49;
+    out property <brush> negative-soft: dark ? #F0616D1F : #D63B4914;
+    out property <brush> warning:       dark ? #E5A544 : #B8721A;
+    out property <brush> warning-soft:  dark ? #E5A5441F : #B8721A14;
+}
+
+// 4px grid. If a value is not on it, it is a mistake or it needs a name.
+export global Sp {
+    out property <length> s1:  2px;
+    out property <length> s2:  4px;
+    out property <length> s3:  8px;
+    out property <length> s4:  12px;
+    out property <length> s5:  16px;
+    out property <length> s6:  20px;
+    out property <length> s7:  24px;
+    out property <length> s8:  32px;
+    out property <length> s9:  40px;
+    out property <length> s10: 48px;
+    out property <length> s11: 64px;
+
+    out property <length> card-pad:    20px;
+    out property <length> screen-pad:  32px;
+    out property <length> section-gap: 32px;
+    // Caps line length on a wide display. Cards that stretch to 2000px are
+    // what make an app read as a "dashboard" rather than a product.
+    out property <length> content-max: 1160px;
+}
+
+export global R {
+    out property <length> xs:  4px;
+    out property <length> sm:  6px;
+    out property <length> md:  10px;
+    out property <length> lg:  14px;
+    out property <length> xl:  20px;
+    out property <length> xxl: 28px;
+    out property <length> full: 999px;
+}
+
+export global Typo {
+    // The UI font is the system default: leaving `font-family` unset lets Slint
+    // pick the platform's UI font, which is correct on every OS and needs no
+    // license or bundled file.
+    //
+    // Money, addresses, txids and block heights use a MONOSPACE family, and
+    // that is not decoration. Slint exposes no OpenType feature control, so
+    // tabular figures cannot be requested on a proportional font — and with
+    // proportional digits the balance visibly jitters while it counts up, and
+    // amounts do not align in a column.
+    //
+    // "Menlo" ships with every macOS. On Linux/Windows it is absent and the
+    // renderer falls back to another monospace family, which is fine but is
+    // not the same design. The plan is to bundle IBM Plex Mono (SIL OFL 1.1)
+    // in `ui/fonts/` and `import` it here; that is a file-management step, not
+    // a code change, and this is the honest placeholder until then.
+    out property <string> mono: "Menlo";
+
+    out property <length> hero:    44px;   // dashboard balance
+    out property <length> title1:  28px;
+    out property <length> title2:  22px;
+    out property <length> title3:  17px;
+    out property <length> body-lg: 16px;
+    out property <length> body:    14px;
+    out property <length> caption: 12px;
+    out property <length> micro:   11px;
+
+    out property <length> num-lg: 20px;
+    out property <length> num:    14px;
+    out property <length> num-sm: 12px;
+
+    out property <int> w-regular:  400;
+    out property <int> w-medium:   500;
+    out property <int> w-semibold: 600;
+}
+
+export global Motion {
+    // The reduce-motion master switch. Every `animate` block in this UI carries
+    // `enabled: Motion.enabled;` — Slint 1.17 added that property, and it is
+    // the whole mechanism: one line per animation, no duplicate code paths.
+    in-out property <bool> enabled: true;
+
+    out property <duration> instant: 80ms;    // press
+    out property <duration> fast:    140ms;   // hover, focus ring
+    out property <duration> base:    220ms;   // state change
+    out property <duration> slow:    320ms;   // sheets, modals
+    out property <duration> count:   900ms;   // balance count-up
+    out property <duration> draw:    1100ms;  // chart draw-in
+}

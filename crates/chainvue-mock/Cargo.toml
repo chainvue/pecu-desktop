@@ -1,0 +1,30 @@
+[package]
+name = "chainvue-mock"
+description = "A scripted Verus chain for developing the UI without a node — and structurally unable to reach one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# This dependency list is the security property, not a convenience.
+#
+# `verus-rpc` is taken WITHOUT its `http` feature, so `HttpTransport` is never
+# compiled and `ureq` never enters this crate's dependency graph. There is no
+# HTTP client, no TLS, and no socket API anywhere in here — which is why mock
+# mode cannot broadcast a real transaction: not "is prevented from", contains
+# nothing capable of it. Same argument the SDK makes for its air-gapped signer.
+#
+# `tests/no_network_stack.rs` walks `cargo tree` and fails if that ever changes.
+[dependencies]
+verus-rpc = { workspace = true }
+# Only for `money::{Amount, Txid, Utxo}` — the vocabulary the scripted answers
+# are written in. `default-features` cannot be overridden per-crate once the
+# workspace entry sets features, and overriding it here would be theatre
+# anyway: feature unification decides what actually gets compiled. See this
+# crate's `tests/no_network_stack.rs` for what is genuinely enforced instead.
+verus-sdk = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,2 @@
+# Diff images are build output, not references.
+*.diff.png

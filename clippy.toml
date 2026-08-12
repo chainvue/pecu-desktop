@@ -1,0 +1,21 @@
+# Panicking in a wallet loses a session at best. `unwrap_used` / `expect_used`
+# are denied in the workspace lint tier — but a test that cannot `expect` is a
+# test written around the linter, so they are allowed there. This is clippy's
+# own mechanism for the distinction; the alternative is `#[allow]` scattered
+# across every test module, which reads as an exemption rather than a policy.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# Every async task must be registered so it can be cancelled when its screen
+# closes, and every blocking call must go through the bounded pool. A bare
+# `tokio::spawn` is a task nothing owns and nothing can stop — which is how a
+# closed Send screen keeps fetching fee estimates forever.
+#
+# `chainvue-core/src/runtime.rs` is the one file that legitimately calls these,
+# and carries a module-level allow. One file, reviewable.
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "use TaskRegistry::spawn — an untracked task outlives its screen" },
+    { path = "tokio::task::spawn_blocking", reason = "use Blocking::run / run_uncancellable — the blocking pool is bounded by a semaphore" },
+    { path = "std::thread::spawn", reason = "use the tokio runtime" },
+]

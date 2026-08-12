@@ -1,0 +1,86 @@
+[workspace]
+resolver = "2"
+# Listed explicitly rather than `crates/*` so that a half-created crate
+# directory cannot break the workspace for everything else while it is being
+# written. Grows as each crate lands.
+members = ["crates/chainvue-protocol", "crates/chainvue-chain", "crates/chainvue-mock", "crates/chainvue-ui", "crates/chainvue-app", "crates/chainvue-core", "crates/chainvue-keystore"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# The SDK sets rust-version = "1.95" and this machine has exactly 1.95.0 with no
+# rustup. There is no headroom: raising this, or letting the SDK raise its own,
+# breaks the build with no quick way to install another toolchain.
+rust-version = "1.95"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# ── The SDK. Source of truth for keys, addresses, transactions, fees and RPC. ──
+#
+# Pinned by rev, matching what `verus-pecu-cli` and the web wallet do. The crate
+# is not on crates.io, so "latest main" is not a reproducible dependency — and
+# the SDK sets rust-version = 1.95 against a machine that has exactly 1.95.0, so
+# an upstream MSRV bump must be a deliberate act here rather than a build that
+# breaks on a Tuesday. `SDK_REV` in chainvue-protocol surfaces this in About.
+verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", features = ["network"] }
+# Taken directly (not through the facade) by chainvue-mock, which needs
+# `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
+# dependency graph at all. See chainvue-mock/Cargo.toml.
+verus-rpc = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", default-features = false }
+# Dev-dependency only, for `testing::ScriptedReader` — which lets a send be
+# built and signed against a scripted chain, with the broadcasts it received
+# available to assert on. The facade does not forward the `testing` feature, so
+# this is taken directly, and pinned to the SAME revision: a different one would
+# be testing a different SDK than the one that ships.
+verus-flows = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", features = ["testing"] }
+
+# ── Shared across member crates so versions cannot drift apart. ──
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+tokio = { version = "1", default-features = false }
+tokio-util = "0.7"
+tracing = "0.1"
+hex = "0.4"
+
+[workspace.lints.rust]
+# Mirrors the SDK: a wallet has no business writing unsafe.
+unsafe_code = "forbid"
+
+# The standard here is: every module and every type carries documentation
+# explaining what it is FOR and why it is shaped the way it is, and a field is
+# documented when it carries information its name does not.
+#
+# `missing_docs` cannot express that — it is per-item, so enforcing it produces
+# `/// The name.` on `pub name: String` a hundred times over. That is not
+# documentation, it is the appearance of documentation, and it makes the fields
+# that genuinely needed a comment (see `BalanceVm`, `Funding`'s four buckets,
+# `PendingVm`) harder to spot rather than easier. The SDK makes the same call
+# for `missing_errors_doc` and for the same stated reason.
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+# Money and consensus bytes: an unchecked conversion here is a fund-loss bug,
+# not a style problem. Same three the SDK denies, for the same reason.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+
+# Panicking in a wallet is a lost session at best. These are denied in library
+# crates; test code is exempt via `#[cfg(test)]` allow attributes where needed.
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+
+pedantic = { level = "warn", priority = -1 }
+# Prose in doc comments should read as prose. Same call the SDK makes.
+doc_markdown = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+strip = true
+lto = "thin"

@@ -1,0 +1,108 @@
+// Every struct that crosses the Rust↔Slint boundary is declared here and
+// nowhere else.
+//
+// `slint-build` generates a matching Rust type for each of these, so
+// `impl From<protocol::NodeVm> for NodeRow` in `src/vm.rs` stops compiling the
+// moment either side drifts. That is the main reason this project uses
+// `slint-build` rather than the `slint!` macro.
+//
+// Money is a `string` throughout, and that is not laziness: Slint's `int` is an
+// `i32` and its `float` is an `f32`. A Verus balance counts satoshis at 1e8 per
+// coin, so 21.5 coins already overflows `i32` and `f32` cannot hold a satoshi
+// count exactly past ~16.7 million. Either type would silently render a wrong
+// number on a screen whose whole job is to be right about money.
+
+export struct NavItem {
+    id: string,
+    label: string,
+    // A short glyph. Real icons become `Path` commands later; a glyph keeps the
+    // shell honest without inventing an icon set that has to be redrawn.
+    glyph: string,
+    // Phases 5+ appear here greyed out with a badge rather than being hidden.
+    // Reserving the space visibly is a promise; hiding it is a surprise later.
+    enabled: bool,
+    badge: string,
+}
+
+export struct NodeRow {
+    id: int,
+    label: string,
+    url: string,
+    // "unknown" | "probing" | "online" | "degraded" | "offline"
+    status: string,
+    // What the node itself reported. Empty until it has answered — this is
+    // never guessed from the URL.
+    network: string,
+    tip: string,
+    latency: string,
+    note: string,
+    builtin: bool,
+    active: bool,
+}
+
+// One word of a recovery phrase.
+//
+// Deliberately a row in a model rather than a slice of one long string. A
+// joined phrase is the single object that turns one stray log line or one
+// accidental clipboard write into a total loss — per-word means no such object
+// is ever built on this side of the boundary.
+//
+// `word` holds "••••••" whenever the phrase is concealed, which is nearly all
+// of the time. Concealing is Rust overwriting each row in place, not the model
+// being emptied: the grid keeps its shape, and no real word is left in a
+// `SharedString` that merely stopped being visible.
+export struct SeedWord {
+    index: int,
+    word: string,
+}
+
+export struct AssetRow {
+    name: string,
+    amount: string,
+    secondary: string,
+    native: bool,
+}
+
+export struct ActivityRow {
+    txid: string,
+    // "in" | "out" | "self"
+    direction: string,
+    amount: string,
+    when: string,
+    pending: bool,
+    // 0 while unconfirmed. Confirmations are DERIVED in the UI from this and a
+    // single `tip` property, so a new block updates one integer instead of
+    // rewriting every row.
+    height: int,
+}
+
+// One output of the transaction that was actually built and signed.
+//
+// Decoded from the signed bytes in `chainvue_core::send::review`, never echoed
+// back from the form — which is the entire reason the review step exists.
+export struct ReviewOutput {
+    // Empty when the script could not be decoded. That is shown as such rather
+    // than guessed at: an unreadable output in a transaction about to be signed
+    // is not something a review may present as ordinary.
+    address: string,
+    kind: string,
+    amount: string,
+    is-change: bool,
+}
+
+// A transaction handed to a node whose outcome nobody knows.
+//
+// It exists because a transport failure during a broadcast is genuinely
+// ambiguous — the node may have accepted and relayed it before the connection
+// dropped. The signed bytes are on disk, and the only safe resolution is to ask
+// whether it confirmed and, if it truly never arrived, to send THOSE bytes
+// again. Never a rebuild.
+export struct PendingRow {
+    id: int,
+    txid: string,
+    to-address: string,
+    amount: string,
+    // "uncertain" | "absent" | "resent"
+    state: string,
+    checks: int,
+}

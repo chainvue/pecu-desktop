@@ -1,0 +1,153 @@
+//! Rendering the interface into a pixel buffer, with no window.
+//!
+//! # Why this exists in the library rather than in a test
+//!
+//! Two callers need it: `examples/render_shots.rs`, which writes PNGs a person
+//! can look at, and `tests/visual.rs`, which compares them against checked-in
+//! references. Duplicating the setup would let the two drift, and a snapshot
+//! test that renders differently from the images you reviewed is worse than no
+//! snapshot test.
+//!
+//! No PNG encoding happens here — this hands back raw RGB and lets the caller
+//! decide. That keeps the `image` crate a dev-dependency, so the shipped wallet
+//! carries no image codec.
+//!
+//! # Why offscreen, and not a screenshot of the running window
+//!
+//! An earlier version pinned the real window to a known rectangle and used
+//! macOS `screencapture -R`. It captured an unrelated application the second
+//! time it ran, because positioning a window does not raise it and a region
+//! capture photographs whatever pixels are there — which on a developer's
+//! machine is private. Rendering into a buffer this process owns removes that
+//! failure mode rather than narrowing it: there is no screen involved, so there
+//! is nothing else that could be in the image.
+
+use std::rc::Rc;
+
+use slint::platform::software_renderer::{
+    MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
+};
+use slint::platform::{Platform, WindowAdapter};
+use slint::{ComponentHandle, PhysicalSize};
+
+use crate::AppWindow;
+
+/// The size every snapshot is rendered at.
+///
+/// Fixed so a reference image stays comparable. Wide enough that the nav rail
+/// is expanded — the collapsed state is a separate case worth its own snapshot
+/// once it matters.
+pub const WIDTH: u32 = 1280;
+pub const HEIGHT: u32 = 820;
+
+/// One rendered frame: `WIDTH * HEIGHT * 3` bytes, RGB, row-major.
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<u8>,
+}
+
+/// A platform with a single software-rendered window and no event loop.
+struct Offscreen {
+    window: Rc<MinimalSoftwareWindow>,
+}
+
+impl Platform for Offscreen {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+        Ok(self.window.clone())
+    }
+}
+
+/// Install the offscreen platform. **Callable once per process.**
+///
+/// Slint allows exactly one platform per process, which is why the visual test
+/// renders every case inside a single `#[test]` rather than one test each — and
+/// why this returns the window instead of hiding it in a global.
+pub fn install() -> Result<Rc<MinimalSoftwareWindow>, Box<dyn std::error::Error>> {
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    // `SetPlatformError` is its own type and does not convert into
+    // `PlatformError`, so this is mapped rather than propagated with `?`.
+    slint::platform::set_platform(Box::new(Offscreen {
+        window: window.clone(),
+    }))
+    .map_err(|e| format!("a Slint platform is already installed: {e:?}"))?;
+    Ok(window)
+}
+
+/// Render one screen in one theme.
+pub fn render(
+    window: &Rc<MinimalSoftwareWindow>,
+    screen: &str,
+    dark: bool,
+    seed: impl FnOnce(&AppWindow),
+) -> Result<Frame, Box<dyn std::error::Error>> {
+    let ui = AppWindow::new()?;
+    seed(&ui);
+    ui.set_screen(screen.into());
+    ui.global::<crate::Theme>().set_dark(dark);
+
+    window.set_size(PhysicalSize::new(WIDTH, HEIGHT));
+    ui.show()?;
+
+    let width = WIDTH as usize;
+    let mut buffer = vec![
+        PremultipliedRgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 0,
+        };
+        width * HEIGHT as usize
+    ];
+
+    window.request_redraw();
+    let drew = window.draw_if_needed(|renderer| {
+        renderer.render(&mut buffer, width);
+    });
+    ui.hide()?;
+
+    if !drew {
+        return Err("nothing was drawn — the window reported no pending repaint".into());
+    }
+
+    // The window background is opaque, so alpha is 255 throughout and the
+    // premultiplied channels already hold the straight colour values.
+    let mut rgb = Vec::with_capacity(buffer.len() * 3);
+    for pixel in &buffer {
+        rgb.extend_from_slice(&[pixel.red, pixel.green, pixel.blue]);
+    }
+
+    Ok(Frame {
+        width: WIDTH,
+        height: HEIGHT,
+        rgb,
+    })
+}
+
+/// One reference image to render: screen id, file label, and the fixture that
+/// puts the window into the state being photographed.
+pub type Case = (&'static str, &'static str, fn(&AppWindow));
+
+/// Every screen/state combination that gets a reference image.
+///
+/// Both themes for each, because the light palette is its own set of values
+/// rather than an inversion of the dark one and is otherwise never looked at.
+///
+/// Note how few of these are actually different *screens*. Onboarding and the
+/// backup flow share a screen id and differ only in the starting state, which
+/// is the point: what the window shows is decided by the wallet, not by a
+/// router the UI drives.
+pub const CASES: &[Case] = &[
+    ("dashboard", "onboarding", crate::fixtures::fresh),
+    ("dashboard", "restore", crate::fixtures::restoring),
+    ("dashboard", "dashboard", crate::fixtures::unlocked),
+    ("dashboard", "dashboard-funded", crate::fixtures::funded),
+    ("dashboard", "backup-due", crate::fixtures::backup_due),
+    ("dashboard", "backup-phrase", crate::fixtures::backup_phrase),
+    ("dashboard", "backup-verify", crate::fixtures::backup_verify),
+    ("dashboard", "unconfirmed", crate::fixtures::unconfirmed),
+    ("send", "send-review", crate::fixtures::reviewing),
+    ("receive", "receive", crate::fixtures::receiving),
+    ("settings", "settings", crate::fixtures::settings),
+    ("nodes", "network", crate::fixtures::unlocked),
+];

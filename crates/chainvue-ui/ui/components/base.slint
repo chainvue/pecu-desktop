@@ -1,0 +1,350 @@
+import { Theme, Sp, R, Typo, Motion } from "../theme/theme.slint";
+
+// A button.
+//
+// `variant` is a string rather than an enum so that adding one is a one-word
+// change here and at the call site, with no generated-type churn.
+// "primary" | "secondary" | "ghost" | "destructive"
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <string> variant: "secondary";
+    in property <bool> enabled: true;
+    in property <bool> busy: false;
+    callback clicked();
+
+    property <bool> is-primary: root.variant == "primary";
+    property <bool> is-ghost: root.variant == "ghost";
+    property <bool> is-danger: root.variant == "destructive";
+
+    height: 36px;
+    horizontal-stretch: 0;
+    min-width: label.preferred-width + Sp.s7 * 2;
+    border-radius: R.md;
+    border-width: root.is-ghost ? 0px : 1px;
+
+    // A disabled button loses its colour entirely. Keeping the accent border
+    // under greyed-out text reads as "this is the button you want" attached to
+    // something that does not respond, which is worse than either.
+    border-color: !root.enabled ? Theme.border-subtle
+        : root.is-primary ? Theme.accent
+        : root.is-danger ? Theme.negative
+        : Theme.border-default;
+
+    background: !root.enabled ? Theme.bg-inset
+        : root.is-primary ? (touch.pressed ? Theme.accent-active : touch.has-hover ? Theme.accent-hover : Theme.accent)
+        : root.is-danger ? (touch.has-hover ? Theme.negative-soft : transparent)
+        : root.is-ghost ? (touch.has-hover ? Theme.bg-hover : transparent)
+        : (touch.pressed ? Theme.bg-active : touch.has-hover ? Theme.bg-hover : Theme.bg-surface);
+
+    // Press feedback is a scale, not a colour jump: it reads as physical.
+    // Everything here is gated on Motion.enabled — one line per animation is
+    // the entire reduce-motion mechanism.
+    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+    animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+    label := Text {
+        text: root.busy ? "…" : root.text;
+        font-size: Typo.body;
+        font-weight: Typo.w-medium;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: !root.enabled ? Theme.text-disabled
+            : root.is-primary ? Theme.text-on-accent
+            : root.is-danger ? Theme.negative
+            : Theme.text-primary;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled && !root.busy;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+}
+
+// A row of mutually exclusive choices.
+//
+// The thumb animates both `x` and `width`, so it slides *and* resizes between
+// options of different lengths rather than jumping. That one detail is most of
+// the difference between this and three buttons.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> index: 0;
+    callback changed(int);
+
+    height: 34px;
+    background: Theme.bg-inset;
+    border-radius: R.md;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+    clip: true;
+
+    // Behind the labels, so the text is never drawn under a moving surface.
+    Rectangle {
+        x: root.index * (root.width / max(1, root.options.length));
+        width: root.width / max(1, root.options.length);
+        height: parent.height - 6px;
+        y: 3px;
+        background: Theme.bg-raised;
+        border-radius: R.sm;
+        border-width: 1px;
+        border-color: Theme.border-default;
+        animate x { duration: Motion.base; easing: cubic-bezier(0.2, 0, 0, 1); enabled: Motion.enabled; }
+        animate width { duration: Motion.base; easing: cubic-bezier(0.2, 0, 0, 1); enabled: Motion.enabled; }
+    }
+
+    HorizontalLayout {
+        for option[i] in root.options: Rectangle {
+            Text {
+                text: option;
+                font-size: Typo.caption;
+                font-weight: root.index == i ? Typo.w-medium : Typo.w-regular;
+                color: root.index == i ? Theme.text-primary : Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.index = i;
+                    root.changed(i);
+                }
+            }
+            accessible-role: button;
+            accessible-label: option;
+        }
+    }
+}
+
+// A surface. In dark mode cards are hairline-led; in light mode shadow-led.
+// Using both in both themes is what makes a UI look muddy.
+export component Card inherits Rectangle {
+    in property <bool> interactive: false;
+    callback clicked();
+
+    background: Theme.bg-surface;
+    border-radius: R.lg;
+    border-width: 1px;
+    border-color: root.interactive && touch.has-hover ? Theme.border-default : Theme.border-subtle;
+    drop-shadow-blur: Theme.card-shadow ? 12px : 0px;
+    drop-shadow-offset-y: Theme.card-shadow ? 2px : 0px;
+    drop-shadow-color: Theme.card-shadow ? #10111412 : transparent;
+
+    animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+    touch := TouchArea {
+        enabled: root.interactive;
+        mouse-cursor: root.interactive ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+
+    @children
+}
+
+// An eyebrow label: 11px, uppercase, tracked out. Used above every figure.
+export component Eyebrow inherits Text {
+    font-size: Typo.micro;
+    font-weight: Typo.w-medium;
+    letter-spacing: 0.6px;
+    color: Theme.text-tertiary;
+}
+
+// The ONLY element allowed to render an amount.
+//
+// One place owns sign colouring and the monospace family, so a screen cannot
+// accidentally render money in a proportional font — where the digits would
+// not align in a column and the balance would visibly jitter as it counts up.
+export component Money inherits HorizontalLayout {
+    in property <string> amount;
+    in property <string> currency: "VRSC";
+    in property <length> size: Typo.num;
+    // "neutral" | "positive" | "negative"
+    in property <string> tone: "neutral";
+    in property <bool> show-currency: true;
+    // Monospace keeps a column of amounts aligned and stops the balance
+    // jittering as it counts up — but at hero size Menlo's slashed zero reads
+    // as a terminal rather than a wallet. So the big number opts out until a
+    // proper text face with tabular figures (IBM Plex Mono) is bundled, and
+    // every amount in a list keeps it, where alignment matters more than
+    // character.
+    in property <bool> mono: true;
+
+    // Without this the layout stretches to its parent and the currency drifts
+    // to the far edge of the window, disconnected from the number it belongs
+    // to. `start` keeps the pair together as one reading unit.
+    alignment: start;
+    spacing: Sp.s3;
+
+    Text {
+        text: root.amount;
+        font-family: root.mono ? Typo.mono : "";
+        font-size: root.size;
+        color: root.tone == "positive" ? Theme.positive
+            : root.tone == "negative" ? Theme.negative
+            : Theme.text-primary;
+        vertical-alignment: center;
+    }
+
+    if root.show-currency: Text {
+        text: root.currency;
+        font-family: root.mono ? Typo.mono : "";
+        font-size: root.size * 0.62;
+        color: Theme.text-tertiary;
+        vertical-alignment: center;
+    }
+}
+
+// A status dot plus text. Colour is never the only signal — the text is always
+// there too, which is what makes this readable without colour vision.
+export component StatusPill inherits HorizontalLayout {
+    // "online" | "degraded" | "offline" | "pending" | "probing" | "unknown"
+    in property <string> state: "unknown";
+    in property <string> text;
+
+    property <brush> tone: root.state == "online" ? Theme.positive
+        : root.state == "degraded" || root.state == "pending" || root.state == "probing" ? Theme.warning
+        : root.state == "offline" ? Theme.negative
+        : Theme.text-tertiary;
+
+    spacing: Sp.s3;
+
+    Rectangle {
+        width: 7px;
+        height: 7px;
+        border-radius: 4px;
+        background: root.tone;
+        y: (parent.height - self.height) / 2;
+        animate background { duration: Motion.base; enabled: Motion.enabled; }
+    }
+
+    Text {
+        text: root.text;
+        font-size: Typo.caption;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+}
+
+// A loading placeholder at the exact dimensions of the thing it stands in for,
+// so nothing shifts when the real content arrives.
+export component Skeleton inherits Rectangle {
+    in property <length> radius: R.sm;
+    background: Theme.bg-inset;
+    border-radius: root.radius;
+    opacity: 0.7;
+}
+
+// Empty states are built in the same commit as the happy path, not added as
+// polish. A wallet showing a blank card while fetching reads as broken.
+export component EmptyState inherits VerticalLayout {
+    in property <string> glyph: "○";
+    in property <string> title;
+    in property <string> body;
+    in property <string> action-text;
+    callback action();
+
+    alignment: center;
+    spacing: Sp.s4;
+
+    Text {
+        text: root.glyph;
+        font-size: 32px;
+        color: Theme.text-tertiary;
+        opacity: 0.5;
+        horizontal-alignment: center;
+    }
+
+    Text {
+        text: root.title;
+        font-size: Typo.title3;
+        font-weight: Typo.w-semibold;
+        color: Theme.text-primary;
+        horizontal-alignment: center;
+    }
+
+    if root.body != "": Text {
+        text: root.body;
+        font-size: Typo.body;
+        color: Theme.text-secondary;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        max-width: 320px;
+    }
+
+    if root.action-text != "": HorizontalLayout {
+        alignment: center;
+        Btn {
+            text: root.action-text;
+            variant: "primary";
+            clicked => { root.action(); }
+        }
+    }
+}
+
+// One row in a list. Fixed height, because uniform rows are what let Slint's
+// ListView virtualize cleanly and keep the scrollbar geometry honest.
+export component ListRow inherits Rectangle {
+    in property <string> glyph;
+    in property <brush> glyph-tone: Theme.text-secondary;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> selected: false;
+    in property <bool> interactive: true;
+    callback clicked();
+
+    height: 64px;
+    background: root.selected ? Theme.accent-soft
+        : (root.interactive && touch.has-hover) ? Theme.bg-hover
+        : transparent;
+    border-radius: R.md;
+
+    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+    HorizontalLayout {
+        padding-left: Sp.s5;
+        padding-right: Sp.s5;
+        spacing: Sp.s5;
+
+        if root.glyph != "": Rectangle {
+            width: 34px;
+            height: 34px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.full;
+            background: Theme.bg-inset;
+            Text {
+                text: root.glyph;
+                font-size: 15px;
+                color: root.glyph-tone;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        @children
+    }
+
+    touch := TouchArea {
+        enabled: root.interactive;
+        clicked => { root.clicked(); }
+    }
+}

@@ -1,0 +1,200 @@
+//! What the UI asks the core to do.
+//!
+//! # The whole outbound surface is this one enum
+//!
+//! Keeping it in a single type — and mirroring it as a single `Actions` global
+//! on the Slint side — means the entire UI→core API is readable in one sitting.
+//! A new variant carrying a [`Secret`] is then impossible to add unnoticed,
+//! which is the property worth having.
+//!
+//! # The variants that carry secret material
+//!
+//! Five, and this list is the record — if it disagrees with the enum, the enum
+//! is right and someone added a variant without arguing for it:
+//!
+//! * [`Command::CreateWallet`] — the new passphrase
+//! * [`Command::Unlock`] — the passphrase
+//! * [`Command::ChangePassphrase`] — both of them
+//! * [`Command::ImportKey`] — a phrase or a WIF, plus the passphrase
+//! * [`Command::RevealBackup`] — the passphrase, re-asked on purpose
+//!
+//! [`Command::ConfirmPhrase`] deliberately carries plain `String`s rather than
+//! [`Secret`]s: three of twenty-four words, which the user is reading off the
+//! screen at that moment, leave twenty-one unknown words from a 2048-word list.
+//! That is not key material in any useful sense, and wrapping it would blur what
+//! [`Secret`] means everywhere else.
+
+use crate::models::{ScreenId, SendDraft};
+use crate::secret::Secret;
+
+/// How a key is being brought into the wallet.
+///
+/// # Why a phrase and free text are separate variants
+///
+/// Verus hashes a transparent seed phrase **verbatim**, so free text really is
+/// a legitimate key — refusing it would strand funds that another Verus wallet
+/// can reach. But accepting everything silently means a mistyped word produces
+/// a valid, empty wallet with nothing to say why, and BIP-39 spends its last
+/// bits on a checksum built to catch exactly that.
+///
+/// So the distinction is the user's, made before the import: [`Self::Phrase`]
+/// is checked and refused when it fails, [`Self::Text`] is taken as typed. One
+/// variant that quietly did both would give up the checksum for everyone in
+/// order to serve the rare case.
+#[derive(Debug)]
+pub enum ImportMaterial {
+    /// A BIP-39 recovery phrase. Core validates it and refuses a failure.
+    Phrase(Secret),
+    /// Free text, hashed exactly as typed. Nothing can check it, which is why
+    /// choosing it is explicit.
+    Text(Secret),
+    /// A WIF private key.
+    Wif(Secret),
+}
+
+/// Where a refresh should reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefreshScope {
+    /// Every key. What the Refresh button does.
+    All,
+    /// One key, after it was added or selected.
+    Key(String),
+    /// Only the chain tip. What the poller does, and it is cheap.
+    TipOnly,
+}
+
+/// What to do about a transaction whose broadcast we could not confirm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingAction {
+    /// Ask the node whether it landed after all.
+    CheckNow,
+    /// Send the **same stored bytes** again. Never a rebuild — see
+    /// `chainvue_core::send`.
+    ResendSameBytes,
+    /// Stop tracking it. The user has decided it is gone.
+    Abandon,
+}
+
+#[derive(Debug)]
+pub enum Command {
+    // ── Wallet ──────────────────────────────────────────────────────────
+    /// Generate a wallet. Entropy comes from the OS inside core; the UI never
+    /// supplies or sees it.
+    CreateWallet {
+        name: String,
+        passphrase: Secret,
+    },
+    /// Show the phrase core is currently holding for the backup screen.
+    ///
+    /// Carries no passphrase, and works only while a backup is in progress —
+    /// that is, between [`Command::CreateWallet`] (or a successful
+    /// [`Command::RevealBackup`]) and whichever of [`Command::ConfirmPhrase`]
+    /// or [`Command::CancelBackup`] ends it. Reaching an existing key's phrase
+    /// from a standing start is `RevealBackup`, which re-runs the key
+    /// derivation.
+    ///
+    /// Sent on every press of hold-to-reveal, so it must stay cheap: core
+    /// already has the words in memory and only formats them.
+    ShowNewPhrase,
+    /// Check the words the user re-typed.
+    ///
+    /// Core answers with a single bool and deliberately never says *which* word
+    /// was wrong — otherwise the confirmation screen becomes a brute-force
+    /// oracle. A correct answer **is** the finish: core records the backup on
+    /// the key and drops the phrase there and then, rather than waiting for a
+    /// second command the UI could fail to send.
+    ConfirmPhrase {
+        checks: Vec<(u32, String)>,
+    },
+    /// Bring in a key that already exists somewhere else.
+    ///
+    /// **Creates the wallet when there is not one yet**, using `passphrase` —
+    /// which is what restoring on a fresh install is. When a wallet is already
+    /// open, `passphrase` is ignored and the open session is used, because
+    /// adding a second key to a wallet you just unlocked should not re-prompt.
+    ///
+    /// Nothing is written until the material has been checked and the key
+    /// derived, so a rejected phrase leaves no empty wallet on disk.
+    ImportKey {
+        label: String,
+        material: ImportMaterial,
+        passphrase: Secret,
+    },
+    Unlock {
+        passphrase: Secret,
+    },
+    Lock,
+    ChangePassphrase {
+        old: Secret,
+        new: Secret,
+    },
+    /// Show the recovery phrase or WIF. Re-prompts for the passphrase on
+    /// purpose: this is the highest-consequence read in the application and
+    /// must not ride on a session unlocked twenty minutes ago.
+    RevealBackup {
+        label: String,
+        passphrase: Secret,
+    },
+    /// Conceal the words without ending the backup.
+    ///
+    /// Sent on every release of hold-to-reveal, so the phrase stays in core and
+    /// can be shown again. What leaves is the copy the UI was given.
+    HideBackup,
+    /// End the backup and drop the phrase from memory.
+    ///
+    /// The key keeps its "not backed up" flag, so the offer comes back — this
+    /// abandons the attempt rather than declining it permanently.
+    CancelBackup,
+    SetActiveKey(String),
+    SetAutoLockMinutes(Option<u32>),
+
+    // ── Network ─────────────────────────────────────────────────────────
+    SelectNode(u32),
+    AddNode {
+        url: String,
+        label: String,
+    },
+    RemoveNode(u32),
+    ProbeNodes,
+    SetRequestedNetwork(String),
+    /// Turning on mainnet spending. `typed_confirmation` must be the literal
+    /// word `mainnet`, and core checks it — putting that check in the UI would
+    /// make it a decoration.
+    SetAllowMainnetSpend {
+        on: bool,
+        typed_confirmation: String,
+    },
+
+    // ── Portfolio ───────────────────────────────────────────────────────
+    Refresh(RefreshScope),
+    LoadHistory {
+        key: String,
+        before_height: Option<u32>,
+    },
+    LoadTxDetail(String),
+
+    // ── Send ────────────────────────────────────────────────────────────
+    ValidateDraft(SendDraft),
+    /// Build and sign, without broadcasting. Core keeps the signed bytes; the
+    /// UI receives only a decoded summary.
+    PrepareSend(SendDraft),
+    ConfirmSend {
+        ticket: u64,
+    },
+    CancelSend {
+        ticket: u64,
+    },
+    ResolvePending {
+        id: u64,
+        action: PendingAction,
+    },
+
+    // ── Shell ───────────────────────────────────────────────────────────
+    /// Entering a screen. Core uses this to start screen-scoped polling.
+    ScreenEntered(ScreenId),
+    /// Leaving one cancels every request that screen started.
+    ScreenLeft(ScreenId),
+    /// Any user input at all, for the auto-lock idle timer.
+    UserActivity,
+    Shutdown,
+}

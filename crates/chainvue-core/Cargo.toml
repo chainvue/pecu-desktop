@@ -1,0 +1,36 @@
+[package]
+name = "chainvue-core"
+description = "The wallet actor: owns all state, does all I/O, and is free of any UI toolkit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+mock = ["chainvue-chain/mock"]
+
+# No `slint` here, deliberately. The whole application layer is therefore
+# testable with `#[tokio::test]` on a headless runner — no windowing system, no
+# main-thread requirement.
+[dependencies]
+chainvue-protocol = { path = "../chainvue-protocol" }
+chainvue-chain = { path = "../chainvue-chain" }
+chainvue-keystore = { path = "../chainvue-keystore" }
+verus-sdk = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = "3"
+verus-flows = { workspace = true }
