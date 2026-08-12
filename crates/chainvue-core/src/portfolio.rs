@@ -376,13 +376,43 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
+/// Redo the wording on rows that were cached earlier.
+///
+/// "2 hours ago" and "Today" are true relative to when they were written, and a
+/// snapshot restored the next morning would file yesterday's payment under
+/// today. Every row keeps its `block_time`, so the wording is recomputed rather
+/// than trusted — the figures are stale, the dates are not allowed to be wrong.
+pub fn restamp(rows: &mut [HistoryRowVm], now: i64) {
+    let mut previous: Option<String> = None;
+    for row in rows.iter_mut() {
+        row.when_display = when(row.block_time, now);
+
+        let day = calendar_day(row.block_time, now);
+        if previous.as_ref() == Some(&day) {
+            row.group.clear();
+        } else {
+            row.group.clone_from(&day);
+            previous = Some(day);
+        }
+    }
+}
+
+/// Read an i-address back into a currency id.
+///
+/// The inverse of [`i_address`], for the cache: what is stored is the form a
+/// person can read, and what the SDK wants is the twenty bytes behind it.
+pub fn currency_from_i_address(text: &str) -> Option<CurrencyId> {
+    let address: Address = text.parse().ok()?;
+    (address.kind() == AddressKind::Identity).then(|| CurrencyId::from_bytes(address.hash()))
+}
+
 /// A currency's `i…` address — the form people actually see.
 ///
 /// `CurrencyId` renders through `Display` as **raw hex**, which is the wire
 /// form: correct for a script, and not something anyone can paste into an
 /// explorer or recognise. Every other Verus tool shows the i-address, and it is
 /// the same twenty bytes read the way a person reads them.
-fn i_address(id: CurrencyId) -> String {
+pub fn i_address(id: CurrencyId) -> String {
     Address::new(AddressKind::Identity, id.to_bytes()).to_string()
 }
 

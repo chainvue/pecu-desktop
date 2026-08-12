@@ -21,6 +21,7 @@ mock = ["chainvue-chain/mock"]
 chainvue-protocol = { path = "../chainvue-protocol" }
 chainvue-chain = { path = "../chainvue-chain" }
 chainvue-keystore = { path = "../chainvue-keystore" }
+chainvue-store = { path = "../chainvue-store" }
 verus-sdk = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 # Already in the tree — `i-slint-core` depends on it — so this adds no download

@@ -1,0 +1,27 @@
+[package]
+name = "chainvue-store"
+description = "What the wallet remembers between runs: settings, and a cache it can always throw away."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# No `verus-sdk`, and no `chainvue-keystore`. Nothing in this crate can name a
+# key, and nothing sealed under the vault's data key passes through it — see the
+# module docs on what is deliberately absent from these tables.
+[dependencies]
+chainvue-protocol = { path = "../chainvue-protocol" }
+# `bundled` compiles SQLite from source rather than linking the system one, so
+# the build does not depend on which macOS this is or what Homebrew has
+# installed. It costs about thirty seconds, once.
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

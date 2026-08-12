@@ -86,6 +86,19 @@ pub fn start(
     // unresolved transactions with it.
     let pending_path = config.vault_path.with_file_name("pending-broadcast.json");
 
+    // Beside the vault, in the per-network directory. Failing to open it is not
+    // failing to start: everything in there is either a preference or something
+    // a node can be asked for again.
+    let store = config
+        .vault_path
+        .parent()
+        .map(chainvue_store::Store::open)
+        .transpose()
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "the wallet database could not be opened");
+            None
+        });
+
     let (work_tx, work_rx) = mpsc::unbounded_channel();
 
     let core = Core {
@@ -106,6 +119,7 @@ pub fn start(
         checking: std::collections::HashSet::new(),
         tip_polled: None,
         polling_tip: false,
+        store,
     };
 
     runtime.spawn(core.run(command_rx, work_rx));
@@ -151,6 +165,10 @@ struct Core {
     /// ask is in flight.
     tip_polled: Option<std::time::Instant>,
     polling_tip: bool,
+    /// Settings, and a cache the wallet is free to throw away. `None` when the
+    /// databases could not be opened — the wallet works without them, it just
+    /// forgets between runs and starts every session with a blank dashboard.
+    store: Option<chainvue_store::Store>,
 }
 
 /// An answer from a job that ran off the actor.
@@ -198,6 +216,7 @@ impl Core {
         mut commands: mpsc::UnboundedReceiver<Command>,
         mut work: mpsc::UnboundedReceiver<Work>,
     ) {
+        self.restore();
         self.emit_network();
         self.emit_wallet();
         // A payment left unresolved by a previous run is the first thing worth
@@ -562,6 +581,62 @@ impl Core {
         true
     }
 
+    // ── What the last run left behind ───────────────────────────────────────
+
+    /// Put yesterday's figures on screen before asking a node anything.
+    ///
+    /// Marked **stale**, always. A cached balance is a true statement about the
+    /// past, and the screen says so — which is a different thing from a blank
+    /// dashboard for the two seconds a node takes, and a very different thing
+    /// from a number presented as current.
+    fn restore(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+
+        // The two caches that make the next refresh cheap: the chain's own
+        // currency never changes, and a currency's name is fixed when it is
+        // registered.
+        self.cached.native = store
+            .native_currency()
+            .as_deref()
+            .and_then(portfolio::currency_from_i_address);
+        self.cached.names = store
+            .currency_names()
+            .iter()
+            .filter_map(|(address, name)| {
+                Some((portfolio::currency_from_i_address(address)?, name.clone()))
+            })
+            .collect();
+
+        if let Some(minutes) = store.setting("auto_lock_minutes") {
+            self.wallet.auto_lock = minutes
+                .parse::<u64>()
+                .ok()
+                .filter(|m| *m > 0)
+                .map(|m| std::time::Duration::from_secs(m.saturating_mul(60)));
+        }
+
+        let Some(snapshot) = store.snapshot() else {
+            return;
+        };
+
+        let mut portfolio = snapshot.portfolio;
+        portfolio.stale = true;
+
+        let mut history = snapshot.history;
+        // The figures may be old; the dates must not be WRONG. Every row keeps
+        // its block time, so the wording is recomputed rather than restored.
+        portfolio::restamp(&mut history, now());
+
+        tracing::info!(saved_at = snapshot.saved_at, "restored the last dashboard");
+        let _ = self.events.send(Event::Portfolio(portfolio));
+        let _ = self.events.send(Event::History {
+            key: String::new(),
+            delta: chainvue_protocol::ListDelta::Replace(history),
+        });
+    }
+
     // ── Keeping up with the chain ───────────────────────────────────────────
 
     /// Ask the active node where the chain is.
@@ -846,6 +921,11 @@ impl Core {
     fn set_auto_lock(&mut self, minutes: Option<u32>) {
         self.wallet.auto_lock =
             minutes.map(|m| std::time::Duration::from_secs(u64::from(m).saturating_mul(60)));
+        if let Some(store) = &self.store {
+            // Zero is how "never" is written down, matching what the screen
+            // sends.
+            store.set_setting("auto_lock_minutes", &minutes.unwrap_or(0).to_string());
+        }
         self.wallet.touch();
         self.emit_wallet();
     }
@@ -1582,6 +1662,80 @@ mod tests {
                 None => panic!("the core stopped before answering"),
             }
         }
+    }
+
+    /// A cold start must show the last known figures before it asks anything.
+    ///
+    /// The alternative is a blank dashboard for however long a node takes,
+    /// which reads as a wallet that has lost your money.
+    #[tokio::test]
+    async fn a_cold_start_shows_the_last_known_dashboard_marked_stale() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // What a previous run would have left behind.
+        {
+            let store = chainvue_store::Store::open(dir.path()).expect("store");
+            let mut portfolio = chainvue_protocol::PortfolioVm::default();
+            portfolio.balance.total_display = "48.8999 0000".to_string();
+            // Written as current, because it WAS current when it was written.
+            portfolio.stale = false;
+
+            let history = vec![chainvue_protocol::HistoryRowVm {
+                txid: "abc".to_string(),
+                height: 1_187_000,
+                block_time: 1_000_000_000,
+                when_display: "2 hours ago".to_string(),
+                group: "Today".to_string(),
+                ..chainvue_protocol::HistoryRowVm::default()
+            }];
+            store.save_snapshot(&portfolio, &history, 1_000_000_000);
+            store.set_setting("auto_lock_minutes", "15");
+        }
+
+        let handle = tokio::runtime::Handle::current();
+        let (_dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+
+        let mut portfolio = None;
+        let mut history = None;
+        let mut auto_lock = None;
+        for _ in 0..12 {
+            match events.recv().await {
+                Some(Event::Portfolio(vm)) => portfolio = Some(vm),
+                Some(Event::History { delta, .. }) => history = Some(delta),
+                Some(Event::Wallet(vm)) => auto_lock = Some(vm.auto_lock_minutes),
+                Some(_) => {}
+                None => break,
+            }
+            if portfolio.is_some() && history.is_some() && auto_lock.is_some() {
+                break;
+            }
+        }
+
+        let portfolio = portfolio.expect("the cached dashboard is put on screen");
+        assert_eq!(portfolio.balance.total_display, "48.8999 0000");
+        // The figure is true about the past and the screen has to say so.
+        assert!(portfolio.stale, "a cached balance was presented as current");
+
+        let chainvue_protocol::ListDelta::Replace(rows) = history.expect("cached history") else {
+            panic!("a restored history should arrive whole");
+        };
+        assert_eq!(rows.len(), 1);
+        // The figures may be old; the dates must not be WRONG. "2 hours ago"
+        // was written long ago, so it has been recomputed from the block time.
+        assert_ne!(
+            rows[0].when_display, "2 hours ago",
+            "a restored row kept wording that was true when it was cached",
+        );
+
+        assert_eq!(auto_lock.expect("wallet state"), Some(15));
     }
 
     #[tokio::test]
