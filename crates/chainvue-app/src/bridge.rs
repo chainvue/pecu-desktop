@@ -24,6 +24,11 @@ use tokio::sync::mpsc;
 /// of physical pixels — see `chainvue_ui::qr`.
 const QR_SIDE: f32 = 236.0;
 
+/// How many transactions the dashboard's short list shows. Mirrors
+/// `chainvue_core::portfolio::RECENT`, which the UI cannot name — this crate
+/// deliberately does not depend on the core.
+const RECENT: usize = 6;
+
 /// Forward every event to the window until the core stops.
 pub fn pump(
     handle: &tokio::runtime::Handle,
@@ -95,19 +100,7 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Portfolio(vm) => apply_portfolio(ui, &vm),
 
-        Event::History { delta, .. } => {
-            let state = ui.global::<WalletState>();
-            match delta {
-                // The dashboard shows a fixed window of the newest rows, so it
-                // only ever receives a whole replacement. Paging deltas arrive
-                // with the Activity screen, which is what they are for.
-                ListDelta::Replace(rows) => {
-                    let rows: Vec<ActivityRow> = rows.iter().map(activity_row).collect();
-                    state.set_activity(ModelRc::from(Rc::new(VecModel::from(rows))));
-                }
-                other => tracing::debug!(?other, "history delta not rendered yet"),
-            }
-        }
+        Event::History { delta, .. } => apply_history(ui, delta),
 
         Event::SendValidation(vm) => {
             let send = ui.global::<SendState>();
@@ -167,6 +160,36 @@ fn apply(ui: &AppWindow, event: Event) {
         other => {
             tracing::debug!(?other, "event not rendered yet");
         }
+    }
+}
+
+/// The activity list, and the dashboard's excerpt of it.
+fn apply_history(ui: &AppWindow, delta: ListDelta<HistoryRowVm>) {
+    let state = ui.global::<WalletState>();
+    match delta {
+        // The dashboard shows a fixed window of the newest rows, so it
+        // only ever receives a whole replacement. Paging deltas arrive
+        // with the Activity screen, which is what they are for.
+        ListDelta::Replace(rows) => {
+            let rows: Vec<ActivityRow> = rows.iter().map(activity_row).collect();
+
+            // The dashboard shows a handful; Activity shows all of
+            // them. Two models rather than one sliced, because Slint's
+            // `for` has no window — and the first rows need their day
+            // heading cleared, since a six-row excerpt is not a day.
+            let recent: Vec<ActivityRow> = rows
+                .iter()
+                .take(RECENT)
+                .map(|row| ActivityRow {
+                    group: SharedString::new(),
+                    ..row.clone()
+                })
+                .collect();
+
+            state.set_activity(ModelRc::from(Rc::new(VecModel::from(recent))));
+            state.set_history(ModelRc::from(Rc::new(VecModel::from(rows))));
+        }
+        other => tracing::debug!(?other, "history delta not rendered yet"),
     }
 }
 
@@ -366,6 +389,7 @@ fn activity_row(row: &HistoryRowVm) -> ActivityRow {
         when: row.when_display.clone().into(),
         pending: row.pending,
         height: i32::try_from(row.height).unwrap_or(i32::MAX),
+        group: row.group.clone().into(),
     }
 }
 

@@ -40,7 +40,14 @@ export global WalletState {
     in property <string> matures-in: "";
 
     in property <[AssetRow]> assets: [];
+    // The dashboard's short list, and the whole thing for the Activity screen.
+    // Two models rather than one sliced, because Slint's `for` has no window.
     in property <[ActivityRow]> activity: [];
+    in property <[ActivityRow]> history: [];
+    // The chain tip, so a row can work out its own confirmations. A new block
+    // updates ONE integer and every visible row recomputes itself — no model
+    // mutation, no notification storm.
+    in property <int> tip-height: 0;
     // Arriving: seen in the mempool, not yet mined.
     in property <string> incoming: "";
     // The figures are from an earlier read and the last one did not finish.
@@ -1403,6 +1410,105 @@ component SettingsScreen inherits VerticalLayout {
     Rectangle { vertical-stretch: 1; }
 }
 
+// One transaction, in the list.
+component ActivityRowItem inherits VerticalLayout {
+    in property <ActivityRow> entry;
+    spacing: Sp.s2;
+
+    // The day heading, above the first row of that day. Its own layout so the
+    // breathing room above it is padding rather than a Text property that
+    // silently does nothing.
+    if root.entry.group != "": VerticalLayout {
+        padding-top: Sp.s5;
+        padding-left: Sp.s5;
+        padding-bottom: Sp.s2;
+        Text {
+            text: root.entry.group;
+            font-size: Typo.micro;
+            font-weight: Typo.w-medium;
+            letter-spacing: 0.6px;
+            color: Theme.text-tertiary;
+        }
+    }
+
+    ListRow {
+        glyph: root.entry.direction == "in" ? "↓" : root.entry.direction == "out" ? "↑" : "⇄";
+        glyph-tone: root.entry.direction == "in" ? Theme.positive
+            : root.entry.direction == "out" ? Theme.negative
+            : Theme.text-secondary;
+        title: root.entry.direction == "in" ? "Received"
+            : root.entry.direction == "out" ? "Sent"
+            : "Moved";
+        subtitle: root.entry.txid;
+        interactive: false;
+
+        HorizontalLayout {
+            spacing: Sp.s5;
+            alignment: end;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.entry.when;
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    // Derived, never stored: `tip - height + 1`. A new block
+                    // changes one number and every row here follows.
+                    text: root.entry.pending || root.entry.height == 0 ? "unconfirmed"
+                        : WalletState.tip-height == 0 ? ""
+                        : (WalletState.tip-height - root.entry.height + 1) + " confirmations";
+                    font-size: Typo.micro;
+                    color: root.entry.pending ? Theme.warning : Theme.text-disabled;
+                    horizontal-alignment: right;
+                }
+            }
+
+            Money {
+                amount: root.entry.amount;
+                show-currency: false;
+                tone: root.entry.direction == "in" ? "positive"
+                    : root.entry.direction == "out" ? "negative"
+                    : "neutral";
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+}
+
+component ActivityScreen inherits VerticalLayout {
+    spacing: Sp.s5;
+
+    if WalletState.history.length == 0 && !WalletState.loading: Card {
+        VerticalLayout {
+            padding: Sp.s11;
+            EmptyState {
+                glyph: "○";
+                title: "No transactions yet";
+                body: "Everything this wallet has ever sent or received appears here.";
+            }
+        }
+    }
+
+    if WalletState.history.length > 0: Card {
+        VerticalLayout {
+            padding: Sp.s3;
+            // Every transaction, newest first. The whole history is fetched in
+            // one call, so this is not paged — see the note in
+            // `chainvue_core::portfolio`, which says what that costs on a busy
+            // address.
+            for item in WalletState.history: ActivityRowItem {
+                entry: item;
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}
+
 component ReceiveScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -1993,7 +2099,7 @@ export component AppWindow inherits Window {
         { id: "dashboard", label: "Dashboard", glyph: "◆", enabled: true, badge: "" },
         { id: "send",      label: "Send",      glyph: "↑", enabled: true, badge: "" },
         { id: "receive",   label: "Receive",   glyph: "↓", enabled: true, badge: "" },
-        { id: "activity",  label: "Activity",  glyph: "≡", enabled: false, badge: "Soon" },
+        { id: "activity",  label: "Activity",  glyph: "≡", enabled: true, badge: "" },
         { id: "nodes",     label: "Network",   glyph: "○", enabled: true, badge: "" },
         { id: "identities",label: "Identities",glyph: "◇", enabled: false, badge: "Soon" },
         { id: "settings",  label: "Settings",  glyph: "⋯", enabled: true, badge: "" },
@@ -2037,6 +2143,7 @@ export component AppWindow inherits Window {
                     : root.screen == "receive" ? "Receive"
                     : root.screen == "send" ? "Send"
                     : root.screen == "settings" ? "Settings"
+                    : root.screen == "activity" ? "Activity"
                     : root.screen;
                 network: NetworkState.effective;
                 node-state: NetworkState.node-state;
@@ -2064,12 +2171,13 @@ export component AppWindow inherits Window {
 
                         if root.screen == "dashboard": DashboardScreen {}
                         if root.screen == "send": SendScreen {}
+                        if root.screen == "activity": ActivityScreen {}
                         if root.screen == "receive": ReceiveScreen {}
                         if root.screen == "settings": SettingsScreen {}
                         if root.screen == "nodes": NodesScreen {}
                         if root.screen != "dashboard" && root.screen != "nodes"
                             && root.screen != "receive" && root.screen != "send"
-                            && root.screen != "settings": ComingSoon {
+                            && root.screen != "settings" && root.screen != "activity": ComingSoon {
                             title: "Not built yet";
                             body: "This part of the wallet is still being written.";
                         }

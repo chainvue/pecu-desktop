@@ -107,15 +107,18 @@ fn a_real_address_reads_coherently() {
         );
     }
     println!("transactions {}", history.len());
-    for row in reading.recent(
-        i64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("a clock after 1970")
-                .as_secs(),
-        )
-        .expect("a year before 292 billion AD"),
-    ) {
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after 1970")
+            .as_secs(),
+    )
+    .expect("a year before 292 billion AD");
+
+    for row in reading.rows(now).into_iter().take(portfolio::RECENT) {
+        if !row.group.is_empty() {
+            println!("  — {}", row.group);
+        }
         println!("  {} {} {}", row.when_display, row.net_display, row.txid);
     }
 }

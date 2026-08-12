@@ -23,6 +23,11 @@ chainvue-chain = { path = "../chainvue-chain" }
 chainvue-keystore = { path = "../chainvue-keystore" }
 verus-sdk = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+# Already in the tree — `i-slint-core` depends on it — so this adds no download
+# and no new supply-chain surface. Used for one thing: turning a block timestamp
+# into a calendar day in the user's own timezone, which is the difference
+# between "5 days ago" and a date somebody can match against a bank statement.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -74,6 +74,10 @@ export struct ActivityRow {
     // single `tip` property, so a new block updates one integer instead of
     // rewriting every row.
     height: int,
+    // Non-empty when this row starts a new day: the heading to draw above it.
+    // Computed in core, which can see the row before this one — something a
+    // `for` loop over a model cannot.
+    group: string,
 }
 
 // One output of the transaction that was actually built and signed.

@@ -104,6 +104,8 @@ pub fn start(
         pending: pending::Ledger::open(pending_path),
         last_checked: std::collections::HashMap::new(),
         checking: std::collections::HashSet::new(),
+        tip_polled: None,
+        polling_tip: false,
     };
 
     runtime.spawn(core.run(command_rx, work_rx));
@@ -145,6 +147,10 @@ struct Core {
     last_checked: std::collections::HashMap<u64, std::time::Instant>,
     /// Ids with a check in flight, so a slow node cannot pile up requests.
     checking: std::collections::HashSet<u64>,
+    /// When the active node was last asked for the chain tip, and whether an
+    /// ask is in flight.
+    tip_polled: Option<std::time::Instant>,
+    polling_tip: bool,
 }
 
 /// An answer from a job that ran off the actor.
@@ -158,6 +164,12 @@ enum Work {
     Prepared {
         ticket: u64,
         result: Box<Result<send::Prepared, send::SendError>>,
+    },
+    /// The active node reported where the chain is.
+    Tip {
+        node: u32,
+        info: Box<Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>>,
+        latency: std::time::Duration,
     },
     /// A node answered whether an uncertain transaction confirmed.
     ///
@@ -213,6 +225,7 @@ impl Core {
                 }
                 _ = idle.tick() => {
                     self.check_auto_lock();
+                    self.poll_tip();
                     self.poll_pending();
                     continue;
                 }
@@ -392,6 +405,11 @@ impl Core {
         match work {
             Work::Portfolio(reading) => self.finish_refresh(&reading),
             Work::Prepared { ticket, result } => self.finish_prepare(ticket, *result),
+            Work::Tip {
+                node,
+                info,
+                latency,
+            } => self.finish_tip(node, &info, latency),
             Work::Checked {
                 record,
                 confirmations,
@@ -427,7 +445,7 @@ impl Core {
             Ok(_) => {
                 let _ = self.events.send(Event::History {
                     key: String::new(),
-                    delta: chainvue_protocol::ListDelta::Replace(reading.recent(now())),
+                    delta: chainvue_protocol::ListDelta::Replace(reading.rows(now())),
                 });
             }
             Err(error) => {
@@ -542,6 +560,76 @@ impl Core {
             }
         }
         true
+    }
+
+    // ── Keeping up with the chain ───────────────────────────────────────────
+
+    /// Ask the active node where the chain is.
+    ///
+    /// One request. `chain_info` yields the network, the tip, the sync state
+    /// and the version together, so the tip poll and the health probe are the
+    /// same question — there is no cheaper way to learn the height and no
+    /// reason to ask twice.
+    ///
+    /// Only the ACTIVE node, and only every 15 seconds. The other nodes are
+    /// probed when someone is looking at the network screen; polling all of
+    /// them forever would be asking public infrastructure for something nobody
+    /// is reading.
+    fn poll_tip(&mut self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
+        if self.polling_tip || self.tip_polled.is_some_and(|last| last.elapsed() < EVERY) {
+            return;
+        }
+        let Some(node) = self.nodes.active() else {
+            return;
+        };
+        let (id, url) = (node.id, node.url.clone());
+
+        self.polling_tip = true;
+        self.tip_polled = Some(std::time::Instant::now());
+
+        self.blocking.dispatch(
+            move || {
+                let (info, latency) = chainvue_chain::probe(&url);
+                Work::Tip {
+                    node: id,
+                    info: Box::new(info),
+                    latency,
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_tip(
+        &mut self,
+        node: u32,
+        info: &Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>,
+        latency: std::time::Duration,
+    ) {
+        self.polling_tip = false;
+
+        let before = self.nodes.active().and_then(|n| n.tip);
+        let requested = self.nodes.requested().cloned().unwrap_or(Network::Testnet);
+
+        let Some(entry) = self.nodes.get_mut(node) else {
+            return;
+        };
+        match info {
+            Ok(reported) => entry.record_success(reported, latency, &requested),
+            Err(error) => entry.record_failure(error),
+        }
+
+        let after = self.nodes.get(node).and_then(|n| n.tip);
+        self.emit_network();
+
+        // A new block is the only reason to re-read anything. Polling the tip
+        // and refreshing regardless would turn a one-request poll into seven.
+        if info.is_ok() && after != before {
+            tracing::debug!(?before, ?after, "a new block");
+            self.refresh();
+        }
     }
 
     // ── Transactions whose fate is unknown ──────────────────────────────────

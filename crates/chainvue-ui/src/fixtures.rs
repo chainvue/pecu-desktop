@@ -171,14 +171,50 @@ pub fn funded(ui: &AppWindow) {
         },
     ]))));
 
-    wallet.set_activity(ModelRc::from(Rc::new(VecModel::from(vec![
+    let recent = vec![
         activity("in", "+120.0000 0000", "2 hours ago", false),
         activity("out", "−50.0000 0000", "yesterday", false),
         activity("in", "+5.0000 0000", "pending", true),
+    ];
+    wallet.set_activity(ModelRc::from(Rc::new(VecModel::from(recent))));
+
+    // The Activity screen sees the same transactions WITH their day headings —
+    // which the dashboard's excerpt deliberately drops, because six rows are
+    // not a day.
+    wallet.set_tip_height(1_187_500);
+    wallet.set_history(ModelRc::from(Rc::new(VecModel::from(vec![
+        dated("in", "+120.0000 0000", "2 hours ago", "Today", 1_187_400),
+        dated("in", "+5.0000 0000", "pending", "", 0),
+        dated("out", "−50.0000 0000", "yesterday", "Yesterday", 1_186_200),
+        dated(
+            "in",
+            "+12 345.0000 0000 mambo",
+            "3 days ago",
+            "9 August",
+            1_184_000,
+        ),
     ]))));
 }
 
+fn dated(direction: &str, amount: &str, when: &str, group: &str, height: i32) -> ActivityRow {
+    ActivityRow {
+        height,
+        pending: height == 0,
+        ..activity_in(direction, amount, when, height == 0, group)
+    }
+}
+
 fn activity(direction: &str, amount: &str, when: &str, pending: bool) -> ActivityRow {
+    activity_in(direction, amount, when, pending, "")
+}
+
+fn activity_in(
+    direction: &str,
+    amount: &str,
+    when: &str,
+    pending: bool,
+    group: &str,
+) -> ActivityRow {
     ActivityRow {
         // Not a real txid, and not 64 hex characters — the same reasoning as
         // the mock chain's `mock…` ids: it must be impossible to mistake for
@@ -189,6 +225,7 @@ fn activity(direction: &str, amount: &str, when: &str, pending: bool) -> Activit
         when: when.into(),
         pending,
         height: 0,
+        group: group.into(),
     }
 }
 

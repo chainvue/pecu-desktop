@@ -253,8 +253,15 @@ pub struct HistoryRowVm {
     pub net_display: String,
     /// Non-native currencies this transaction moved, pre-formatted.
     pub currency_lines: Vec<String>,
-    /// Pre-formatted "Today 14:02" / "12 March 2026".
+    /// Pre-formatted "2 hours ago" / "yesterday".
     pub when_display: String,
+    /// Non-empty when this row begins a new day: the heading to draw above it
+    /// ("Today", "Yesterday", "12 March 2026").
+    ///
+    /// Computed here rather than in the UI because it depends on comparing this
+    /// row with the one before it, which a `for` loop over a model cannot do —
+    /// and because a calendar day is a fact about a timezone, not about a list.
+    pub group: String,
     pub pending: bool,
 }
 

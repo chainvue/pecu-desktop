@@ -34,8 +34,9 @@ use verus_sdk::money::Amount;
 use verus_sdk::network::{self, FlowError, HistoryEntry, SignedAmount};
 use verus_sdk::verus_keys::{Address, AddressKind};
 
-/// How many transactions the dashboard's "recent" list shows.
-const RECENT: usize = 6;
+/// How many transactions the dashboard's "recent" list shows. The Activity
+/// screen gets all of them.
+pub const RECENT: usize = 6;
 
 /// What one refresh brings back.
 ///
@@ -277,11 +278,11 @@ impl Reading {
         }
     }
 
-    /// The most recent transactions, newest first.
+    /// Every transaction, newest first, with day headings.
     ///
     /// The SDK returns them oldest first, because that is the order the chain
     /// puts them in. A person reads their own history the other way round.
-    pub fn recent(&self, now: i64) -> Vec<HistoryRowVm> {
+    pub fn rows(&self, now: i64) -> Vec<HistoryRowVm> {
         let Ok(entries) = &self.history else {
             return Vec::new();
         };
@@ -295,14 +296,85 @@ impl Reading {
             .map(|(id, name)| (i_address(*id), name.clone()))
             .collect();
 
-        entries
+        let mut rows: Vec<HistoryRowVm> = entries
             .iter()
             .rev()
-            .take(RECENT)
             .map(|entry| row(entry, now, &named))
-            .collect()
+            .collect();
+
+        // The heading goes on the first row of each day. Done after the rows
+        // exist because it depends on comparing neighbours, which is exactly
+        // what a `for` loop over a Slint model cannot do.
+        let mut previous: Option<String> = None;
+        for row in &mut rows {
+            let day = calendar_day(row.block_time, now);
+            if previous.as_ref() != Some(&day) {
+                row.group.clone_from(&day);
+                previous = Some(day);
+            }
+        }
+
+        rows
     }
 }
+
+/// "Today" / "Yesterday" / "12 March 2026", in the machine's own timezone.
+///
+/// A block timestamp is UTC seconds; which calendar day that falls on is a
+/// question about where the reader is sitting. Getting it wrong puts a
+/// transaction under the wrong heading for anyone more than a few hours from
+/// Greenwich.
+///
+/// An unconfirmed transaction has no timestamp and gets its own heading — it is
+/// not on any day yet.
+fn calendar_day(block_time: i64, now: i64) -> String {
+    use chrono::{Datelike, Local, TimeZone};
+
+    if block_time == 0 {
+        return "Pending".to_string();
+    }
+
+    let Some(when) = Local.timestamp_opt(block_time, 0).single() else {
+        return "Unknown date".to_string();
+    };
+    let Some(today) = Local.timestamp_opt(now, 0).single() else {
+        return "Unknown date".to_string();
+    };
+
+    let days = today
+        .date_naive()
+        .signed_duration_since(when.date_naive())
+        .num_days();
+    match days {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        _ => {
+            let month = MONTHS.get(when.month0() as usize).copied().unwrap_or("");
+            // The year only once it is not this one. Repeating it on every
+            // heading is noise until the moment it is not.
+            if when.year() == today.year() {
+                format!("{} {month}", when.day())
+            } else {
+                format!("{} {month} {}", when.day(), when.year())
+            }
+        }
+    }
+}
+
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
 /// A currency's `i…` address — the form people actually see.
 ///
@@ -373,6 +445,8 @@ fn row(entry: &HistoryEntry, now: i64, named: &BTreeMap<String, String>) -> Hist
         net_display,
         currency_lines,
         when_display: when(entry.block_time, now),
+        // Filled in by `rows`, which can see the row before this one.
+        group: String::new(),
         pending: entry.height == 0,
     }
 }
