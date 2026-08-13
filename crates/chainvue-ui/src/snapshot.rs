@@ -82,6 +82,11 @@ pub fn render(
     seed: impl FnOnce(&AppWindow),
 ) -> Result<Frame, Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
+    // The chart's callbacks compute its geometry from the element's own size,
+    // so they have to be wired before the window is laid out — and installing
+    // resets the chart, which is what keeps one case's readings from turning up
+    // in the next one's picture.
+    crate::chart::install(&ui);
     seed(&ui);
     ui.set_screen(screen.into());
     ui.global::<crate::Theme>().set_dark(dark);
@@ -142,6 +147,7 @@ pub const CASES: &[Case] = &[
     ("dashboard", "restore", crate::fixtures::restoring),
     ("dashboard", "dashboard", crate::fixtures::unlocked),
     ("dashboard", "dashboard-funded", crate::fixtures::funded),
+    ("dashboard", "chart", crate::fixtures::charted),
     ("dashboard", "backup-due", crate::fixtures::backup_due),
     ("dashboard", "backup-phrase", crate::fixtures::backup_phrase),
     ("dashboard", "backup-verify", crate::fixtures::backup_verify),

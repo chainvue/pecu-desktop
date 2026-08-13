@@ -888,10 +888,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chainvue-chart"
+version = "0.1.0"
+
+[[package]]
 name = "chainvue-core"
 version = "0.1.0"
 dependencies = [
  "chainvue-chain",
+ "chainvue-chart",
  "chainvue-keystore",
  "chainvue-protocol",
  "chainvue-store",
@@ -959,7 +964,9 @@ dependencies = [
 name = "chainvue-ui"
 version = "0.1.0"
 dependencies = [
+ "chainvue-chart",
  "chainvue-protocol",
+ "chrono",
  "image",
  "qrcode",
  "slint",

@@ -7,7 +7,7 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    HistoryRowVm, ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, SeedWordVm,
+    ChartVm, HistoryRowVm, ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, SeedWordVm,
     SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
@@ -16,6 +16,13 @@ pub enum Event {
     Wallet(WalletVm),
     Network(NetworkVm),
     Portfolio(PortfolioVm),
+    /// The balance over time, as readings rather than as a picture.
+    ///
+    /// The geometry is computed in `chainvue-ui`, which knows how big the
+    /// element is — a chart plotted here would need the interface to report its
+    /// size back through the actor on every resize, and would still be one
+    /// frame behind.
+    Chart(ChartVm),
     History {
         key: String,
         delta: ListDelta<HistoryRowVm>,

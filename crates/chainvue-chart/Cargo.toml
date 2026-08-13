@@ -1,0 +1,19 @@
+[package]
+name = "chainvue-chart"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Nothing. Not Slint, not the core, not the SDK.
+#
+# That is the point of the crate: chart geometry is arithmetic, and arithmetic
+# that can be tested against a golden string is arithmetic that stays right. A
+# dependency on Slint here would mean the only way to check a path was to render
+# it and look, and a monotone-clamp or step-ordering regression is invisible to
+# the eye until the day it is not.
+[dependencies]
+
+[lints]
+workspace = true

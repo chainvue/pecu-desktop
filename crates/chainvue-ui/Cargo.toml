@@ -58,6 +58,15 @@ slint = { version = "1.17", features = ["renderer-software"] }
 # put a PNG encoder in the shipped binary. What is left is the matrix itself:
 # `to_colors()` and `width()`, which is everything a renderer needs.
 qrcode = { version = "0.14", default-features = false }
+# Chart geometry. Pure arithmetic with no dependencies of its own, so it cannot
+# widen the boundary above — and it is here rather than in the core because the
+# only thing that knows how big the chart element is, is the chart element.
+# Plotting in the core would need the size reported back through the actor on
+# every resize and would still be a frame behind.
+chainvue-chart = { path = "../chainvue-chart" }
+# Calendar arithmetic for the chart's cursor label. Already in the tree —
+# `i-slint-core` depends on it — so this adds a name, not a download.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 # PNG encoding for the offscreen renders. Dev-only: the wallet itself ships no

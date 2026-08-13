@@ -26,16 +26,19 @@
 pub mod command;
 pub mod error;
 pub mod event;
+pub mod format;
 pub mod models;
 mod secret;
 
 pub use command::{Command, ImportMaterial, PendingAction, RefreshScope};
 pub use error::{Severity, UiAction, UiError};
 pub use event::Event;
+pub use format::{coins, coins_u64};
 pub use models::{
-    AssetVm, BalanceVm, DraftValidationVm, HistoryRowVm, KeyOrigin, KeyVm, ListDelta, LockReason,
-    NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability, ReviewOutputVm, ScreenId, SeedWordVm,
-    SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, TxDirection, WalletVm,
+    AssetVm, BalanceVm, ChartPointVm, ChartVm, DraftValidationVm, HistoryRowVm, KeyOrigin, KeyVm,
+    ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability, ReviewOutputVm,
+    ScreenId, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm,
+    TxDirection, WalletVm,
 };
 pub use secret::Secret;
 

@@ -700,36 +700,17 @@ fn sats(amount: Amount) -> String {
 
 /// `12482.42` → `12 482.4200 0000`.
 ///
-/// Grouped thousands and the satoshi digits in two blocks of four, because a
-/// bare `12482.42000000` is a number nobody can read at a glance and eight
-/// decimal places are not optional in a currency where the last one is a
-/// meaningful unit.
+/// The rule itself is in [`chainvue_protocol::format`], because the interface
+/// needs it too — the balance under a chart cursor is chosen by a pointer
+/// moving at sixty hertz, and asking the core for it would be a round trip per
+/// frame. Two implementations of one rule agree until the day they do not.
 pub fn coins(amount: Amount) -> String {
-    let text = amount.to_coins_string();
-    let (whole, fraction) = text.split_once('.').unwrap_or((text.as_str(), ""));
-    let mut padded = fraction.to_string();
-    while padded.len() < 8 {
-        padded.push('0');
-    }
-    format!("{}.{} {}", group(whole), &padded[..4], &padded[4..])
+    chainvue_protocol::coins_u64(amount.to_sat())
 }
 
 fn signed_coins(amount: SignedAmount) -> String {
     let sign = if amount.is_negative() { "−" } else { "+" };
     format!("{sign}{}", coins(amount.magnitude()))
-}
-
-/// `12482` → `12 482`. A thin space would be better typography; a normal space
-/// is what every font here actually has.
-fn group(digits: &str) -> String {
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            out.push(' ');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// "2 hours ago" / "yesterday" / "12 March".

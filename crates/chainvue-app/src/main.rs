@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.global::<WalletState>()
         .set_vault_path(vault_path().display().to_string().into());
 
+    chainvue_ui::chart::install(&ui);
     wire_actions(&ui, dispatcher.clone());
     bridge::pump(runtime.handle(), ui.as_weak(), events);
 

@@ -101,6 +101,10 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Portfolio(vm) => apply_portfolio(ui, &vm),
 
+        // Readings, not a picture. The geometry is computed in `chainvue-ui`,
+        // which is the only thing that knows how big the chart element is.
+        Event::Chart(vm) => chainvue_ui::chart::set_series(ui, &vm),
+
         Event::History { delta, .. } => apply_history(ui, delta),
 
         Event::SendValidation(vm) => {

@@ -112,6 +112,7 @@ pub fn start(
         refreshing: false,
         work: work_tx,
         spendable: verus_sdk::money::Amount::ZERO,
+        native_balance: 0,
         prepared: std::collections::HashMap::new(),
         tickets: 0,
         pending: pending::Ledger::open(pending_path),
@@ -150,6 +151,10 @@ struct Core {
     /// draft offline; the builder is still the authority, and it refuses on its
     /// own terms if this turns out to be stale.
     spendable: verus_sdk::money::Amount,
+    /// What the confirmed history sums to: spendable + immature + the confirmed
+    /// coins an unconfirmed transaction already spends. The anchor the balance
+    /// chart is built backwards from — see `emit_chart`.
+    native_balance: i64,
     /// Signed payments waiting for a Confirm. **The bytes never leave here** —
     /// the UI holds a ticket number and a decoded summary.
     prepared: std::collections::HashMap<u64, send::Prepared>,
@@ -489,6 +494,7 @@ impl Core {
         self.cached.native = reading.native;
         self.cached.names.clone_from(&reading.names);
         self.spendable = reading.spendable;
+        self.native_balance = confirmed_native(reading);
 
         let ticker = self
             .nodes
@@ -509,6 +515,7 @@ impl Core {
                 self.history.scanned_to = reading.scanned_to;
                 self.history.complete = reading.reached_start;
                 self.emit_history();
+                self.emit_chart();
             }
             Err(error) => {
                 // An unknown history is not an empty one, and the difference
@@ -822,6 +829,62 @@ impl Core {
         self.history.complete = page.reached_start;
 
         self.emit_history();
+        // A longer history is a longer chart. The anchor has not moved — the
+        // balance is what it was — but there is more of the past to draw it
+        // across now.
+        self.emit_chart();
+    }
+
+    /// The balance over time, as far back as the scan has looked.
+    ///
+    /// # Built backwards, from the one figure that is certainly true
+    ///
+    /// The wallet knows the balance right now and every transaction inside the
+    /// window it has scanned. It does **not** know what was held before that
+    /// window — there may be a hundred thousand blocks underneath it. So the
+    /// series is walked backwards from the current balance, subtracting each
+    /// delta on the way down, rather than forwards from a starting figure
+    /// nobody has. See [`chainvue_chart::from_deltas`].
+    ///
+    /// The anchor is `spendable + immature + pending_out`, which is what the
+    /// confirmed history actually sums to: an immature coinbase is confirmed
+    /// and counted, and a confirmed output that some unconfirmed transaction
+    /// already spends is still confirmed — the transaction spending it is not
+    /// in the history yet.
+    fn emit_chart(&self) {
+        // Only confirmed transactions. An unconfirmed one has no block time,
+        // so it has no position on a time axis — and its effect is not in the
+        // anchor balance either, so including it at height zero would draw a
+        // step in 1970.
+        let deltas: Vec<(i64, i64)> = self
+            .history
+            .entries
+            .iter()
+            .filter(|entry| entry.height > 0)
+            .map(|entry| (entry.block_time, entry.net_native.to_sat()))
+            .collect();
+
+        let points = chainvue_chart::from_deltas(now(), self.native_balance, &deltas);
+
+        let ticker = self
+            .nodes
+            .active()
+            .and_then(|node| node.network.as_ref())
+            .map_or("VRSC", chainvue_chain::Network::ticker)
+            .to_string();
+
+        let _ = self.events.send(Event::Chart(chainvue_protocol::ChartVm {
+            covers_seconds: chainvue_chart::span(&points),
+            points: points
+                .iter()
+                .map(|point| chainvue_protocol::ChartPointVm {
+                    t: point.t,
+                    sats: point.value,
+                })
+                .collect(),
+            complete: self.history.complete,
+            ticker,
+        }));
     }
 
     /// Send the whole list, re-grouped.
@@ -1962,6 +2025,23 @@ fn to_node_vm(node: &Node) -> NodeVm {
     }
 }
 
+/// What the confirmed history adds up to.
+///
+/// Not the spendable figure: an immature coinbase is a confirmed transaction
+/// the history contains, and a confirmed output that some unconfirmed
+/// transaction already spends is still confirmed — the transaction spending it
+/// has not been mined and so is not in the history either. Anchoring the chart
+/// on `spendable` alone would leave every point short by whatever is maturing,
+/// and the chart would disagree with the balance above it.
+fn confirmed_native(reading: &portfolio::Reading) -> i64 {
+    let total = reading
+        .spendable
+        .to_sat()
+        .saturating_add(reading.immature.to_sat())
+        .saturating_add(reading.pending_out.to_sat());
+    i64::try_from(total).unwrap_or(i64::MAX)
+}
+
 /// Seconds since the epoch, for "2 hours ago".
 ///
 /// A wall clock, not a monotonic one: it is compared against block timestamps,
@@ -2328,6 +2408,43 @@ mod tests {
         );
 
         assert_eq!(auto_lock.expect("wallet state"), Some(15));
+    }
+
+    /// The anchor the whole chart hangs from.
+    ///
+    /// Getting this wrong is invisible: the chart would still be a plausible
+    /// staircase, just uniformly offset from the balance printed above it by
+    /// whatever is maturing. Nobody spots a constant offset by looking.
+    #[test]
+    fn the_chart_is_anchored_on_what_the_confirmed_history_sums_to() {
+        use verus_sdk::money::Amount;
+
+        let reading = portfolio::Reading {
+            tip: 1000,
+            spendable: Amount::from_sat(500),
+            // Confirmed and counted by the history, just not spendable yet.
+            immature: Amount::from_sat(100),
+            // Confirmed outputs that an UNCONFIRMED transaction spends. Still
+            // confirmed; the transaction spending them is not in the history.
+            pending_out: Amount::from_sat(30),
+            // Arriving and unconfirmed, so not in the confirmed history at all.
+            pending_in: Amount::from_sat(9_999),
+            tokens: std::collections::BTreeMap::new(),
+            immature_tokens: std::collections::BTreeMap::new(),
+            native: None,
+            names: std::collections::BTreeMap::new(),
+            history: Ok(Vec::new()),
+            scanned_to: 0,
+            reached_start: false,
+            failure: None,
+        };
+
+        assert_eq!(
+            confirmed_native(&reading),
+            630,
+            "the anchor must include what is maturing and what is already \
+             spent by something unconfirmed, and must exclude what is arriving",
+        );
     }
 
     /// Wait for a wallet event the caller is interested in. Bounded, so a test

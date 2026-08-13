@@ -224,6 +224,44 @@ pub struct PortfolioVm {
     pub tokens_unknown: bool,
 }
 
+// ── The chart ───────────────────────────────────────────────────────────────
+
+/// One reading of the balance.
+///
+/// The one place an amount crosses this boundary as a **number** rather than a
+/// string, and it is deliberate: these never reach a Slint property. They are
+/// consumed by `chainvue-chart` to compute geometry, and the only figures that
+/// reach a screen are the ones the interface formats through
+/// [`crate::format::coins`] — the same function the core uses.
+///
+/// It has to be that way round because the amount under a chart cursor is
+/// chosen by a pointer moving at sixty hertz. Pre-formatting every point would
+/// mean carrying a string per sample through a downsampler that drops most of
+/// them; asking the core per frame would be a round trip per frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChartPointVm {
+    /// Unix seconds.
+    pub t: i64,
+    /// The native balance at that moment, in satoshis.
+    pub sats: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChartVm {
+    /// Oldest first.
+    pub points: Vec<ChartPointVm>,
+    /// The scan has reached the start of the chain, so the earliest point
+    /// really is the beginning. When false, the chart covers only what has been
+    /// looked at so far — and the range buttons that would claim more than that
+    /// are the ones the interface has to refuse.
+    pub complete: bool,
+    /// How far back the scan has looked, in seconds. What the range buttons are
+    /// measured against.
+    pub covers_seconds: i64,
+    /// What to write next to an amount.
+    pub ticker: String,
+}
+
 // ── Transactions ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

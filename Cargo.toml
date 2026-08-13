@@ -3,7 +3,7 @@ resolver = "2"
 # Listed explicitly rather than `crates/*` so that a half-created crate
 # directory cannot break the workspace for everything else while it is being
 # written. Grows as each crate lands.
-members = ["crates/chainvue-protocol", "crates/chainvue-chain", "crates/chainvue-mock", "crates/chainvue-ui", "crates/chainvue-app", "crates/chainvue-core", "crates/chainvue-keystore", "crates/chainvue-store"]
+members = ["crates/chainvue-protocol", "crates/chainvue-chain", "crates/chainvue-mock", "crates/chainvue-ui", "crates/chainvue-app", "crates/chainvue-core", "crates/chainvue-keystore", "crates/chainvue-store", "crates/chainvue-chart"]
 
 [workspace.package]
 version = "0.1.0"

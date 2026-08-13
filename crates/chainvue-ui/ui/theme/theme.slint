@@ -55,6 +55,15 @@ export global Theme {
     out property <brush> negative-soft: dark ? #F0616D1F : #D63B4914;
     out property <brush> warning:       dark ? #E5A544 : #B8721A;
     out property <brush> warning-soft:  dark ? #E5A5441F : #B8721A14;
+
+    // ── The chart ───────────────────────────────────────────────────────
+    // A `color`, not a `brush`, and that is load-bearing: `.with-alpha()` is a
+    // method on `color`, and the area under the line is the accent faded to
+    // nothing. A `brush` here would compile and then fail at the gradient.
+    out property <color> chart-line: dark ? #4D7CFE : #2D62E8;
+    // The line has to stay readable against the fill directly beneath it, so
+    // the fill never gets close to the stroke's own weight.
+    out property <color> chart-grid: dark ? #FFFFFF : #101114;
 }
 
 // 4px grid. If a value is not on it, it is a mistake or it needs a name.

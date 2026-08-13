@@ -202,6 +202,57 @@ export global NetworkState {
     in-out property <string> draft-label: "";
 }
 
+// The balance over time.
+//
+// Everything here is computed in Rust by `src/chart.rs`, which owns the
+// readings and the geometry. Slint holds two path strings and a cursor
+// position — no arithmetic on money happens on this side.
+export global ChartState {
+    // SVG path data for a given element size, in that element's own
+    // coordinates. There is no viewbox, so one pixel of stroke means one pixel
+    // — see `chainvue_chart::Viewport`.
+    //
+    // Callbacks rather than properties, and used directly in a binding: a
+    // `pure callback` re-evaluates when its ARGUMENTS change, so the geometry
+    // follows the element through every layout including the first. A property
+    // pushed from a `changed width` handler cannot do that — the handler fires
+    // only after a size exists, and only under a running event loop.
+    pure callback line-at(length, length) -> string;
+    // Empty when the balance never moved: a gradient fading downwards from a
+    // horizontal line reads as a chart that failed to load.
+    pure callback area-at(length, length) -> string;
+    // Where the line ends, so the "now" dot can sit exactly on it.
+    pure callback end-x-at(length, length) -> length;
+    pure callback end-y-at(length, length) -> length;
+    in property <bool> has-data: false;
+    in property <string> ticker: "VRSC";
+    // What moved across the window, and whether that is good news.
+    in property <string> change: "";
+    in property <string> change-tone: "neutral";
+    // What the picture is of. A chart over a window the wallet has not fully
+    // scanned is true about the window and silent about everything before it,
+    // and that difference is invisible in the drawing.
+    in property <string> caption: "";
+
+    in property <[string]> range-labels: [];
+    // A range the scan cannot fill is refused rather than quietly shown short.
+    in property <[bool]> range-enabled: [];
+    in property <int> range: 4;
+
+    // -1 when the pointer is not over the chart.
+    in property <int> hover: -1;
+    // Where the crosshair sits: on the nearest SAMPLE, not under the pointer.
+    // A dot floating between two readings points at a balance never held.
+    in property <length> hover-x: 0px;
+    in property <length> hover-y: 0px;
+    in property <string> hover-amount: "";
+    in property <string> hover-when: "";
+
+    callback set-range(int);
+    callback hovered(length);
+    callback left();
+}
+
 export global AppInfo {
     in property <string> sdk-rev: "unknown";
 }
@@ -660,6 +711,193 @@ component PendingPayments inherits VerticalLayout {
     }
 }
 
+// The plotted area: two paths, a wipe, and a crosshair.
+//
+// Its own component because the draw-in needs a clip rectangle wrapping a
+// holder pinned at full size, and because the touch area has to be able to
+// address the paths — neither survives being written inline.
+component ChartPlot inherits Rectangle {
+    // Slint has no stroke-dasharray and no path-length animation, so the
+    // draw-in is a **clip wipe**: an outer rectangle whose width animates from
+    // nothing to full, containing a holder that is always the full size. The
+    // paths never move; what moves is how much of them is visible. Zero
+    // per-frame path work, and it works identically for the gradient.
+    in-out property <float> progress: 0;
+
+    // Runs once when the data arrives. Reversing it on every re-plot would
+    // mean the chart redrew itself every fifteen seconds when the tip poll
+    // finds a new block, which is a wallet fidgeting at you.
+    states [
+        drawn when ChartState.has-data: {
+            progress: 1;
+            in {
+                animate progress {
+                    duration: Motion.draw;
+                    easing: cubic-bezier(0.22, 1, 0.36, 1);
+                    enabled: Motion.enabled;
+                }
+            }
+        }
+    ]
+
+    // The fill first, so the stroke is never drawn under it.
+    Rectangle {
+        width: parent.width * root.progress;
+        clip: true;
+
+        Rectangle {
+            width: root.width;
+            height: root.height;
+
+            Path {
+                commands: ChartState.area-at(root.width, root.height);
+                // Faded to nothing at the baseline. The stroke has to stay
+                // readable against the fill directly beneath it, so the fill
+                // never gets close to the stroke's own weight.
+                // Faded to nothing well before the baseline. A fill still
+                // visible at the bottom reads as a filled shape rather than as
+                // depth under a line, and it competes with the stroke it is
+                // supposed to sit beneath.
+                //
+                // The top stop is chosen to look right **without** the fade as
+                // well: the software renderer — which is what draws the
+                // reference images, and what would draw the wallet on a machine
+                // with no working GPU path — fills a `Path` with the first stop
+                // and ignores the rest. A gradient whose top end is too strong
+                // to stand on its own would then look correct in review and
+                // wrong on somebody's laptop.
+                fill: @linear-gradient(180deg,
+                    Theme.chart-line.with-alpha(0.16) 0%,
+                    Theme.chart-line.with-alpha(0.05) 60%,
+                    Theme.chart-line.with-alpha(0.0) 100%);
+            }
+
+            Path {
+                commands: ChartState.line-at(root.width, root.height);
+                stroke: Theme.chart-line;
+                stroke-width: 2px;
+            }
+        }
+    }
+
+    // Where the line ends — which is now. The one point on the chart that is
+    // still moving, and the anchor the wipe appears to be drawn by.
+    if ChartState.hover < 0: Rectangle {
+        x: ChartState.end-x-at(root.width, root.height) - 4px;
+        y: ChartState.end-y-at(root.width, root.height) - 4px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.chart-line;
+        opacity: root.progress;
+    }
+
+    // The crosshair. Only while a pointer is actually over the chart.
+    if ChartState.hover >= 0: Rectangle {
+        x: ChartState.hover-x;
+        width: 1px;
+        y: 0;
+        height: root.height;
+        background: Theme.chart-grid.with-alpha(0.14);
+    }
+
+    if ChartState.hover >= 0: Rectangle {
+        x: ChartState.hover-x - 5px;
+        y: ChartState.hover-y - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.chart-line;
+        border-width: 2px;
+        border-color: Theme.bg-surface;
+        // Gliding between samples rather than teleporting is most of the
+        // difference between this and a chart library.
+        animate x { duration: 90ms; easing: ease-out; enabled: Motion.enabled; }
+        animate y { duration: 90ms; easing: ease-out; enabled: Motion.enabled; }
+    }
+
+    touch := TouchArea {
+        // `mouse-x` updates on hover; `moved()` only fires while pressed, so
+        // this is a binding rather than a callback.
+        changed mouse-x => {
+            if (touch.has-hover) { ChartState.hovered(touch.mouse-x); }
+        }
+        changed has-hover => {
+            if (!touch.has-hover) { ChartState.left(); }
+        }
+    }
+}
+
+// The balance over time, with its range control and its own empty state.
+component BalanceChart inherits VerticalLayout {
+    spacing: Sp.s4;
+
+    Rectangle {
+        height: 200px;
+
+        if ChartState.has-data: ChartPlot {
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Not a spinner and not a blank card. Before the first refresh there
+        // is genuinely nothing to draw, and saying so beats a shape that
+        // implies data is on its way when no node has answered.
+        if !ChartState.has-data: EmptyState {
+            title: "No history to chart yet";
+            body: "The balance over time appears once ChainVue has read this wallet's transactions.";
+        }
+    }
+
+    if ChartState.has-data: HorizontalLayout {
+        spacing: Sp.s5;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            // While hovering, the header reads the value AT THE CURSOR. The
+            // change figure keeps describing the window, which is what makes
+            // the two useful together.
+            Text {
+                text: ChartState.hover >= 0
+                    ? ChartState.hover-amount + " " + ChartState.ticker
+                    : ChartState.change;
+                font-family: Typo.mono;
+                font-size: Typo.num-sm;
+                color: ChartState.hover >= 0 ? Theme.text-primary
+                    : ChartState.change-tone == "positive" ? Theme.positive
+                    : ChartState.change-tone == "negative" ? Theme.negative
+                    : Theme.text-secondary;
+            }
+            Text {
+                text: ChartState.hover >= 0 ? ChartState.hover-when : ChartState.caption;
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Sp.s2;
+            alignment: end;
+
+            for label[i] in ChartState.range-labels: Btn {
+                text: label;
+                variant: ChartState.range == i ? "primary" : "ghost";
+                // A range the scan has not reached would draw a month's axis
+                // with a week of history on it, and the flat stretch on the
+                // left would read as "you had nothing" — a claim about
+                // somebody's money the wallet cannot make.
+                enabled: ChartState.range-enabled[i];
+                y: (parent.height - self.height) / 2;
+                clicked => { ChartState.set-range(i); }
+            }
+        }
+    }
+}
+
 component DashboardScreen inherits VerticalLayout {
     spacing: Sp.section-gap;
 
@@ -782,6 +1020,16 @@ component DashboardScreen inherits VerticalLayout {
                 font-size: Typo.caption;
                 color: Theme.positive;
             }
+        }
+    }
+
+    // The balance over time. Directly under the figure it is a chart of, so
+    // the two can be read as one statement rather than as two facts that
+    // happen to share a screen.
+    Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+            BalanceChart {}
         }
     }
 

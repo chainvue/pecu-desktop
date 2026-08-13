@@ -250,7 +250,12 @@ export component EmptyState inherits VerticalLayout {
     alignment: center;
     spacing: Sp.s4;
 
-    Text {
+    // Optional. Several of the shapes that would suit an empty state — a wave,
+    // an arc, a chart glyph — render as nothing in the fonts this build has,
+    // which is worse than no glyph at all because it silently takes the space
+    // of one. Where there is no character that both fits and exists, the state
+    // goes without.
+    if root.glyph != "": Text {
         text: root.glyph;
         font-size: 32px;
         color: Theme.text-tertiary;

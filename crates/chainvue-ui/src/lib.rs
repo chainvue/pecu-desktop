@@ -33,6 +33,7 @@ mod generated {
 
 pub use generated::*;
 
+pub mod chart;
 pub mod fixtures;
 pub mod qr;
 pub mod seed;

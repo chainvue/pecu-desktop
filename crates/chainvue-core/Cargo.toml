@@ -20,6 +20,10 @@ mock = ["chainvue-chain/mock"]
 [dependencies]
 chainvue-protocol = { path = "../chainvue-protocol" }
 chainvue-chain = { path = "../chainvue-chain" }
+# Pure geometry and series arithmetic, with no dependencies of its own. The
+# "walk backwards from the balance we know" rule lives there because that is
+# where it can be checked against a golden value.
+chainvue-chart = { path = "../chainvue-chart" }
 chainvue-keystore = { path = "../chainvue-keystore" }
 chainvue-store = { path = "../chainvue-store" }
 verus-sdk = { workspace = true }
