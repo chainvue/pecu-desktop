@@ -2391,6 +2391,24 @@ component SettingsScreen inherits VerticalLayout {
                 }
             }
 
+            // The fonts are compiled into this binary, and the SIL Open Font
+            // License requires its notice to travel with them — which means it
+            // travels with the executable, not just with the source tree. This
+            // line is that notice. See `ui/fonts/README.md`.
+            HorizontalLayout {
+                Text {
+                    text: "Typeset in";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "Inter and IBM Plex Mono · SIL OFL 1.1";
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                }
+            }
+
             HorizontalLayout {
                 Text {
                     text: "Verus SDK";
@@ -3342,6 +3360,9 @@ component BackupScreen inherits Rectangle {
 export component AppWindow inherits Window {
     title: "ChainVue";
     background: Theme.bg-base;
+    // Set once, here, so every element that leaves `font-family` unset gets the
+    // bundled face rather than whatever the platform happens to have.
+    default-font-family: Typo.ui;
     default-font-size: Typo.body;
     min-width: 880px;
     min-height: 620px;

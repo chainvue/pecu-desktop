@@ -1,3 +1,21 @@
+// The two font families this interface is drawn in, embedded rather than
+// assumed.
+//
+// `import "…ttf"` compiles the file into the binary and registers the family
+// globally, so there is nothing to install and nothing to be missing. That is
+// the whole point: the previous arrangement named "Menlo", which ships with
+// macOS and exists nowhere else, so the design quietly forked per platform and
+// nobody on this machine could ever see it happen.
+//
+// Both are SIL OFL 1.1 and redistributable. The licences sit beside them in
+// `ui/fonts/` — the OFL requires them to travel with the fonts, and a licence
+// somebody has to go and find is one that will not be there in the next copy.
+import "../fonts/Inter-Regular.ttf";
+import "../fonts/Inter-Medium.ttf";
+import "../fonts/Inter-SemiBold.ttf";
+import "../fonts/IBMPlexMono-Regular.ttf";
+import "../fonts/IBMPlexMono-Medium.ttf";
+
 // Design tokens. No call site anywhere else writes a raw hex value or a pixel
 // constant — if you find yourself typing `#1A1D22` in a screen, add a token.
 //
@@ -99,22 +117,21 @@ export global R {
 }
 
 export global Typo {
-    // The UI font is the system default: leaving `font-family` unset lets Slint
-    // pick the platform's UI font, which is correct on every OS and needs no
-    // license or bundled file.
+    // The UI face. Bundled, so the interface is the same drawing on every
+    // platform rather than SF Pro here and something else there.
+    out property <string> ui: "Inter";
+
+    // Money, addresses, txids and block heights are set in a MONOSPACE family,
+    // and that is not decoration. Slint exposes no OpenType feature control, so
+    // tabular figures cannot be requested on a proportional face — and with
+    // proportional digits the balance jitters as it changes and amounts do not
+    // line up in a column. A mono family solves both structurally.
     //
-    // Money, addresses, txids and block heights use a MONOSPACE family, and
-    // that is not decoration. Slint exposes no OpenType feature control, so
-    // tabular figures cannot be requested on a proportional font — and with
-    // proportional digits the balance visibly jitters while it counts up, and
-    // amounts do not align in a column.
-    //
-    // "Menlo" ships with every macOS. On Linux/Windows it is absent and the
-    // renderer falls back to another monospace family, which is fine but is
-    // not the same design. The plan is to bundle IBM Plex Mono (SIL OFL 1.1)
-    // in `ui/fonts/` and `import` it here; that is a file-management step, not
-    // a code change, and this is the honest placeholder until then.
-    out property <string> mono: "Menlo";
+    // This said "Menlo" until the fonts were bundled. Menlo ships with macOS
+    // and exists nowhere else, so every amount in this wallet rendered in some
+    // other face on Linux and Windows — a difference invisible from here, which
+    // is exactly the kind that survives to a release.
+    out property <string> mono: "IBM Plex Mono";
 
     out property <length> hero:    44px;   // dashboard balance
     out property <length> title1:  28px;
