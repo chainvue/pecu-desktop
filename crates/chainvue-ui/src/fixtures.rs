@@ -135,6 +135,11 @@ pub fn settings(ui: &AppWindow) {
     wallet.set_vault_path(
         "~/Library/Application Support/com.chainvue.wallet/testnet/vault.json".into(),
     );
+    // The real binary fills this in. Leaving it blank rendered "Logs" beside
+    // nothing at all, which is exactly the difference between the snapshot and
+    // the shipped app that these images exist to catch.
+    ui.global::<AppInfo>()
+        .set_log_path("~/Library/Application Support/com.chainvue.wallet/testnet/logs".into());
 }
 
 /// A transaction opened over the activity list.
@@ -159,6 +164,23 @@ pub fn tx_detail(ui: &AppWindow) {
         "https://testex.verus.io/tx/685ffac53fc525a4cefa5ed334139aebace508cbe293a41e6edba096f22517a5"
             .into(),
     );
+}
+
+/// The send form, on a wallet with more than one key.
+///
+/// The form has never had a reference image of its own — [`reviewing`] jumps
+/// straight to step two — so the labels, the placeholders and the key picker
+/// have only ever been checked by reading them.
+pub fn sending(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("send".into());
+
+    let wallet = ui.global::<WalletState>();
+    wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![
+        key("main", ADDRESS, "generated", true, true),
+        key("savings", SECOND_ADDRESS, "generated", true, false),
+    ]))));
+    wallet.set_address(ADDRESS.into());
 }
 
 /// The review step, showing a payment that has been built and signed.

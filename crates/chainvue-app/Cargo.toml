@@ -29,3 +29,12 @@ slint = "1.17"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Log rotation. A desktop wallet started from the Finder has no terminal, so
+# stderr goes nowhere and the log has to be a file — and a file with no rotation
+# is a wallet that eventually fills somebody's disk. Writing that by hand is a
+# day-boundary calculation and a rename race; this is the tokio project's, it is
+# small, and it pulls in nothing that was not already here.
+tracing-appender = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

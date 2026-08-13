@@ -44,4 +44,8 @@ zeroize = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
 tempfile = "3"
 verus-flows = { workspace = true }
+# Capturing what the application logs, so `tests/log_hygiene.rs` can grep it for
+# key material. Dev-only: the core itself emits through `tracing` and has no
+# opinion about where that goes.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 chainvue-store = { path = "../chainvue-store" }

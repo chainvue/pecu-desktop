@@ -259,6 +259,9 @@ export global ChartState {
 
 export global AppInfo {
     in property <string> sdk-rev: "unknown";
+    // Where the log files are. On screen because a wallet started from the
+    // Finder has no terminal, so this is the only way anybody finds them.
+    in property <string> log-path: "";
 }
 
 // Every UI→core call lives in this one global.
@@ -1400,6 +1403,31 @@ component NodesScreen inherits VerticalLayout {
     Rectangle { vertical-stretch: 1; }
 }
 
+// Which key the wallet is receiving to and paying from.
+//
+// One control, one fact. Receive and Send both act on whichever key is active,
+// so a picker that meant something different on each screen would be two
+// notions of "the key in use" — and the one that decides where money arrives
+// must not be able to disagree with the one that decides where it leaves.
+//
+// Absent when there is nothing to pick: a control with one option in it is a
+// question nobody asked.
+component KeyPicker inherits HorizontalLayout {
+    // Left, like everything else in a form. The receive screen centres it by
+    // wrapping it, which is the one place the surrounding column is centred.
+    alignment: start;
+    spacing: Sp.s3;
+
+    if WalletState.keys.length > 1: HorizontalLayout {
+        spacing: Sp.s3;
+        for entry in WalletState.keys: Btn {
+            text: entry.label;
+            variant: entry.active ? "primary" : "secondary";
+            clicked => { Actions.select-key(entry.label); }
+        }
+    }
+}
+
 // What to send, and where.
 //
 // Its own component because its two inputs have to be readable from one place —
@@ -1413,6 +1441,38 @@ component SendForm inherits HorizontalLayout {
             padding: Sp.s8;
             spacing: Sp.s6;
 
+            // Which key is paying. Named on the form rather than only in the
+            // review, because "where is this coming from" is a question about
+            // the payment somebody is composing, not about the one they are
+            // being asked to confirm.
+            VerticalLayout {
+                spacing: Sp.s3;
+                HorizontalLayout {
+                    Text {
+                        text: "From";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: WalletState.active-key;
+                        font-size: Typo.caption;
+                        font-weight: Typo.w-medium;
+                        color: Theme.text-primary;
+                    }
+                }
+                Text {
+                    text: WalletState.address;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    overflow: elide;
+                }
+                KeyPicker {}
+            }
+
+            Rectangle { height: 1px; background: Theme.border-subtle; }
+
             VerticalLayout {
                 spacing: Sp.s3;
                 Text {
@@ -1424,8 +1484,10 @@ component SendForm inherits HorizontalLayout {
                     mono: true;
                     // The two shapes this accepts, so nobody has to find out by
                     // being refused. Not an example address anybody could copy:
-                    // the prefix and the ellipsis are the whole point.
-                    placeholder: "R… or a VerusID@";
+                    // the prefix and the ellipsis are the whole point. The
+                    // trailing `@` is not decoration — it is what a VerusID
+                    // actually ends with.
+                    placeholder: "R… or name@";
                     invalid: to.text != "" && !SendState.to-valid;
                     edited => { root.check(); }
                 }
@@ -2160,6 +2222,22 @@ component SettingsScreen inherits VerticalLayout {
 
             HorizontalLayout {
                 Text {
+                    text: "Logs";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: AppInfo.log-path;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    overflow: elide;
+                }
+            }
+
+            HorizontalLayout {
+                Text {
                     text: "Verus SDK";
                     font-size: Typo.body;
                     color: Theme.text-secondary;
@@ -2544,18 +2622,9 @@ component TxSheet inherits Rectangle {
 component ReceiveScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
-    // Which key is being paid. Only shown when there is a choice — a single-key
-    // wallet has nothing to pick, and a control with one option in it is a
-    // question nobody asked.
-    if WalletState.keys.length > 1: HorizontalLayout {
+    HorizontalLayout {
         alignment: center;
-        spacing: Sp.s3;
-
-        for entry in WalletState.keys: Btn {
-            text: entry.label;
-            variant: entry.active ? "primary" : "secondary";
-            clicked => { Actions.select-key(entry.label); }
-        }
+        KeyPicker {}
     }
 
     HorizontalLayout {

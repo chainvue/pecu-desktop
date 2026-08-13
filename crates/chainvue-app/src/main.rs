@@ -38,7 +38,14 @@ const BUILTIN_NODES: &[(&str, &str)] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
+    // Held for the life of the process: the file writer is non-blocking, and
+    // dropping the guard loses whatever had not been flushed.
+    let _logging = init_tracing(
+        &vault_path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+    );
 
     // Built by hand rather than via `#[tokio::main]`, so the main thread stays
     // free for Slint. Held for the life of the process: dropping it would abort
@@ -78,6 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.global::<WalletState>()
         .set_vault_path(vault_path().display().to_string().into());
+    ui.global::<AppInfo>()
+        .set_log_path(log_dir().display().to_string().into());
 
     chainvue_ui::chart::install(&ui);
     wire_actions(&ui, dispatcher.clone());
@@ -557,15 +566,137 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     });
 }
 
-/// Logging to stderr, filtered by `RUST_LOG`.
-fn init_tracing() {
+/// Logging to a file, and to stderr when there is one.
+///
+/// # Why a file at all
+///
+/// A wallet started from the Finder or the Start menu has no terminal attached,
+/// so stderr goes nowhere. Every line this application has ever logged about a
+/// node refusing a method, a broadcast whose outcome was unknown, or a vault
+/// that would not open, has been written to a stream nobody could read. The
+/// first thing anybody needs when a payment goes strange is the log, and it has
+/// to exist somewhere they can be pointed at.
+///
+/// Rotated daily. A log with no rotation is a wallet that fills a disk, which
+/// is a slower and more annoying failure than the one it was written to
+/// diagnose.
+///
+/// # What is deliberately not in it
+///
+/// No passphrase, no recovery phrase, no private key. That is a property of
+/// what the rest of the application logs rather than of this function — see
+/// `tests/log_hygiene.rs`, which sends a payment through the mock chain and
+/// greps everything that came out.
+///
+/// Returns a guard that must be held for the life of the process: the writer is
+/// non-blocking, so dropping it stops the worker and loses whatever had not
+/// been flushed — including, on a crash, the lines explaining it.
+fn init_tracing(dir: &std::path::Path) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("chainvue=info,warn"));
+    let filter = || {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("chainvue=info,warn"))
+    };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    // Still stderr, so `cargo run` behaves as it always has.
+    let console = tracing_subscriber::fmt::layer()
         .with_target(false)
+        .with_filter(filter());
+
+    let Some(logs) = writable_log_directory(dir) else {
+        // Not fatal. A wallet that refuses to start because it cannot write a
+        // log file is a wallet that has confused its diary with its job.
+        tracing_subscriber::registry().with(console).init();
+        tracing::warn!(path = %dir.display(), "no writable log directory; stderr only");
+        return None;
+    };
+
+    let appender = tracing_appender::rolling::daily(&logs, "chainvue.log");
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+
+    tracing_subscriber::registry()
+        .with(console)
+        .with(
+            tracing_subscriber::fmt::layer()
+                // No colour codes in a file somebody is going to open in a text
+                // editor or attach to a bug report.
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(writer)
+                .with_filter(filter()),
+        )
         .init();
+
+    tracing::info!(path = %logs.display(), "logging here");
+    Some(guard)
+}
+
+/// The log directory, created, or `None` if it cannot be written to.
+///
+/// Creating it is not enough to know it is usable: a directory can exist and be
+/// unwritable, and `tracing_appender` discovers that by panicking on the first
+/// line it tries to write — which would take the wallet down at startup for the
+/// sake of a log file. So this writes a byte and deletes it, and the caller
+/// falls back to stderr if it could not.
+fn writable_log_directory(base: &std::path::Path) -> Option<std::path::PathBuf> {
+    let logs = base.join("logs");
+    std::fs::create_dir_all(&logs).ok()?;
+
+    let probe = logs.join(".writable");
+    std::fs::write(&probe, b"").ok()?;
+    let _ = std::fs::remove_file(&probe);
+
+    Some(logs)
+}
+
+/// Where the log files are, for the screen that has to tell somebody.
+fn log_dir() -> std::path::PathBuf {
+    vault_path()
+        .parent()
+        .map(|dir| dir.join("logs"))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::writable_log_directory;
+
+    #[test]
+    fn a_log_directory_is_created_under_the_wallet_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logs = writable_log_directory(dir.path()).expect("a log directory");
+
+        assert_eq!(logs, dir.path().join("logs"));
+        assert!(logs.is_dir());
+        // The probe cleans up after itself: a stray file in the log directory
+        // would end up attached to somebody's bug report.
+        assert_eq!(
+            std::fs::read_dir(&logs)
+                .expect("read the log directory")
+                .count(),
+            0,
+        );
+    }
+
+    /// The failure that must not take the wallet down with it. A wallet that
+    /// refuses to start because it cannot write a log file has confused its
+    /// diary with its job.
+    #[test]
+    fn a_directory_that_cannot_be_written_to_is_refused_rather_than_fatal() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
+                .expect("make it read-only");
+
+            assert!(writable_log_directory(dir.path()).is_none());
+
+            // Put it back, or the temporary directory cannot be cleaned up.
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                .expect("restore");
+        }
+    }
 }
