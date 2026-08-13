@@ -549,7 +549,8 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
             "send" => ScreenId::Send,
             "receive" => ScreenId::Receive,
             "activity" => ScreenId::Activity,
-            "nodes" | "settings" => ScreenId::Settings,
+            "nodes" => ScreenId::Nodes,
+            "settings" => ScreenId::Settings,
             _ => ScreenId::Dashboard,
         };
         dispatcher.send(Command::ScreenEntered(id));

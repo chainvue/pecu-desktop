@@ -440,6 +440,11 @@ pub enum ScreenId {
     Send,
     Receive,
     Activity,
+    /// The node list. Separate from `Settings` because it is the one screen
+    /// whose being open justifies asking every configured node a question —
+    /// polling endpoints nobody is looking at is asking public infrastructure
+    /// for something nothing will read.
+    Nodes,
     Settings,
     CreateWallet,
     ImportWallet,

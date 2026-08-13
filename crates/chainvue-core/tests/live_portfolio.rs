@@ -123,6 +123,87 @@ fn a_real_address_reads_coherently() {
     }
 }
 
+/// The chart's anchor, checked against a real chain.
+///
+/// # Why this needs real data
+///
+/// The balance chart is built by walking **backwards** from the balance the
+/// wallet holds now, subtracting each transaction on the way down. That is only
+/// correct if the figure it starts from is exactly what the confirmed history
+/// sums to — and there are four plausible candidates for that figure, differing
+/// by whatever is maturing and whatever an unconfirmed transaction has already
+/// spent.
+///
+/// Pick the wrong one and nothing looks broken. The chart is still a plausible
+/// staircase; it just sits a constant distance below the number printed above
+/// it, and a constant offset is invisible. No unit test catches this, because a
+/// unit test asserts the arithmetic against the same assumption that produced
+/// it. Only a real address with real history can disagree.
+#[ignore = "talks to api.verustest.net"]
+#[test]
+fn the_chart_starts_where_the_history_adds_up_to() {
+    let chain = Chain::live(TESTNET).expect("a client for the testnet endpoint");
+    let reading = portfolio::read(&chain, &[address()], portfolio::Cached::default());
+
+    assert!(reading.failure.is_none(), "{:?}", reading.failure);
+    let history = reading.history.as_ref().expect("the activity list");
+
+    // What the chart hangs from: confirmed coins, spendable or not, including
+    // any an unconfirmed transaction has claimed — the transaction spending
+    // them is not in this history either.
+    let anchor = i64::try_from(
+        reading.spendable.to_sat() + reading.immature.to_sat() + reading.pending_out.to_sat(),
+    )
+    .expect("a balance inside i64");
+
+    // Only confirmed movements. An unconfirmed one has no block time and is not
+    // in the anchor, so it has no place on a time axis.
+    let deltas: Vec<(i64, i64)> = history
+        .iter()
+        .filter(|entry| entry.height > 0)
+        .map(|entry| (entry.block_time, entry.net_native.to_sat()))
+        .collect();
+
+    let moved: i64 = deltas.iter().map(|(_, net)| net).sum();
+    let points = chainvue_chart::from_deltas(1_800_000_000, anchor, &deltas);
+
+    let first = points.first().expect("a series").value;
+    let last = points.last().expect("a series").value;
+
+    // The last point is the balance now, by construction.
+    assert_eq!(last, anchor, "the chart does not end where the wallet is");
+
+    // And the first is what was held before the scanned window — which must be
+    // the current balance minus everything that moved inside it. If the anchor
+    // included something the history does not account for, this comes out
+    // non-zero on a wallet whose whole history is inside the window, and
+    // negative on one where the extra is larger than what moved.
+    assert_eq!(
+        first,
+        anchor - moved,
+        "the chart's starting balance does not follow from what moved",
+    );
+
+    println!("anchor       {anchor} sats");
+    println!("moved        {moved} sats over {} confirmed", deltas.len());
+    println!("chart starts {first} sats");
+    println!("chart ends   {last} sats");
+
+    // A wallet whose entire history fits in the scanned window started at
+    // nothing. Reported rather than asserted: the window is ten thousand
+    // blocks, so an older address legitimately starts above zero and this test
+    // must not fail for having been pointed at one.
+    if reading.reached_start {
+        assert_eq!(
+            first, 0,
+            "the whole chain was scanned, so the wallet must start empty",
+        );
+        println!("scan reached the start of the chain, and the series begins at zero");
+    } else {
+        println!("scan has not reached the chain start; a non-zero start is correct");
+    }
+}
+
 /// A real read must actually reach the cache, and come back out of it.
 ///
 /// # Why this test exists

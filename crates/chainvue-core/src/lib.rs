@@ -118,8 +118,8 @@ pub fn start(
         pending: pending::Ledger::open(pending_path),
         last_checked: std::collections::HashMap::new(),
         checking: std::collections::HashSet::new(),
-        tip_polled: None,
-        polling_tip: false,
+        polling: Polling::default(),
+        broadcasting: false,
         history: HistoryScan::default(),
         store,
     };
@@ -167,16 +167,35 @@ struct Core {
     last_checked: std::collections::HashMap<u64, std::time::Instant>,
     /// Ids with a check in flight, so a slow node cannot pile up requests.
     checking: std::collections::HashSet<u64>,
-    /// When the active node was last asked for the chain tip, and whether an
-    /// ask is in flight.
-    tip_polled: Option<std::time::Instant>,
-    polling_tip: bool,
+    /// What the node poller is doing, and what it is allowed to ask.
+    polling: Polling,
+    /// A payment is being handed to a node right now. See `fail_over`.
+    broadcasting: bool,
     history: HistoryScan,
 
     /// Settings, and a cache the wallet is free to throw away. `None` when the
     /// databases could not be opened — the wallet works without them, it just
     /// forgets between runs and starts every session with a blank dashboard.
     store: Option<chainvue_store::Store>,
+}
+
+/// What the node poller is doing.
+///
+/// Grouped rather than four fields on `Core`, because they only mean anything
+/// together: whether a tip poll is due depends on when the last one went out
+/// AND whether one is still in flight, and whether the other nodes get asked
+/// anything at all depends on which screen is open.
+#[derive(Default)]
+struct Polling {
+    /// When the active node was last asked for the chain tip.
+    tip_at: Option<std::time::Instant>,
+    /// A tip poll is out. Without this, a slow node collects a queue.
+    tip_in_flight: bool,
+    /// When the nodes nobody is reading from were last asked anything.
+    others_at: Option<std::time::Instant>,
+    /// Which screen is open. Entering one is leaving the last, so there is no
+    /// second signal to get out of step with this.
+    screen: chainvue_protocol::ScreenId,
 }
 
 /// How far the backwards scan through the chain has got.
@@ -287,6 +306,7 @@ impl Core {
                 _ = idle.tick() => {
                     self.check_auto_lock();
                     self.poll_tip();
+                    self.poll_inactive();
                     self.poll_pending();
                     continue;
                 }
@@ -667,7 +687,8 @@ impl Core {
                 typed_confirmation,
             } => self.set_mainnet_spend(on, &typed_confirmation),
             Command::ResolvePending { id, action } => self.resolve_pending(id, action),
-            Command::ScreenEntered(_) | Command::UserActivity => self.wallet.touch(),
+            Command::ScreenEntered(screen) => self.enter_screen(screen),
+            Command::UserActivity => self.wallet.touch(),
             Command::Shutdown => return false,
             other => {
                 tracing::debug!(?other, "command not handled yet");
@@ -1011,7 +1032,12 @@ impl Core {
     fn poll_tip(&mut self) {
         const EVERY: std::time::Duration = std::time::Duration::from_secs(15);
 
-        if self.polling_tip || self.tip_polled.is_some_and(|last| last.elapsed() < EVERY) {
+        if self.polling.tip_in_flight
+            || self
+                .polling
+                .tip_at
+                .is_some_and(|last| last.elapsed() < EVERY)
+        {
             return;
         }
         let Some(node) = self.nodes.active() else {
@@ -1019,8 +1045,8 @@ impl Core {
         };
         let (id, url) = (node.id, node.url.clone());
 
-        self.polling_tip = true;
-        self.tip_polled = Some(std::time::Instant::now());
+        self.polling.tip_in_flight = true;
+        self.polling.tip_at = Some(std::time::Instant::now());
 
         self.blocking.dispatch(
             move || {
@@ -1044,7 +1070,7 @@ impl Core {
         from_poller: bool,
     ) {
         if from_poller {
-            self.polling_tip = false;
+            self.polling.tip_in_flight = false;
         }
 
         // This node's own previous height. Comparing against the ACTIVE node's
@@ -1063,6 +1089,12 @@ impl Core {
 
         let after = self.nodes.get(node).and_then(|n| n.tip);
         self.emit_network();
+
+        // A node that has now failed three times in a row is a node that is
+        // down rather than briefly unreachable.
+        if info.is_err() {
+            self.fail_over();
+        }
 
         // A new block is the only reason to re-read anything. Polling the tip
         // and refreshing regardless would turn a one-request poll into seven.
@@ -1287,6 +1319,139 @@ impl Core {
         store.set_setting("active_node_url", self.nodes.active_url().unwrap_or(""));
     }
 
+    // ── The nodes nobody is reading from ────────────────────────────────────
+
+    /// Note which screen is open, and act on it.
+    ///
+    /// Entering one screen IS leaving the last, so there is no second signal to
+    /// get out of step with this — a `ScreenLeft` the interface forgot to send
+    /// would leave the poller running against a screen nobody is looking at.
+    fn enter_screen(&mut self, screen: chainvue_protocol::ScreenId) {
+        self.wallet.touch();
+        self.polling.screen = screen;
+
+        // Opening the node list is the signal to find out what the other
+        // endpoints are doing, immediately rather than at the next tick.
+        if screen == chainvue_protocol::ScreenId::Nodes {
+            self.probe_inactive();
+        }
+    }
+
+    /// Ask every node except the active one what it is.
+    ///
+    /// Only while the network screen is open. The active node is polled every
+    /// fifteen seconds regardless, because the balance on screen depends on it;
+    /// the others are only interesting to somebody looking at a list of them,
+    /// and polling endpoints nobody is reading is asking public infrastructure
+    /// for an answer that goes nowhere.
+    ///
+    /// # The backoff is deliberately not applied here
+    ///
+    /// It governs the automatic poller, whose job is to be polite about a node
+    /// nobody asked about. This is the opposite case: somebody has opened the
+    /// list precisely to find out what these endpoints are doing, and a node
+    /// that recovered would otherwise sit at "offline" on a screen being
+    /// watched, for as long as five minutes, because it failed earlier. Once a
+    /// minute, for the nodes on screen, while the screen is open.
+    fn probe_inactive(&mut self) {
+        let active = self.nodes.active().map(|node| node.id);
+        let targets: Vec<(u32, String)> = self
+            .nodes
+            .nodes()
+            .iter()
+            .filter(|node| Some(node.id) != active)
+            .map(|node| (node.id, node.url.clone()))
+            .collect();
+
+        self.polling.others_at = Some(std::time::Instant::now());
+        for (id, url) in targets {
+            self.probe_one(id, &url);
+        }
+    }
+
+    /// The sixty-second cadence for the inactive nodes, while anyone is looking.
+    fn poll_inactive(&mut self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_mins(1);
+
+        if self.polling.screen != chainvue_protocol::ScreenId::Nodes {
+            return;
+        }
+        if self
+            .polling
+            .others_at
+            .is_some_and(|last| last.elapsed() < EVERY)
+        {
+            return;
+        }
+        self.probe_inactive();
+    }
+
+    /// Move to another node when the one in use has stopped answering.
+    ///
+    /// # Three failures, not one
+    ///
+    /// A single timeout is a network hiccup and switching on it would make the
+    /// wallet flap between endpoints on a train. Three consecutive failures,
+    /// with the backoff between them, is a node that is actually down.
+    ///
+    /// # Never while a payment's fate is unknown
+    ///
+    /// This is the rule that matters, and it is stronger than "not during a
+    /// broadcast". A transaction whose broadcast could not be confirmed is
+    /// resolved by asking a node whether it has it — and a **different** node
+    /// legitimately answers "no" for a transaction that is propagating
+    /// perfectly well through the one it was handed to. Failing over mid-
+    /// resolution would turn a payment that landed into a payment the wallet
+    /// reports as absent, and the screen would then offer to send it again.
+    ///
+    /// So: not while broadcasting, and not while anything is uncertain.
+    ///
+    /// # Only to a node on the same chain
+    ///
+    /// `record_success` marks a node answering about another chain as degraded
+    /// rather than online, so requiring `Online` is already requiring agreement
+    /// about which chain this is. Stated here because it is the property that
+    /// makes automatic switching safe at all.
+    fn fail_over(&mut self) {
+        if self.broadcasting {
+            tracing::info!("not failing over: a payment is being sent");
+            return;
+        }
+        if resolution_pending(&self.pending) {
+            tracing::warn!(
+                "not failing over: a payment's fate is unknown, and another node would \
+                 answer about it from a different mempool",
+            );
+            return;
+        }
+
+        let Some(failed) = self.nodes.active().map(|node| node.id) else {
+            return;
+        };
+        let Some(healthy) = failover_target(&self.nodes) else {
+            return;
+        };
+        if !self.nodes.set_active(healthy) {
+            return;
+        }
+
+        tracing::warn!(
+            from = failed,
+            to = healthy,
+            "the active node stopped answering"
+        );
+        self.chain = None;
+        self.remember_active_node();
+        self.notice_warning(
+            "node_failover",
+            "Switched to another node",
+            "The node ChainVue was using stopped answering, so it moved to one that is. \
+             Nothing about your wallet changed.",
+        );
+        self.emit_network();
+        self.refresh();
+    }
+
     // ── Transactions whose fate is unknown ──────────────────────────────────
 
     /// Ask the node about anything that is due.
@@ -1412,6 +1577,7 @@ impl Core {
         };
 
         self.busy(TaskKind::Broadcasting, true);
+        self.broadcasting = true;
         self.blocking.dispatch(
             move || Work::Resent {
                 record: id,
@@ -1427,6 +1593,7 @@ impl Core {
         result: Result<String, verus_sdk::network::FlowError>,
     ) {
         self.busy(TaskKind::Broadcasting, false);
+        self.broadcasting = false;
 
         match result {
             Ok(txid) => {
@@ -1657,6 +1824,7 @@ impl Core {
         };
 
         self.busy(TaskKind::Broadcasting, true);
+        self.broadcasting = true;
         self.blocking.dispatch(
             move || Work::Broadcast {
                 record,
@@ -1675,6 +1843,7 @@ impl Core {
         use verus_sdk::network::FlowError;
 
         self.busy(TaskKind::Broadcasting, false);
+        self.broadcasting = false;
 
         match result {
             Ok(sent) => {
@@ -1981,6 +2150,60 @@ fn refusal_title(refused: &chainvue_chain::SpendRefused) -> String {
     // Deliberately specific. "Refused" tells someone nothing about what to do,
     // and each of these has a different answer.
     refused.to_string()
+}
+
+/// How many consecutive failures mean a node is down rather than unlucky.
+///
+/// One timeout is a network hiccup, and switching on it would make the wallet
+/// flap between endpoints on a train. Three, with the backoff between them, is
+/// a node that has stopped.
+const FAILURES_BEFORE_FAILOVER: u32 = 3;
+
+/// Whether any payment's fate is currently unknown.
+///
+/// The rule that makes automatic failover safe, and it is stronger than "not
+/// during a broadcast". A transaction whose broadcast could not be confirmed is
+/// resolved by asking a node whether it has it — and a **different** node
+/// legitimately answers "no" for a transaction propagating perfectly well
+/// through the one it was handed to. Failing over mid-resolution would turn a
+/// payment that landed into a payment the wallet reports as absent, and the
+/// screen would then offer to send it again.
+///
+/// `Resent` is deliberately not in here: those bytes have already been handed
+/// to a second node, so a third one's opinion changes nothing about the
+/// decision in front of the user.
+fn resolution_pending(ledger: &pending::Ledger) -> bool {
+    ledger.unresolved().any(|record| {
+        matches!(
+            record.state,
+            pending::State::Uncertain | pending::State::Absent
+        )
+    })
+}
+
+/// Which node to move to when the active one has stopped answering.
+///
+/// `None` when the active node is still worth waiting for, or when there is
+/// nothing better to move to — staying put is right in that case, because the
+/// screen already says the node is offline and switching to a second
+/// unreachable one only changes which URL is failing.
+///
+/// Only a node reporting `Online`, which is already a node that agrees about
+/// which chain this is: `record_success` marks one answering about another
+/// chain as degraded rather than online. That is what makes switching
+/// automatically safe at all.
+fn failover_target(nodes: &NodeManager) -> Option<u32> {
+    let active = nodes.active()?;
+    if active.consecutive_failures < FAILURES_BEFORE_FAILOVER {
+        return None;
+    }
+
+    let failed = active.id;
+    nodes
+        .nodes()
+        .iter()
+        .find(|node| node.id != failed && node.status == chainvue_chain::NodeStatus::Online)
+        .map(|node| node.id)
 }
 
 /// Where the ids of user-added nodes start.
@@ -2434,6 +2657,124 @@ mod tests {
         );
 
         assert_eq!(auto_lock.expect("wallet state"), Some(15));
+    }
+
+    /// A node that has stopped answering is left behind — but only for one
+    /// that is actually answering, and only after enough failures to tell a
+    /// dead endpoint from a train tunnel.
+    #[test]
+    fn a_dead_node_is_left_for_a_healthy_one() {
+        use chainvue_chain::NodeStatus;
+
+        let mut nodes = NodeManager::new(
+            vec![
+                Node::builtin(0, "first", "https://one.invalid"),
+                Node::builtin(1, "second", "https://two.invalid"),
+            ],
+            Network::Testnet,
+        );
+
+        let healthy = |nodes: &mut NodeManager, id: u32| {
+            if let Some(node) = nodes.get_mut(id) {
+                node.status = NodeStatus::Online;
+            }
+        };
+        healthy(&mut nodes, 0);
+        healthy(&mut nodes, 1);
+
+        // One failure is a hiccup, and switching on it would make the wallet
+        // flap between endpoints on a train.
+        for failures in 0..FAILURES_BEFORE_FAILOVER {
+            if let Some(active) = nodes.get_mut(0) {
+                active.consecutive_failures = failures;
+                active.status = NodeStatus::Offline {
+                    reason: "timed out".to_string(),
+                };
+            }
+            assert_eq!(
+                failover_target(&nodes),
+                None,
+                "moved after only {failures} failures",
+            );
+        }
+
+        if let Some(active) = nodes.get_mut(0) {
+            active.consecutive_failures = FAILURES_BEFORE_FAILOVER;
+        }
+        assert_eq!(failover_target(&nodes), Some(1));
+    }
+
+    /// Staying put is right when there is nothing better: the screen already
+    /// says the node is offline, and moving to a second unreachable one only
+    /// changes which URL is failing.
+    #[test]
+    fn there_is_nowhere_to_fail_over_to_when_nothing_is_answering() {
+        use chainvue_chain::NodeStatus;
+
+        let mut nodes = NodeManager::new(
+            vec![
+                Node::builtin(0, "first", "https://one.invalid"),
+                Node::builtin(1, "second", "https://two.invalid"),
+            ],
+            Network::Testnet,
+        );
+
+        for id in [0, 1] {
+            if let Some(node) = nodes.get_mut(id) {
+                node.consecutive_failures = 9;
+                node.status = NodeStatus::Offline {
+                    reason: "timed out".to_string(),
+                };
+            }
+        }
+        assert_eq!(failover_target(&nodes), None);
+
+        // And not to one that answers about a different chain, either — that is
+        // `Degraded`, not `Online`, and the distinction is what makes switching
+        // automatically safe.
+        if let Some(node) = nodes.get_mut(1) {
+            node.status = NodeStatus::WrongNetwork {
+                reported: Network::Mainnet,
+            };
+        }
+        assert_eq!(failover_target(&nodes), None);
+    }
+
+    /// The rule that matters most: a different node answers about an uncertain
+    /// transaction from a different mempool, so switching mid-resolution turns
+    /// a payment that landed into one the wallet reports as absent — and then
+    /// offers to send again.
+    #[test]
+    fn a_payment_whose_fate_is_unknown_pins_the_wallet_to_its_node() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ledger = pending::Ledger::open(dir.path().join("pending.json"));
+
+        assert!(
+            !resolution_pending(&ledger),
+            "an empty ledger blocks nothing"
+        );
+
+        let record = ledger
+            .commit("abc", "00", "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX", "1.0")
+            .expect("commit");
+        assert!(
+            resolution_pending(&ledger),
+            "an uncertain payment must pin it"
+        );
+
+        // Eight fruitless checks: still pinned, because this is exactly when
+        // the screen is offering a resend and a second opinion would be the
+        // wrong evidence to decide on.
+        ledger.set_state(record, pending::State::Absent);
+        assert!(resolution_pending(&ledger));
+
+        // Already handed to another node — a third one's view changes nothing
+        // about the decision in front of the user.
+        ledger.set_state(record, pending::State::Resent);
+        assert!(!resolution_pending(&ledger));
+
+        ledger.set_state(record, pending::State::Confirmed);
+        assert!(!resolution_pending(&ledger));
     }
 
     /// The anchor the whole chart hangs from.
