@@ -353,6 +353,102 @@ impl Vault {
         Ok(reference)
     }
 
+    /// Rename a key.
+    ///
+    /// # Why this is not a field assignment
+    ///
+    /// The label is inside the associated data of both sealed blobs — see
+    /// [`crate::envelope::KeyEntry::aad`] — precisely so that editing the file
+    /// to move an entry between names fails to decrypt rather than quietly
+    /// producing a key that lies about which one it is. A legitimate rename has
+    /// to go the same way: open under the old name, re-seal under the new one.
+    ///
+    /// So it needs the vault unlocked, but not the passphrase. Renaming reveals
+    /// nothing — the plaintext never leaves this function, and re-prompting for
+    /// something with no consequence trains people to type their passphrase at
+    /// any box that asks.
+    ///
+    /// # Nothing is half-renamed
+    ///
+    /// Everything is built on a **copy** of the entry, so a failure at any step
+    /// — including the write — leaves both the file and the in-memory document
+    /// exactly as they were. A key whose secret is sealed under one name and
+    /// whose phrase is sealed under another would be unreadable, which is to
+    /// say the funds would be gone.
+    pub fn rename_key(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        check_label(to)?;
+        if from == to {
+            return Ok(());
+        }
+
+        let previous = {
+            let dek_guard = self.dek.read().map_err(|_| VaultError::Locked)?;
+            let dek = dek_guard.as_ref().ok_or(VaultError::Locked)?;
+            let mut doc = self.doc.write().map_err(|_| VaultError::Locked)?;
+
+            if doc.keys.iter().any(|k| k.label == to) {
+                return Err(VaultError::DuplicateLabel(to.to_string()));
+            }
+            let index = doc
+                .keys
+                .iter()
+                .position(|k| k.label == from)
+                .ok_or_else(|| VaultError::NoSuchKey(from.to_string()))?;
+
+            let wallet_id = doc.wallet_id.clone();
+            let entry = &doc.keys[index];
+
+            // Opened under the old name.
+            let secret = open_sealed(
+                dek,
+                &entry.secret,
+                entry.aad(&wallet_id, "secret").as_bytes(),
+            )
+            .map_err(|_| VaultError::Corrupt("the key does not decrypt".into()))?;
+
+            let phrase = match &entry.phrase {
+                Some(sealed) => Some(
+                    open_sealed(dek, sealed, entry.aad(&wallet_id, "phrase").as_bytes())
+                        .map_err(|_| VaultError::Corrupt("the phrase does not decrypt".into()))?,
+                ),
+                None => None,
+            };
+
+            // Re-sealed under the new one, on a copy. The AAD has to be
+            // computed from the entry as it will be *after* the rename, which
+            // is why the label is set before either seal.
+            let mut renamed = entry.clone();
+            renamed.label = to.to_string();
+            renamed.secret = seal(
+                dek,
+                secret.as_ref(),
+                renamed.aad(&wallet_id, "secret").as_bytes(),
+            )?;
+            renamed.phrase = match phrase {
+                Some(opened) => Some(seal(
+                    dek,
+                    opened.as_ref(),
+                    renamed.aad(&wallet_id, "phrase").as_bytes(),
+                )?),
+                None => None,
+            };
+
+            let previous = std::mem::replace(&mut doc.keys[index], renamed);
+            (index, previous)
+        };
+
+        if let Err(error) = self.persist() {
+            // Put it back. The file on disk still says the old name, and the
+            // document must not disagree with it.
+            if let Ok(mut doc) = self.doc.write() {
+                doc.keys[previous.0] = previous.1;
+            }
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
     /// Reveal a recovery phrase.
     ///
     /// Takes the passphrase and runs Argon2 again, even though the vault is

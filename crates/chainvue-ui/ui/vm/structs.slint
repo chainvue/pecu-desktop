@@ -56,6 +56,27 @@ export struct SeedWord {
     word: string,
 }
 
+// One key in the vault.
+//
+// Note what is absent: anything secret. An address is public, and having it
+// while the wallet is locked is what lets the key list — and a receive address —
+// work without a passphrase.
+export struct KeyRow {
+    label: string,
+    address: string,
+    // "generated" | "phrase" | "wif". Decides whether a recovery phrase exists
+    // to show: a key imported as a WIF never had one, and the backup screen has
+    // to say so rather than offer a button that cannot work.
+    origin: string,
+    // This address has appeared in a transaction. Drives the "unused" hint.
+    used: bool,
+    // The phrase has been shown and proved written down. Always true for a WIF
+    // import, which had no phrase to write down.
+    backed-up: bool,
+    // The key the wallet currently sends from and receives to.
+    active: bool,
+}
+
 export struct AssetRow {
     name: string,
     amount: string,

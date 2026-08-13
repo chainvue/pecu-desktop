@@ -9,12 +9,13 @@
 use std::rc::Rc;
 
 use chainvue_protocol::{
-    Event, HistoryRowVm, ListDelta, NodeVm, PortfolioVm, Reachability, SendOutcomeVm, TxDirection,
+    Event, HistoryRowVm, KeyOrigin, ListDelta, NodeVm, PortfolioVm, Reachability, SendOutcomeVm,
+    TxDirection,
 };
 use chainvue_ui::prelude::*;
 use chainvue_ui::{
-    qr, seed, ActivityRow, AppWindow, AssetRow, NetworkState, NodeRow, PendingRow, ReviewOutput,
-    SeedState, SendState, TxState, WalletState,
+    qr, seed, ActivityRow, AppWindow, AssetRow, KeyRow, NetworkState, NodeRow, PendingRow,
+    ReviewOutput, SeedState, SendState, TxState, WalletState,
 };
 use slint::{Model, ModelRc, SharedString, VecModel, Weak};
 use tokio::sync::mpsc;
@@ -187,6 +188,14 @@ fn apply_notice(ui: &AppWindow, error: chainvue_protocol::UiError) {
             network.set_problem(error.title.into());
         }
 
+        // Beside the key list, where the button that caused it is. The forms
+        // stay open and keep what was typed — see `close_finished_key_forms`.
+        "add_key" | "rename_key" => {
+            tracing::warn!(code = error.code, title = %error.title, "notice");
+            ui.global::<WalletState>()
+                .set_key_problem(error.title.into());
+        }
+
         _ => {
             tracing::warn!(code = error.code, title = %error.title, "notice");
             // Until a toast host exists, an onboarding failure at least has to
@@ -322,18 +331,47 @@ fn apply_wallet(ui: &AppWindow, vm: chainvue_protocol::WalletVm) {
     let state = ui.global::<WalletState>();
     state.set_exists(vm.exists);
     state.set_locked(vm.locked);
-    state.set_name(vm.name.into());
+    state.set_name(vm.name.clone().into());
     state.set_busy(false);
     // A successful transition clears whatever went wrong last time.
     state.set_problem(SharedString::new());
     state.set_loading(false);
+
+    // The ACTIVE key's address, not the first one. Receive shows this and Send
+    // pays from it, so getting it from position rather than from the wallet's
+    // own answer would quietly put someone else's address on the QR.
+    let active = vm
+        .active_key
+        .as_ref()
+        .and_then(|label| vm.keys.iter().find(|key| &key.label == label))
+        .or_else(|| vm.keys.first());
     state.set_address(
-        vm.keys
-            .first()
-            .map(|k| k.address.clone())
+        active
+            .map(|key| key.address.clone())
             .unwrap_or_default()
             .into(),
     );
+    state.set_active_key(vm.active_key.clone().unwrap_or_default().into());
+
+    let keys: Vec<KeyRow> = vm
+        .keys
+        .iter()
+        .map(|key| KeyRow {
+            label: key.label.clone().into(),
+            address: key.address.clone().into(),
+            origin: match key.origin {
+                KeyOrigin::Generated => "generated",
+                KeyOrigin::ImportedPhrase => "phrase",
+                KeyOrigin::ImportedWif => "wif",
+            }
+            .into(),
+            used: key.used,
+            backed_up: key.backed_up,
+            active: Some(&key.label) == vm.active_key.as_ref(),
+        })
+        .collect();
+    state.set_keys(ModelRc::from(Rc::new(VecModel::from(keys))));
+    close_finished_key_forms(&state, &vm);
     state.set_backup_key(vm.needs_backup.unwrap_or_default().into());
     // `None` is "never", which the settings screen shows as 0.
     state.set_auto_lock(
@@ -349,6 +387,33 @@ fn apply_wallet(ui: &AppWindow, vm: chainvue_protocol::WalletVm) {
     if let Some(image) = qr::encode(&address, QR_SIDE, scale) {
         state.set_qr_side(qr::logical_side(&image, scale));
         state.set_qr(image);
+    }
+}
+
+/// Close a key form once the thing it was asking for has happened.
+///
+/// Derived from the wallet's own answer rather than from a "that worked"
+/// message: the rename form is open on a label, so it is finished exactly when
+/// no key has that label any more. The add form is finished when a key with the
+/// name it was typing exists.
+///
+/// Doing it this way means a **refused** operation leaves both forms exactly as
+/// they were — which is the point. A name the vault would not accept must not
+/// disappear off the screen along with the sentence explaining why.
+fn close_finished_key_forms(state: &WalletState<'_>, vm: &chainvue_protocol::WalletVm) {
+    let has = |label: &str| vm.keys.iter().any(|key| key.label == label);
+
+    let renaming = state.get_renaming();
+    if !renaming.is_empty() && !has(&renaming) {
+        state.set_renaming(SharedString::new());
+        state.set_rename_draft(SharedString::new());
+        state.set_key_problem(SharedString::new());
+    }
+
+    let adding = state.get_new_key_draft();
+    if !adding.is_empty() && has(&adding) {
+        state.set_new_key_draft(SharedString::new());
+        state.set_key_problem(SharedString::new());
     }
 }
 

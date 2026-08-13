@@ -20,8 +20,8 @@ use std::rc::Rc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::{
-    ActivityRow, AppInfo, AppWindow, AssetRow, NetworkState, NodeRow, PendingRow, ReviewOutput,
-    SeedState, SeedWord, SendState, TxState, WalletState,
+    ActivityRow, AppInfo, AppWindow, AssetRow, KeyRow, NetworkState, NodeRow, PendingRow,
+    ReviewOutput, SeedState, SeedWord, SendState, TxState, WalletState,
 };
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -41,6 +41,68 @@ pub fn unlocked(ui: &AppWindow) {
     wallet.set_exists(true);
     wallet.set_locked(false);
     wallet.set_name("ChainVue".into());
+    wallet.set_active_key("main".into());
+    wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![key(
+        "main",
+        ADDRESS,
+        "generated",
+        true,
+        true,
+    )]))));
+}
+
+/// A wallet with more than one key, on the settings screen.
+///
+/// Three at once because the row has three things it may have to say — this one
+/// is in use, this one's phrase has never been written down, this one never had
+/// a phrase — and each of them is a different trailing element competing for the
+/// same space.
+pub fn keys(ui: &AppWindow) {
+    settings(ui);
+
+    let wallet = ui.global::<WalletState>();
+    wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![
+        key("main", ADDRESS, "generated", true, true),
+        // Generated and never written down: one power cut from being gone, and
+        // the row has to say so.
+        key("savings", SECOND_ADDRESS, "generated", false, false),
+        // A WIF import has no phrase and never will, so "not backed up" would
+        // be a warning about something that cannot be fixed.
+        key("cold-storage", THIRD_ADDRESS, "wif", true, false),
+    ]))));
+}
+
+/// The keys section with a rename in progress, which is where the form and the
+/// row it belongs to have to sit together without the list jumping.
+pub fn renaming_key(ui: &AppWindow) {
+    keys(ui);
+    let wallet = ui.global::<WalletState>();
+    wallet.set_renaming("savings".into());
+    wallet.set_rename_draft("main".into());
+    wallet.set_key_problem("There is already a key called `main`".into());
+}
+
+/// The addresses these pictures are drawn with.
+///
+/// The first is from the SDK's own fixtures; the other two are derived from
+/// fixed scalars (`[11; 32]` and `[23; 32]`). All three have valid checksums and
+/// none of them belongs to anybody — which is the whole requirement. These
+/// images are committed and looked at, so an address in one must be neither
+/// invented (a hand-typed one failed its checksum twice, which nobody notices in
+/// a picture and somebody might copy out of it) nor real.
+const ADDRESS: &str = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+const SECOND_ADDRESS: &str = "RVGTY4w2GrdBFrzGaAASBvT6prBr4MxDfJ";
+const THIRD_ADDRESS: &str = "RGZbQcWU9LNSa9rat45UMKaeP1q32NBduM";
+
+fn key(label: &str, address: &str, origin: &str, backed_up: bool, active: bool) -> KeyRow {
+    KeyRow {
+        label: label.into(),
+        address: address.into(),
+        origin: origin.into(),
+        used: true,
+        backed_up,
+        active,
+    }
 }
 
 /// The dashboard with a payment whose fate is unknown.
@@ -148,7 +210,14 @@ pub fn receiving(ui: &AppWindow) {
 
     let wallet = ui.global::<WalletState>();
     wallet.set_ticker("VRSCTEST".into());
-    wallet.set_address("RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX".into());
+    // Two keys, so the picture includes the selector. A single-key wallet
+    // hides it, and the state worth a reference image is the one with a
+    // control in it that can put a different address on the QR.
+    wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![
+        key("main", ADDRESS, "generated", true, true),
+        key("savings", SECOND_ADDRESS, "generated", true, false),
+    ]))));
+    wallet.set_address(ADDRESS.into());
     ui.global::<NetworkState>().set_effective("Testnet".into());
 
     // Scale factor 1: the offscreen renderer draws at exactly the size it is

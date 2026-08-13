@@ -325,6 +325,35 @@ fn wire_settings(ui: &AppWindow, dispatcher: &Dispatcher) {
     }
 
     {
+        // Keys. None of these carries a secret: a label is a name, and
+        // generating a key needs the wallet open rather than the passphrase
+        // again — the data key is what seals it.
+        let dispatcher = dispatcher.clone();
+        actions.on_add_key(move |label| {
+            dispatcher.send(Command::AddKey {
+                label: label.trim().to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_rename_key(move |from, to| {
+            dispatcher.send(Command::RenameKey {
+                from: from.to_string(),
+                to: to.trim().to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_select_key(move |label| {
+            dispatcher.send(Command::SetActiveKey(label.to_string()));
+        });
+    }
+
+    {
         let dispatcher = dispatcher.clone();
         actions.on_set_mainnet_spend(move |on, typed| {
             // The typed word is passed straight through. Checking it here would

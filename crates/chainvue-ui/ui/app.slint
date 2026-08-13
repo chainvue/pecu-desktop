@@ -1,12 +1,12 @@
 import { Theme, Sp, R, Typo, Motion } from "theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, Segmented } from "components/base.slint";
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
-import { NavItem, NodeRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow } from "vm/structs.slint";
+import { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow } from "vm/structs.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
-export { NavItem, NodeRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow }
+export { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow }
 export { Theme, Motion }
 
 // ── The data the UI is given ────────────────────────────────────────────────
@@ -20,7 +20,22 @@ export global WalletState {
     in property <bool> exists: false;
     in property <bool> locked: true;
     in property <string> name: "";
+    // The ACTIVE key's address — what Receive shows and what Send pays from.
     in property <string> address: "";
+    // Every key in the vault. Readable while locked, because an address is
+    // public: that is what lets someone be paid without unlocking anything.
+    in property <[KeyRow]> keys: [];
+    in property <string> active-key: "";
+    // Which key the rename form is open on, and what is being typed into it.
+    // Held here rather than inside the row so that only one row can be in edit
+    // at a time, and so Rust can close the form when the rename actually lands
+    // — but not when it is refused, which would take away the name someone was
+    // halfway through fixing.
+    in-out property <string> renaming: "";
+    in-out property <string> rename-draft: "";
+    in-out property <string> new-key-draft: "";
+    // Why the last key operation was refused, shown on the keys section.
+    in-out property <string> key-problem: "";
     in property <bool> loading: true;
     in property <bool> busy: false;
     /// Set when unlocking or creating failed, cleared on the next attempt.
@@ -235,6 +250,12 @@ export global Actions {
     callback change-passphrase(string, string);
     callback set-auto-lock(int);
     callback set-mainnet-spend(bool, string);
+
+    // Keys. None of these carries a secret — a label is a name, and adding a
+    // key needs the wallet open rather than the passphrase again.
+    callback add-key(string);
+    callback rename-key(string, string);
+    callback select-key(string);
 
     // Sending. None of these carries a secret; the signed bytes never leave
     // the core, and what crosses here is a ticket number.
@@ -1527,6 +1548,157 @@ component PassphraseChange inherits VerticalLayout {
     }
 }
 
+// Renaming one key.
+//
+// Its own component because its input has to be addressable, and because the
+// form has to be able to submit from two places — the button and the Return
+// key — without duplicating the guard.
+component RenameKeyForm inherits VerticalLayout {
+    in property <string> label;
+    spacing: Sp.s3;
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+
+        field := Field {
+            horizontal-stretch: 1;
+            mono: true;
+            placeholder: "savings";
+            text <=> WalletState.rename-draft;
+            accepted => { root.submit(); }
+        }
+
+        Btn {
+            text: "Save";
+            variant: "primary";
+            enabled: field.text != "" && field.text != root.label;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.submit(); }
+        }
+
+        Btn {
+            text: "Cancel";
+            variant: "ghost";
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                WalletState.renaming = "";
+                WalletState.key-problem = "";
+            }
+        }
+    }
+
+    // Under the form, not at the foot of the list. A refusal that appears
+    // three rows away from the field it is about is one someone has to go
+    // looking for.
+    if WalletState.key-problem != "": Text {
+        text: WalletState.key-problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        wrap: word-wrap;
+    }
+
+    // The form is not closed here. Rust closes it when the rename actually
+    // lands — a name the vault refuses must not vanish off the screen along
+    // with the message explaining why.
+    function submit() {
+        if (field.text == "" || field.text == root.label) { return; }
+        WalletState.key-problem = "";
+        Actions.rename-key(root.label, field.text);
+    }
+}
+
+// Adding a key to a wallet that already exists.
+component AddKeyForm inherits HorizontalLayout {
+    spacing: Sp.s4;
+
+    field := Field {
+        horizontal-stretch: 1;
+        mono: true;
+        placeholder: "savings";
+        text <=> WalletState.new-key-draft;
+        accepted => { root.submit(); }
+    }
+
+    Btn {
+        text: "Generate a key";
+        enabled: field.text != "";
+        y: (parent.height - self.height) / 2;
+        clicked => { root.submit(); }
+    }
+
+    function submit() {
+        if (field.text == "") { return; }
+        WalletState.key-problem = "";
+        Actions.add-key(field.text);
+    }
+}
+
+// One key in the list.
+//
+// Its own component for the usual reason: the rename form lives inside an `if`,
+// and an element declared inside one cannot be reached from outside it.
+component KeyRowItem inherits VerticalLayout {
+    in property <KeyRow> entry;
+    spacing: Sp.s3;
+
+    ListRow {
+        // Filled for the active key, hollow for the rest — the same shape the
+        // node list uses, so "this is the one in use" reads the same way in
+        // both places.
+        glyph: root.entry.active ? "●" : "○";
+        glyph-tone: root.entry.active ? Theme.accent : Theme.text-tertiary;
+        title: root.entry.label;
+        subtitle: root.entry.address;
+        selected: root.entry.active;
+        clicked => { Actions.select-key(root.entry.label); }
+
+        HorizontalLayout {
+            spacing: Sp.s5;
+            alignment: end;
+
+            // A key whose phrase nobody has written down is one power cut away
+            // from being gone. Worth saying on the row, not only on a banner
+            // somebody has already dismissed.
+            if !root.entry.backed-up: StatusPill {
+                state: "pending";
+                text: "not backed up";
+                y: (parent.height - self.height) / 2;
+            }
+
+            // A WIF import never had a phrase, so there is nothing to write
+            // down and nothing to warn about. Saying it once here is what
+            // stops it reading as a missing backup.
+            if root.entry.origin == "wif": Text {
+                text: "no recovery phrase";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            // Bordered, like Remove on the node list. A bare word at the end
+            // of a row reads as a label, and the two lists should not disagree
+            // about what a row-level action looks like.
+            Rectangle {
+                width: 100px;
+                Btn {
+                    text: "Rename";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        WalletState.key-problem = "";
+                        WalletState.renaming = root.entry.label;
+                        WalletState.rename-draft = root.entry.label;
+                    }
+                }
+            }
+        }
+    }
+
+    if WalletState.renaming == root.entry.label: RenameKeyForm {
+        label: root.entry.label;
+    }
+}
+
 component SettingsScreen inherits VerticalLayout {
     spacing: Sp.section-gap;
     property <[int]> lock-choices: [1, 5, 15, 60, 0];
@@ -1564,6 +1736,47 @@ component SettingsScreen inherits VerticalLayout {
         Rectangle { height: 1px; background: Theme.border-subtle; }
 
         PassphraseChange {}
+    }
+
+    Section {
+        title: "KEYS";
+        body: "A ChainVue wallet holds any number of keys, and the dashboard adds up all of them. One passphrase protects the lot — adding a key does not ask for it again.";
+
+        for entry in WalletState.keys: KeyRowItem {
+            entry: entry;
+        }
+
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Add a key";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            Text {
+                // Verus transparent keys are not hierarchical-deterministic:
+                // one phrase is one key. Somebody who expects a second key to
+                // fall out of the phrase they already wrote down needs to hear
+                // otherwise before they generate one, not after.
+                text: "A new key comes with its own recovery phrase, and you will be asked to write it down. Verus keys are not derived from one another — the phrase you already have does not restore this one.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            AddKeyForm {}
+
+            // Only when no rename is open — that form shows its own copy under
+            // itself, and one message rendered twice reads as two problems.
+            if WalletState.key-problem != "" && WalletState.renaming == "": Text {
+                text: WalletState.key-problem;
+                font-size: Typo.caption;
+                color: Theme.negative;
+                wrap: word-wrap;
+            }
+        }
     }
 
     Section {
@@ -1955,6 +2168,20 @@ component TxSheet inherits Rectangle {
 
 component ReceiveScreen inherits VerticalLayout {
     spacing: Sp.s7;
+
+    // Which key is being paid. Only shown when there is a choice — a single-key
+    // wallet has nothing to pick, and a control with one option in it is a
+    // question nobody asked.
+    if WalletState.keys.length > 1: HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s3;
+
+        for entry in WalletState.keys: Btn {
+            text: entry.label;
+            variant: entry.active ? "primary" : "secondary";
+            clicked => { Actions.select-key(entry.label); }
+        }
+    }
 
     HorizontalLayout {
         alignment: center;

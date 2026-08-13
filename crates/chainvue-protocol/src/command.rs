@@ -145,6 +145,29 @@ pub enum Command {
     /// The key keeps its "not backed up" flag, so the offer comes back — this
     /// abandons the attempt rather than declining it permanently.
     CancelBackup,
+    /// Generate another key in a wallet that already exists.
+    ///
+    /// Carries no passphrase: the wallet is open, and adding a key needs the
+    /// data key rather than the one derived from a passphrase. Asking for it
+    /// again where nothing is revealed would train people to type it at any box
+    /// that asks for it.
+    ///
+    /// The new key's phrase has never been seen by anyone, so this starts the
+    /// same backup conversation that creating a wallet does.
+    AddKey {
+        label: String,
+    },
+    /// Rename a key.
+    ///
+    /// Not a cosmetic change in the vault: the label is inside the associated
+    /// data of the sealed key and the sealed phrase, so this re-seals both. It
+    /// is here rather than in the UI for the usual reason — the label rules are
+    /// the vault's, and a name the vault would refuse must not reach a screen
+    /// that has already told someone it worked.
+    RenameKey {
+        from: String,
+        to: String,
+    },
     SetActiveKey(String),
     SetAutoLockMinutes(Option<u32>),
 

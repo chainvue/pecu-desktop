@@ -143,6 +143,82 @@ impl Wallet {
         self.begin_backup("main", phrase)
     }
 
+    /// Generate another key in a wallet that already exists.
+    ///
+    /// The same three steps as [`Self::create`], minus the vault: entropy from
+    /// the OS, a phrase from the SDK's BIP-39 encoder, a key from the SDK's own
+    /// derivation. Nothing here reimplements any of it.
+    ///
+    /// Needs the wallet open, and no passphrase — see [`Vault::add_key`]. The
+    /// new key's phrase has never been seen by anyone, so this returns a backup
+    /// challenge exactly as creating a wallet does.
+    ///
+    /// The active key is deliberately **not** changed. Adding a key is not the
+    /// same as switching to it, and moving the receive address out from under
+    /// someone who was about to be paid is not a decision this should make.
+    pub fn add_generated_key(&mut self, label: &str) -> Result<Challenge, VaultError> {
+        let vault = self.vault.as_ref().ok_or(VaultError::Locked)?.clone();
+
+        let seed = entropy()?;
+        let phrase = bip39::mnemonic_from_entropy(&seed);
+        let key = private_key_from_seed_phrase(&phrase)?;
+
+        vault.add_key(
+            label,
+            NewKey::Generated {
+                key,
+                phrase: phrase.clone(),
+            },
+        )?;
+
+        self.touch();
+        self.begin_backup(label, phrase)
+    }
+
+    /// Rename a key, and follow it with anything that pointed at the old name.
+    ///
+    /// The vault does the work — a label is inside the associated data of both
+    /// sealed blobs, so this is a re-seal rather than an assignment. What is
+    /// left here is keeping the two references this struct holds in step: which
+    /// key is active, and which one a backup in progress belongs to. A rename
+    /// that left either behind would silently point at a key that no longer
+    /// exists.
+    pub fn rename_key(&mut self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.vault
+            .as_ref()
+            .ok_or(VaultError::Locked)?
+            .rename_key(from, to)?;
+
+        if self.active_key.as_deref() == Some(from) {
+            self.active_key = Some(to.to_string());
+        }
+        if let Some(backup) = &mut self.backup {
+            if backup.label == from {
+                backup.label = to.to_string();
+            }
+        }
+
+        self.touch();
+        Ok(())
+    }
+
+    /// Make a key the one the wallet sends from and receives to.
+    ///
+    /// `false` when there is no such key, so a stale label from the interface
+    /// cannot leave the wallet pointing at nothing.
+    pub fn set_active_key(&mut self, label: &str) -> bool {
+        let known = self
+            .vault
+            .as_ref()
+            .is_some_and(|vault| vault.keys().iter().any(|key| key.label == label));
+
+        if known {
+            self.active_key = Some(label.to_string());
+            self.touch();
+        }
+        known
+    }
+
     // ── Backup ──────────────────────────────────────────────────────────────
 
     /// Start showing an existing key's phrase.

@@ -647,6 +647,9 @@ impl Core {
             Command::ChangePassphrase { old, new } => {
                 self.change_passphrase(&old, &new);
             }
+            Command::AddKey { label } => self.add_key(&label),
+            Command::RenameKey { from, to } => self.rename_key(&from, &to),
+            Command::SetActiveKey(label) => self.set_active_key(&label),
             Command::SetAutoLockMinutes(minutes) => self.set_auto_lock(minutes),
             Command::SetAllowMainnetSpend {
                 on,
@@ -996,6 +999,76 @@ impl Core {
         if info.is_ok() && active && after != before {
             tracing::debug!(?before, ?after, "a new block");
             self.refresh();
+        }
+    }
+
+    // ── Keys ────────────────────────────────────────────────────────────────
+
+    /// Generate another key.
+    ///
+    /// The phrase it produces has never been seen by anyone, so this lands on
+    /// the backup screen exactly as creating a wallet does — the same
+    /// conversation, the same three words to prove, the same one chance before
+    /// the words are sealed.
+    fn add_key(&mut self, label: &str) {
+        let label = label.trim();
+        if label.is_empty() {
+            return;
+        }
+
+        // One backup at a time. Generating a key starts a backup, and starting
+        // a second would replace the phrase the first one is holding — the
+        // words on screen would silently become a different key's. The backup
+        // screen covers the settings screen, so this cannot happen through the
+        // interface; it is here because the core must not depend on that.
+        if self.wallet.backup_in_progress() {
+            self.notice_warning(
+                "add_key",
+                "Finish writing down the current recovery phrase first",
+                "A key is only as safe as its phrase, and showing two at once is how the wrong \
+                 one gets written down.",
+            );
+            return;
+        }
+
+        match self.wallet.add_generated_key(label) {
+            Ok(challenge) => {
+                self.emit_wallet();
+                self.emit_challenge(&challenge);
+                // A new key has nothing on chain, and saying so from a node
+                // beats showing a zero the wallet made up.
+                self.refresh();
+            }
+            Err(error) => self.notice("add_key", &key_error_title(&error), &error),
+        }
+    }
+
+    /// Rename a key.
+    ///
+    /// The vault re-seals both blobs under the new name — see
+    /// [`chainvue_keystore::Vault::rename_key`]. Nothing here has to know that;
+    /// what matters at this level is that a refusal says which rule was broken,
+    /// because "could not rename" leaves someone guessing between a name that
+    /// is taken and a name that is not allowed.
+    fn rename_key(&mut self, from: &str, to: &str) {
+        let to = to.trim();
+        if from.is_empty() || to.is_empty() || from == to {
+            return;
+        }
+
+        match self.wallet.rename_key(from, to) {
+            Ok(()) => {
+                tracing::info!(from, to, "a key was renamed");
+                self.emit_wallet();
+            }
+            Err(error) => self.notice("rename_key", &key_error_title(&error), &error),
+        }
+    }
+
+    /// Switch which key the wallet sends from and receives to.
+    fn set_active_key(&mut self, label: &str) {
+        if self.wallet.set_active_key(label) {
+            self.emit_wallet();
         }
     }
 
@@ -1768,6 +1841,30 @@ fn import_title(error: &wallet::ImportError) -> String {
     }
 }
 
+/// What the keys screen says when the vault refuses.
+///
+/// Three of these are the same word in a different order — "could not rename" —
+/// and each calls for a different next step: pick another name, fix the name
+/// you picked, or unlock the wallet. A single message would leave all three
+/// people guessing.
+fn key_error_title(error: &chainvue_keystore::VaultError) -> String {
+    use chainvue_keystore::VaultError;
+
+    match error {
+        VaultError::DuplicateLabel(label) => {
+            format!("There is already a key called `{label}`")
+        }
+        // The rules are the vault's, and they are what make a label safe to use
+        // as an identifier everywhere else — including in a file path.
+        VaultError::BadLabel(_) => "A key name can use lowercase letters, digits, `-` and `_`, \
+                                    and has to start with a letter or a digit."
+            .to_string(),
+        VaultError::Locked => "The wallet is locked".to_string(),
+        VaultError::NoSuchKey(_) => "That key is not in this wallet".to_string(),
+        _ => "Could not change that key".to_string(),
+    }
+}
+
 /// What the send form says when a build fails.
 fn send_title(error: &send::SendError) -> String {
     use verus_sdk::network::FlowError;
@@ -2231,6 +2328,207 @@ mod tests {
         );
 
         assert_eq!(auto_lock.expect("wallet state"), Some(15));
+    }
+
+    /// Wait for a wallet event the caller is interested in. Bounded, so a test
+    /// that will never see what it wants fails rather than hanging the suite.
+    async fn wallet_until(
+        events: &mut mpsc::UnboundedReceiver<Event>,
+        want: impl Fn(&chainvue_protocol::WalletVm) -> bool,
+    ) -> chainvue_protocol::WalletVm {
+        for _ in 0..60 {
+            match events.recv().await {
+                Some(Event::Wallet(vm)) if want(&vm) => return vm,
+                Some(_) => {}
+                None => panic!("the core stopped before reporting the wallet"),
+            }
+        }
+        panic!("the core never reported the wallet state this test was waiting for");
+    }
+
+    /// A wallet, created and backed up, so the tests below start from a state
+    /// where a second key can actually be added.
+    async fn backed_up_wallet(
+        dispatcher: &Dispatcher,
+        events: &mut mpsc::UnboundedReceiver<Event>,
+    ) {
+        dispatcher.send(Command::CreateWallet {
+            name: "test".to_string(),
+            passphrase: chainvue_protocol::Secret::from("a passphrase"),
+        });
+
+        let positions = loop {
+            match events.recv().await {
+                Some(Event::PhraseChallenge { positions, .. }) => break positions,
+                Some(_) => {}
+                None => panic!("the core stopped before announcing a challenge"),
+            }
+        };
+
+        dispatcher.send(Command::ShowNewPhrase);
+        let words = loop {
+            match events.recv().await {
+                Some(Event::SeedWords(words)) if !words.is_empty() => break words,
+                Some(_) => {}
+                None => panic!("the core stopped before sending the words"),
+            }
+        };
+
+        let checks = positions
+            .iter()
+            .map(|position| {
+                let word = words
+                    .iter()
+                    .find(|w| w.index == *position)
+                    .map(|w| w.word.clone())
+                    .unwrap_or_default();
+                (*position, word)
+            })
+            .collect();
+        dispatcher.send(Command::ConfirmPhrase { checks });
+        let _ = wallet_until(events, |vm| vm.needs_backup.is_none()).await;
+    }
+
+    /// Multi-key is the wallet model, and it has to work end to end: a second
+    /// key generated in an open wallet, renamed, and switched to.
+    #[tokio::test]
+    async fn a_second_key_can_be_generated_renamed_and_selected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        backed_up_wallet(&dispatcher, &mut events).await;
+
+        dispatcher.send(Command::AddKey {
+            label: "savings".to_string(),
+        });
+        let vm = wallet_until(&mut events, |vm| vm.keys.len() == 2).await;
+
+        let added = vm
+            .keys
+            .iter()
+            .find(|key| key.label == "savings")
+            .expect("the new key");
+        assert!(!added.address.is_empty());
+        assert_ne!(
+            added.address,
+            vm.keys
+                .iter()
+                .find(|key| key.label == "main")
+                .expect("main")
+                .address,
+            "the second key has the same address as the first",
+        );
+        // Adding a key is not switching to it. Moving the receive address out
+        // from under someone who was about to be paid is not this command's
+        // decision to make.
+        assert_eq!(vm.active_key.as_deref(), Some("main"));
+        // Generated here, so nobody has written its phrase down yet.
+        assert_eq!(vm.needs_backup.as_deref(), Some("savings"));
+
+        // Renaming re-seals both blobs under the new name — see
+        // `Vault::rename_key`. What matters here is that the address survives,
+        // because that is the observable proof the key still decrypts.
+        let address = added.address.clone();
+        dispatcher.send(Command::RenameKey {
+            from: "savings".to_string(),
+            to: "cold-storage".to_string(),
+        });
+        let vm = wallet_until(&mut events, |vm| {
+            vm.keys.iter().any(|key| key.label == "cold-storage")
+        })
+        .await;
+        assert_eq!(vm.keys.len(), 2, "renaming changed how many keys there are");
+        assert_eq!(
+            vm.keys
+                .iter()
+                .find(|key| key.label == "cold-storage")
+                .expect("the renamed key")
+                .address,
+            address,
+        );
+
+        dispatcher.send(Command::SetActiveKey("cold-storage".to_string()));
+        let vm = wallet_until(&mut events, |vm| {
+            vm.active_key.as_deref() == Some("cold-storage")
+        })
+        .await;
+        assert_eq!(vm.active_key.as_deref(), Some("cold-storage"));
+
+        // And all of it is on disk, not just in memory.
+        dispatcher.send(Command::Shutdown);
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        dispatcher.send(Command::Unlock {
+            passphrase: chainvue_protocol::Secret::from("a passphrase"),
+        });
+        let vm = wallet_until(&mut events, |vm| !vm.locked).await;
+        assert_eq!(vm.keys.len(), 2);
+        assert!(vm.keys.iter().any(|key| key.label == "cold-storage"));
+        assert!(!vm.keys.iter().any(|key| key.label == "savings"));
+    }
+
+    /// The label is what every command names a key by, so two keys under one
+    /// name would make `with_key` ambiguous.
+    #[tokio::test]
+    async fn a_key_name_that_is_taken_is_refused_with_a_reason() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        backed_up_wallet(&dispatcher, &mut events).await;
+
+        dispatcher.send(Command::AddKey {
+            label: "main".to_string(),
+        });
+
+        let notice = loop {
+            match events.recv().await {
+                Some(Event::Notice(notice)) => break notice,
+                Some(_) => {}
+                None => panic!("the core stopped before refusing"),
+            }
+        };
+        assert_eq!(notice.code, "add_key");
+        assert!(notice.title.contains("already"), "{}", notice.title);
+
+        // A name the vault's own rules refuse gets a different sentence,
+        // because it calls for a different fix.
+        dispatcher.send(Command::AddKey {
+            label: "Not A Label".to_string(),
+        });
+        let notice = loop {
+            match events.recv().await {
+                Some(Event::Notice(notice)) => break notice,
+                Some(_) => {}
+                None => panic!("the core stopped before refusing"),
+            }
+        };
+        assert_eq!(notice.code, "add_key");
+        assert!(notice.title.contains("lowercase"), "{}", notice.title);
     }
 
     /// Wait for a network event the caller is interested in, ignoring the rest.

@@ -459,3 +459,134 @@ fn a_failed_passphrase_change_leaves_the_vault_alone() {
         .unlock(&Secret::from(PASS))
         .expect("the original passphrase still works");
 }
+
+/// The label is inside the associated data of both sealed blobs, so a rename
+/// is a re-seal. What has to survive it is everything: the same key, the same
+/// address, and the same recovery phrase — from disk, after a fresh unlock.
+#[test]
+fn a_renamed_key_is_still_the_same_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, path) = new_vault(&dir);
+
+    let phrase = "abandon abandon abandon abandon abandon abandon \
+                  abandon abandon abandon abandon abandon about";
+    vault
+        .add_key(
+            "main",
+            NewKey::FromPhrase {
+                key: key(),
+                phrase: Zeroizing::new(phrase.to_string()),
+            },
+        )
+        .expect("add");
+
+    vault.rename_key("main", "savings").expect("rename");
+
+    // The old name is gone and the new one is there, with everything else
+    // about the key unchanged.
+    let keys = vault.keys();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].label, "savings");
+    assert_eq!(keys[0].address, ADDRESS);
+    assert_eq!(keys[0].origin, Origin::ImportedPhrase);
+
+    // And from disk, under a fresh unlock — which is the only test that proves
+    // the re-seal actually landed rather than the in-memory copy being right.
+    let reopened = Vault::open(&path).expect("open");
+    reopened.unlock(&Secret::from(PASS)).expect("unlock");
+
+    assert_eq!(
+        reopened
+            .with_key("savings", |k| k.address().to_string())
+            .expect("the key still decrypts under its new name"),
+        ADDRESS,
+    );
+    assert_eq!(
+        reopened
+            .reveal_phrase("savings", &Secret::from(PASS))
+            .expect("the phrase still decrypts under its new name")
+            .as_str(),
+        phrase,
+    );
+
+    assert!(matches!(
+        reopened.with_key("main", |_| ()),
+        Err(VaultError::NoSuchKey(_)),
+    ));
+}
+
+/// Two keys under one name would make `with_key` ambiguous, and the label is
+/// what every command names a key by.
+#[test]
+fn a_rename_onto_an_existing_name_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    vault
+        .add_key("main", NewKey::FromWif { key: key() })
+        .expect("add");
+    // A second, different key. Derived from a fixed scalar rather than typed,
+    // so it is certainly valid and certainly not the one above.
+    vault
+        .add_key(
+            "spare",
+            NewKey::FromWif {
+                key: PrivateKey::from_bytes(&[7u8; 32], true).expect("a second key"),
+            },
+        )
+        .expect("add");
+
+    assert!(matches!(
+        vault.rename_key("spare", "main"),
+        Err(VaultError::DuplicateLabel(_)),
+    ));
+
+    // And nothing moved: both keys are still reachable under their own names.
+    assert_eq!(
+        vault
+            .with_key("main", |k| k.address().to_string())
+            .expect("main"),
+        ADDRESS,
+    );
+    assert!(vault.with_key("spare", |k| k.address().to_string()).is_ok());
+}
+
+/// A label is an identifier the whole application names a key by, so the same
+/// rules apply on the way in and on the way through.
+#[test]
+fn a_rename_to_an_impossible_name_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    vault
+        .add_key("main", NewKey::FromWif { key: key() })
+        .expect("add");
+
+    for bad in ["", "../escape", "Main", "with space", "-leading"] {
+        assert!(
+            matches!(vault.rename_key("main", bad), Err(VaultError::BadLabel(_))),
+            "`{bad}` was accepted as a label",
+        );
+    }
+
+    // Still there, under the name it started with.
+    assert!(vault.with_key("main", |_| ()).is_ok());
+}
+
+/// Renaming needs the vault open — it re-seals under the data key — but not the
+/// passphrase. Asking for a passphrase where nothing is revealed trains people
+/// to type it at any box that asks.
+#[test]
+fn renaming_needs_an_unlocked_vault() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, path) = new_vault(&dir);
+    vault
+        .add_key("main", NewKey::FromWif { key: key() })
+        .expect("add");
+
+    let locked = Vault::open(&path).expect("open");
+    assert!(matches!(
+        locked.rename_key("main", "savings"),
+        Err(VaultError::Locked),
+    ));
+}
