@@ -904,7 +904,6 @@ impl Core {
             .to_string();
 
         let _ = self.events.send(Event::Chart(chainvue_protocol::ChartVm {
-            covers_seconds: chainvue_chart::span(&points),
             points: points
                 .iter()
                 .map(|point| chainvue_protocol::ChartPointVm {

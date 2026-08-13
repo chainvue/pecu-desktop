@@ -251,10 +251,9 @@ export global ChartState {
     // and that difference is invisible in the drawing.
     in property <string> caption: "";
 
-    in property <[string]> range-labels: [];
-    // A range the scan cannot fill is refused rather than quietly shown short.
-    in property <[bool]> range-enabled: [];
-    in property <int> range: 4;
+    // Where the axis begins, in words. There are no gridlines and no tick
+    // labels, so without this the chart cannot say what period it covers.
+    in property <string> span-from: "";
 
     // -1 when the pointer is not over the chart.
     in property <int> hover: -1;
@@ -265,7 +264,6 @@ export global ChartState {
     in property <string> hover-amount: "";
     in property <string> hover-when: "";
 
-    callback set-range(int);
     callback hovered(length);
     callback left();
 }
@@ -911,20 +909,17 @@ component BalanceChart inherits VerticalLayout {
             }
         }
 
-        HorizontalLayout {
-            spacing: Sp.s2;
-            alignment: end;
-
-            for label[i] in ChartState.range-labels: Btn {
-                text: label;
-                variant: ChartState.range == i ? "primary" : "ghost";
-                // A range the scan has not reached would draw a month's axis
-                // with a week of history on it, and the flat stretch on the
-                // left would read as "you had nothing" — a claim about
-                // somebody's money the wallet cannot make.
-                enabled: ChartState.range-enabled[i];
-                y: (parent.height - self.height) / 2;
-                clicked => { ChartState.set-range(i); }
+        // What period this is a picture of. The chart has no gridlines and no
+        // tick labels, so this is the only thing that says so — a question the
+        // range buttons used to answer by implication, and which nothing
+        // answered once they were gone.
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: ChartState.span-from == "" ? "" : ChartState.span-from + " → now";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
             }
         }
     }
@@ -3426,6 +3421,27 @@ export component AppWindow inherits Window {
     // Nothing in here can spend or reveal anything. `⌘L` locks, which is the
     // safe direction; there is deliberately no shortcut that unlocks, sends, or
     // shows a recovery phrase.
+    // Whether the wallet's own screens are showing, as opposed to the unlock
+    // form or the backup screen.
+    //
+    // Watched rather than merely used, because the swap DESTROYS whatever had
+    // focus — the passphrase field, on the way in — and Slint responds to a
+    // focused item disappearing by setting focus to nothing at all. From that
+    // moment there is no chain for a key to travel up and no shortcut works,
+    // which is exactly what unlocking used to do to them.
+    property <bool> shell-showing: WalletState.exists && !WalletState.locked
+        && SeedState.step == "";
+    changed shell-showing => {
+        root.focus-shortcuts();
+    }
+
+    // Called from Rust after the window is shown — see `main`. There is no way
+    // to reach a nested element from outside the component, so the component
+    // has to offer one.
+    public function focus-shortcuts() {
+        shortcuts.focus();
+    }
+
     shortcuts := FocusScope {
         width: 100%;
         height: 100%;
@@ -3433,13 +3449,47 @@ export component AppWindow inherits Window {
         // Focused at startup so the shortcuts work before anything has been
         // clicked. Focus moves away the moment a field or a button takes it,
         // and the shortcuts keep working because keys bubble back up here.
+        //
+        // `init` alone is not enough in a real window. It runs when the
+        // component is built, and the windowing backend sets up focus when the
+        // window is *shown* — which is afterwards, and which leaves nothing
+        // focused. With no focus item Slint's delivery loop has no chain to
+        // walk, so no scope sees a key at all; Tab still works because the
+        // window handles that itself, after the loop. That is exactly the shape
+        // of "only Tab does anything".
         init => { shortcuts.focus(); }
+
+        // Any click that lands on nothing else puts keyboard focus back here.
+        //
+        // Declared FIRST, so it is underneath everything: later siblings get a
+        // pointer event before earlier ones, and a click on a button or a field
+        // never reaches this. Only a click on bare background does.
+        //
+        // It exists because focus can end up nowhere — the window can be active
+        // with no focus item, and Slint's key delivery starts at the focused
+        // item and walks up, so with none there is no chain and no scope hears
+        // anything. Rather than reason about every route into that state, any
+        // click on the window puts it back.
+        TouchArea {
+            clicked => {
+                InputMode.keyboard = false;
+                shortcuts.focus();
+            }
+        }
 
         key-pressed(event) => {
             // The first key press is what says a keyboard is in use. From here
             // focus rings render, until a pointer press says otherwise.
             InputMode.keyboard = true;
 
+            // Both, and on macOS that is not belt-and-braces.
+            //
+            // Slint's winit backend swaps them on Apple platforms — Command
+            // arrives as `control` and the physical Control key as `meta`,
+            // deliberately, to match Qt. So `control` is the ⌘ case there and
+            // the Ctrl case everywhere else, which is exactly the primary
+            // modifier on each. Checking only `meta` would have made every
+            // shortcut here dead on a Mac.
             if (event.modifiers.control || event.modifiers.meta) {
                 if (event.text == "1") { root.go("dashboard"); return EventResult.accept; }
                 if (event.text == "2") { root.go("send"); return EventResult.accept; }

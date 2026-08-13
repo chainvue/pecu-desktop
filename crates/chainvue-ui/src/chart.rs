@@ -21,11 +21,9 @@
 
 use std::cell::RefCell;
 
-pub use chainvue_chart::Range;
-
 use chainvue_chart::{Plot, Point, Viewport};
 use chainvue_protocol::ChartVm;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, SharedString};
 
 use crate::{AppWindow, ChartState};
 
@@ -35,12 +33,9 @@ struct Chart {
     /// Every reading the core has sent, oldest first. The window and the
     /// downsampling are applied on the way to a path, never to this.
     series: Vec<Point>,
-    /// How far back the wallet has actually scanned, in seconds.
-    covers: i64,
     /// The scan reached the start of the chain.
     complete: bool,
     ticker: String,
-    range: Range,
     /// The last plot, and the size it was made for. Kept so that the two path
     /// bindings — the stroke and the fill — do not each recompute the same
     /// geometry, and so the hover lookup has coordinates to search.
@@ -56,12 +51,7 @@ struct Chart {
 }
 
 thread_local! {
-    static CHART: RefCell<Chart> = RefCell::new(Chart {
-        // Everything the wallet has, which is the only range that is honest
-        // before anything has been scanned.
-        range: Range::All,
-        ..Chart::default()
-    });
+    static CHART: RefCell<Chart> = RefCell::new(Chart::default());
 }
 
 /// Wire the callbacks the chart element drives.
@@ -78,13 +68,6 @@ pub fn install(ui: &AppWindow) {
     // whichever one was rendered before it.
     CHART.with_borrow_mut(|chart| *chart = Chart::default());
     clear_cursor(ui);
-
-    state.set_range_labels(ModelRc::from(std::rc::Rc::new(VecModel::from(
-        Range::ORDER
-            .iter()
-            .map(|range| SharedString::from(range.label()))
-            .collect::<Vec<_>>(),
-    ))));
 
     // The two paths are BINDINGS on the element's own width and height, not
     // properties pushed from a resize handler.
@@ -129,29 +112,6 @@ pub fn install(ui: &AppWindow) {
 
     {
         let weak = ui.as_weak();
-        state.on_set_range(move |index| {
-            let Some(ui) = weak.upgrade() else {
-                return;
-            };
-            let Ok(index) = usize::try_from(index) else {
-                return;
-            };
-            let Some(range) = Range::ORDER.get(index).copied() else {
-                return;
-            };
-            CHART.with_borrow_mut(|chart| {
-                chart.range = range;
-                chart.generation = chart.generation.wrapping_add(1);
-            });
-            // The cursor was pointing at a sample that may not exist in the
-            // new window. Dropping it is the only honest option.
-            clear_cursor(&ui);
-            refresh(&ui);
-        });
-    }
-
-    {
-        let weak = ui.as_weak();
         state.on_hovered(move |x| {
             if let Some(ui) = weak.upgrade() {
                 cursor(&ui, x);
@@ -178,22 +138,12 @@ pub fn install(ui: &AppWindow) {
 ///
 /// Not `#[cfg(test)]`: `examples/render_shots.rs` and `tests/visual.rs` are
 /// both outside this crate's test build, and they are the two callers.
-pub fn seed(
-    ui: &AppWindow,
-    points: &[Point],
-    covers: i64,
-    complete: bool,
-    ticker: &str,
-    now: i64,
-    range: Range,
-) {
+pub fn seed(ui: &AppWindow, points: &[Point], complete: bool, ticker: &str, now: i64) {
     CHART.with_borrow_mut(|chart| {
         chart.series = points.to_vec();
-        chart.covers = covers;
         chart.complete = complete;
         chart.ticker = ticker.to_string();
         chart.pinned_now = Some(now);
-        chart.range = range;
         chart.generation = chart.generation.wrapping_add(1);
     });
     clear_cursor(ui);
@@ -211,7 +161,6 @@ pub fn set_series(ui: &AppWindow, vm: &ChartVm) {
                 value: point.sats,
             })
             .collect();
-        chart.covers = vm.covers_seconds;
         chart.complete = vm.complete;
         chart.ticker.clone_from(&vm.ticker);
         chart.generation = chart.generation.wrapping_add(1);
@@ -239,27 +188,19 @@ fn refresh(ui: &AppWindow) {
         if chart.series.len() < 2 {
             return None;
         }
-        // The same window and the same thinning the paths will use, so the
-        // figure in the header is computed from exactly the points that get
-        // drawn rather than from a slightly different set.
-        let now = chart.pinned_now.unwrap_or_else(now);
-        let windowed = match chart.range.seconds() {
-            Some(seconds) => chainvue_chart::since(&chart.series, now, seconds, chart.complete),
-            None => chart.series.clone(),
-        };
-        let thinned = chainvue_chart::downsample(&windowed, chainvue_chart::MAX_POINTS);
-        Some(
-            thinned
-                .iter()
-                .map(|point| point.value)
-                .collect::<Vec<i64>>(),
-        )
+        // The same thinning the paths will use, so the figure in the header is
+        // computed from exactly the points that get drawn.
+        let thinned = chainvue_chart::downsample(&chart.series, chainvue_chart::MAX_POINTS);
+        let values: Vec<i64> = thinned.iter().map(|point| point.value).collect();
+        let from = chart.series.first().map_or(0, |first| first.t);
+        Some((values, from))
     });
 
-    let Some(values) = summary else {
+    let Some((values, from)) = summary else {
         state.set_has_data(false);
         state.set_change(SharedString::new());
         state.set_caption(SharedString::new());
+        state.set_span_from(SharedString::new());
         return;
     };
 
@@ -269,15 +210,14 @@ fn refresh(ui: &AppWindow) {
     state.set_change(change.into());
     state.set_change_tone(tone.into());
 
+    // Where the axis begins. There are no gridlines and no tick labels, so
+    // without this the chart cannot say what period it covers at all — a
+    // question the range buttons used to answer by implication and which
+    // nothing answered once they were gone.
+    state.set_span_from(axis_label(from, now_of(&state)).into());
+
     CHART.with_borrow(|chart| {
         state.set_ticker(chart.ticker.as_str().into());
-        state.set_range(index_of(chart.range));
-        state.set_range_enabled(ModelRc::from(std::rc::Rc::new(VecModel::from(
-            Range::ORDER
-                .iter()
-                .map(|range| offerable(*range, chart))
-                .collect::<Vec<_>>(),
-        ))));
         state.set_caption(caption(chart, values.len()));
     });
 }
@@ -301,35 +241,13 @@ fn plot_at(width: f32, height: f32) -> Option<Plot> {
         if !fresh {
             let view = Viewport::new(width, height);
             let now = chart.pinned_now.unwrap_or_else(now);
-            chart.plot =
-                chainvue_chart::build(&chart.series, now, chart.range, chart.complete, &view);
+            chart.plot = chainvue_chart::build(&chart.series, now, &view);
             chart.plotted_for = (width, height);
             chart.plotted_generation = chart.generation;
         }
 
         chart.plot.clone()
     })
-}
-
-/// Whether a range button can be filled honestly.
-///
-/// A range the scan does not reach would draw a month's axis with a week of
-/// history on it, and say nothing about the three weeks it has never looked
-/// at. Offering it and then quietly showing less is worse than not offering it:
-/// the flat stretch on the left would read as "you had nothing", which is a
-/// claim about somebody's money that the wallet cannot make.
-///
-/// Once the scan has reached the start of the chain every range is honest,
-/// because then a flat stretch on the left really does mean the wallet was
-/// empty.
-fn offerable(range: Range, chart: &Chart) -> bool {
-    if chart.series.len() < 2 {
-        return false;
-    }
-    match range.seconds() {
-        None => true,
-        Some(seconds) => chart.complete || chart.covers >= seconds,
-    }
 }
 
 /// What moved across the window on screen.
@@ -441,6 +359,38 @@ fn clear_cursor(ui: &AppWindow) {
     state.set_hover_when(SharedString::new());
 }
 
+/// Where the axis begins, at whatever precision the span justifies.
+///
+/// A minute is the right precision for a cursor sitting on one transaction and
+/// noise on an axis covering three months — "4 Nov, 03:40 → now" invites
+/// somebody to read a significance into 03:40 that the label does not have.
+/// Under two days the time is the interesting part; past a year the year is.
+fn axis_label(from: i64, now: i64) -> String {
+    use chrono::{Local, TimeZone};
+
+    const DAY: i64 = 86_400;
+    let span = now.saturating_sub(from);
+
+    let format = if span < 2 * DAY {
+        "%-d %b, %H:%M"
+    } else if span < 365 * DAY {
+        "%-d %b"
+    } else {
+        "%-d %b %Y"
+    };
+
+    Local
+        .timestamp_opt(from, 0)
+        .single()
+        .map_or_else(|| "unknown".to_string(), |at| at.format(format).to_string())
+}
+
+/// The clock the chart is measuring against — pinned in a fixture, real
+/// otherwise, so a reference image does not move with the calendar.
+fn now_of(_state: &ChartState<'_>) -> i64 {
+    CHART.with_borrow(|chart| chart.pinned_now.unwrap_or_else(now))
+}
+
 /// `12 Aug, 14:32` in the machine's own timezone.
 ///
 /// A block timestamp is UTC seconds; which day and hour that is, is a question
@@ -454,16 +404,6 @@ fn when(seconds: i64) -> String {
     )
 }
 
-fn index_of(range: Range) -> i32 {
-    i32::try_from(
-        Range::ORDER
-            .iter()
-            .position(|candidate| *candidate == range)
-            .unwrap_or(0),
-    )
-    .unwrap_or(0)
-}
-
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -474,50 +414,10 @@ fn now() -> i64 {
 mod tests {
     use super::*;
 
-    fn chart(covers: i64, complete: bool, points: usize) -> Chart {
+    fn chart(complete: bool) -> Chart {
         Chart {
-            series: (0..points)
-                .map(|i| Point {
-                    t: i64::try_from(i).unwrap_or(0) * 86_400,
-                    value: 100,
-                })
-                .collect(),
-            covers,
             complete,
             ..Chart::default()
-        }
-    }
-
-    /// The rule that keeps the chart from claiming to know a month it has
-    /// never looked at.
-    #[test]
-    fn a_range_the_scan_does_not_reach_is_not_offered() {
-        let week = 7 * 86_400;
-        let chart = chart(week, false, 10);
-
-        assert!(offerable(Range::Week, &chart));
-        assert!(!offerable(Range::Month, &chart));
-        assert!(!offerable(Range::Year, &chart));
-        // Everything the wallet has is always an honest answer.
-        assert!(offerable(Range::All, &chart));
-    }
-
-    /// Once the scan has reached the start of the chain, a flat stretch on the
-    /// left really does mean the wallet was empty — so every range is honest.
-    #[test]
-    fn a_complete_scan_can_fill_any_range() {
-        let chart = chart(7 * 86_400, true, 10);
-        for range in Range::ORDER {
-            assert!(offerable(range, &chart), "{range:?}");
-        }
-    }
-
-    /// Nothing to draw means nothing to offer.
-    #[test]
-    fn an_empty_series_offers_no_range_at_all() {
-        let chart = chart(0, true, 0);
-        for range in Range::ORDER {
-            assert!(!offerable(range, &chart), "{range:?}");
         }
     }
 
@@ -556,14 +456,14 @@ mod tests {
     /// we have looked at", because the drawing cannot.
     #[test]
     fn the_caption_says_whether_the_history_is_complete() {
-        let complete = caption(&chart(0, true, 3), 3);
+        let complete = caption(&chart(true), 3);
         assert!(complete.contains("whole history"), "{complete}");
 
-        let partial = caption(&chart(0, false, 3), 3);
+        let partial = caption(&chart(false), 3);
         assert!(partial.contains("as far back"), "{partial}");
 
         // Singular when there is one of them. A "1 readings" is the sort of
         // thing nobody fixes because nobody writes it down.
-        assert!(caption(&chart(0, true, 1), 1).contains("1 reading ·"));
+        assert!(caption(&chart(true), 1).contains("1 reading ·"));
     }
 }

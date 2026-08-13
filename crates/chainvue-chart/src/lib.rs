@@ -36,7 +36,7 @@ pub mod series;
 
 pub use lttb::downsample;
 pub use plot::{plot, step_at, time_at, Plot, Viewport};
-pub use series::{from_deltas, since, span, Point};
+pub use series::{from_deltas, Point};
 
 /// The most points worth drawing.
 ///
@@ -53,82 +53,25 @@ pub const MAX_POINTS: usize = 240;
 /// every corner, so this is a maximum rather than a promise.
 pub const CORNER: f32 = 4.0;
 
-/// How far back a range covers, in seconds.
-///
-/// `None` is "everything the wallet has scanned", which is the only one of
-/// these that is always honest — the rest depend on the history reaching back
-/// far enough, and the interface disables the ones it cannot fill.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Range {
-    Week,
-    Month,
-    Quarter,
-    Year,
-    /// The default, and the only one that is honest before anything has
-    /// been scanned.
-    #[default]
-    All,
-}
-
-impl Range {
-    pub const ORDER: [Self; 5] = [
-        Self::Week,
-        Self::Month,
-        Self::Quarter,
-        Self::Year,
-        Self::All,
-    ];
-
-    pub fn seconds(self) -> Option<i64> {
-        const DAY: i64 = 86_400;
-        match self {
-            Self::Week => Some(7 * DAY),
-            Self::Month => Some(30 * DAY),
-            Self::Quarter => Some(90 * DAY),
-            Self::Year => Some(365 * DAY),
-            Self::All => None,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Week => "1W",
-            Self::Month => "1M",
-            Self::Quarter => "3M",
-            Self::Year => "1Y",
-            Self::All => "ALL",
-        }
-    }
-}
-
 /// Everything from a raw history to a finished pair of paths.
 ///
-/// One function so the order cannot be got wrong: window first, then thin, then
-/// plot. Thinning before windowing would spend the budget of 240 points on
-/// history the window is about to throw away.
-pub fn build(
-    points: &[Point],
-    now: i64,
-    range: Range,
-    complete: bool,
-    view: &Viewport,
-) -> Option<Plot> {
-    // The window the axis covers, which is the range that was asked for —
-    // **not** whatever the data happens to span. Deriving it from the data is
-    // why every range button drew the same picture on a wallet whose entire
-    // history is nine hours old: the same five readings are inside every
-    // window, so the axis came out nine hours wide whichever button was
-    // pressed.
-    let window = match range.seconds() {
-        Some(seconds) => (now.saturating_sub(seconds), now),
-        None => (points.first().map_or(now, |first| first.t), now),
-    };
-
-    let windowed = match range.seconds() {
-        Some(seconds) => series::since(points, now, seconds, complete),
-        None => points.to_vec(),
-    };
-    let thinned = downsample(&windowed, MAX_POINTS);
+/// # There is one view, and it is all of it
+///
+/// This had a range control — 1W, 1M, 3M, 1Y, ALL — carried over from the shape
+/// of a price chart. That control answers a real question when a continuous
+/// series spans years and you need to zoom into part of it. A wallet's balance
+/// series is not that: it is bounded by how far the scan has looked, so "all of
+/// it" is already a bounded window, and the narrower buttons were mostly
+/// answering a question nobody had.
+///
+/// Removing them removed the machinery that made them honest — which range the
+/// scan could fill, and what to draw for the part of a window reaching back
+/// further than the wallet exists. Both bugs this chart has had lived in there.
+///
+/// The axis therefore spans the readings: earliest to now.
+pub fn build(points: &[Point], now: i64, view: &Viewport) -> Option<Plot> {
+    let window = (points.first().map_or(now, |first| first.t), now);
+    let thinned = downsample(points, MAX_POINTS);
     plot(&thinned, view, CORNER, window)
 }
 
@@ -136,99 +79,28 @@ pub fn build(
 mod tests {
     use super::*;
 
+    /// The axis covers the readings, earliest to now — not whatever the last
+    /// reading happened to be. A wallet quiet for a week must show that week.
     #[test]
-    fn the_ranges_are_in_order_and_all_is_unbounded() {
-        let bounded: Vec<i64> = Range::ORDER.iter().filter_map(|r| r.seconds()).collect();
-        assert!(
-            bounded.windows(2).all(|pair| pair[0] < pair[1]),
-            "{bounded:?}"
-        );
-        assert_eq!(Range::All.seconds(), None);
-    }
-
-    /// The window has to be applied before the thinning, or the budget of 240
-    /// points is spent on history that is about to be discarded — leaving a
-    /// week's worth of chart drawn from three surviving samples.
-    #[test]
-    fn a_narrow_range_keeps_its_detail() {
-        // A year of daily readings.
-        let points: Vec<Point> = (0..365)
-            .map(|day| Point {
-                t: day * 86_400,
-                value: day * 100,
-            })
-            .collect();
-        let now = 365 * 86_400;
-
-        let week = build(
-            &points,
-            now,
-            Range::Week,
-            true,
-            &Viewport::new(400.0, 200.0),
-        )
-        .expect("plot");
-        // Seven days of readings all survive: the window cut it down long
-        // before the downsampler had anything to do.
-        assert!(week.values.len() >= 7, "{}", week.values.len());
-        assert!(
-            week.high - week.low < 1_000,
-            "a week's range covered a year's worth of movement",
-        );
-    }
-
-    /// The failure this whole window rework exists for: a wallet whose entire
-    /// history is nine hours old drew an identical picture for every range
-    /// button, because the axis was derived from the data and the same five
-    /// readings are inside every window.
-    #[test]
-    fn a_wider_range_draws_a_wider_axis() {
-        const HOUR: i64 = 3_600;
+    fn the_axis_runs_from_the_earliest_reading_to_now() {
         let now = 1_800_000_000;
-
-        // Four movements inside one hour, nine hours ago — the shape of a
-        // wallet somebody has just started using.
         let points = vec![
             Point {
-                t: now - 9 * HOUR,
+                t: now - 90 * 86_400,
                 value: 0,
             },
             Point {
-                t: now - 9 * HOUR + 60,
-                value: 5_000_000_000,
-            },
-            Point {
-                t: now - 8 * HOUR,
-                value: 5_389_990_000,
-            },
-            Point {
-                t: now,
-                value: 5_389_990_000,
+                t: now - 89 * 86_400,
+                value: 500,
             },
         ];
-        let view = Viewport::new(800.0, 200.0);
 
-        let week = build(&points, now, Range::Week, true, &view).expect("a week");
-        let year = build(&points, now, Range::Year, true, &view).expect("a year");
-
-        assert_eq!(week.span, (now - 7 * 86_400, now));
-        assert_eq!(year.span, (now - 365 * 86_400, now));
-        assert_ne!(
-            week.line, year.line,
-            "every range button drew the same picture",
-        );
-
-        // On the year's axis nine hours is a sliver at the right, so the rise
-        // happens in the last fraction of a percent of the width.
-        let rise = year.xs.get(1).copied().unwrap_or_default();
-        assert!(
-            rise > view.plot_width() * 0.99,
-            "a nine-hour history did not sit at the right-hand end of a year",
-        );
-
-        // And the year starts at nothing, because the scan reached the chain
-        // start and the balance before the first transaction is known.
-        assert_eq!(year.values.first().copied(), Some(0));
+        let plot = build(&points, now, &Viewport::new(400.0, 200.0)).expect("a plot");
+        assert_eq!(plot.span, (now - 90 * 86_400, now));
+        // The last reading is 89 days ago, so the flat run to `now` is most of
+        // the width — which is the truth about a wallet nobody has touched.
+        let last = plot.xs.last().copied().unwrap_or_default();
+        assert!(last < plot.plot_width * 0.02, "{last}");
     }
 
     #[test]
@@ -239,14 +111,7 @@ mod tests {
                 value: i,
             })
             .collect();
-        let plot = build(
-            &points,
-            5_000 * 60,
-            Range::All,
-            true,
-            &Viewport::new(800.0, 240.0),
-        )
-        .expect("plot");
+        let plot = build(&points, 5_000 * 60, &Viewport::new(800.0, 240.0)).expect("plot");
 
         assert_eq!(plot.values.len(), MAX_POINTS);
     }

@@ -159,15 +159,7 @@ pub fn young_wallet(ui: &AppWindow) {
     // `complete`: the scan reached the chain start, so the balance before the
     // first transaction is known and the window may honestly be drawn back to
     // its own start.
-    crate::chart::seed(
-        ui,
-        &points,
-        9 * HOUR,
-        true,
-        "VRSCTEST",
-        now,
-        crate::chart::Range::Year,
-    );
+    crate::chart::seed(ui, &points, true, "VRSCTEST", now);
 }
 
 /// The dashboard with a payment whose fate is unknown.
@@ -440,15 +432,7 @@ fn balance_history(ui: &AppWindow) {
         })
         .collect();
 
-    crate::chart::seed(
-        ui,
-        &points,
-        90 * DAY,
-        false,
-        "VRSCTEST",
-        now,
-        crate::chart::Range::All,
-    );
+    crate::chart::seed(ui, &points, false, "VRSCTEST", now);
 }
 
 fn dated(direction: &str, amount: &str, when: &str, group: &str, height: i32) -> ActivityRow {

@@ -96,8 +96,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the user wonders whether the button does anything.
     dispatcher.send(Command::ProbeNodes);
 
+    // Shown, then focused, then run — rather than `ui.run()`, which does the
+    // first and third with nothing in between.
+    //
+    // The keyboard shortcuts live on a focus scope wrapping the interface, and
+    // Slint delivers a key to the focused item and walks *up* from there. With
+    // nothing focused there is no chain to walk and no scope sees anything —
+    // while Tab keeps working, because the window handles that itself after the
+    // delivery loop. The scope focuses itself on `init`, but that runs when the
+    // component is built and the backend sets focus up when the window is
+    // shown, which is later.
+    ui.show()?;
+    ui.invoke_focus_shortcuts();
+
     let _runtime = runtime;
-    ui.run()?;
+    slint::run_event_loop()?;
     Ok(())
 }
 

@@ -270,9 +270,6 @@ pub struct ChartVm {
     /// looked at so far — and the range buttons that would claim more than that
     /// are the ones the interface has to refuse.
     pub complete: bool,
-    /// How far back the scan has looked, in seconds. What the range buttons are
-    /// measured against.
-    pub covers_seconds: i64,
     /// What to write next to an amount.
     pub ticker: String,
 }
