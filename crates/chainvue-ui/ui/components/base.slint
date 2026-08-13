@@ -1,4 +1,4 @@
-import { Theme, Sp, R, Typo, Motion } from "../theme/theme.slint";
+import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
 
 // A button.
 //
@@ -54,13 +54,51 @@ export component Btn inherits Rectangle {
             : Theme.text-primary;
     }
 
+    // Every button is reachable by keyboard. Without this the entire interface
+    // could only be operated with a pointer — the single largest accessibility
+    // failure a desktop application can have, and one that is invisible to
+    // anyone testing it with a mouse.
+    //
+    // Declared before the touch area so that a pointer press still lands on the
+    // touch area: later siblings receive input first.
+    focus := FocusScope {
+        enabled: root.enabled && !root.busy;
+        key-pressed(event) => {
+            // Return and space, which is what every platform's button does.
+            if (event.text == "\n" || event.text == " ") {
+                root.clicked();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+
+    // The ring, drawn OUTSIDE the button's own border so it never covers the
+    // shape it is pointing at. Only while the keyboard is driving — see
+    // `InputMode`.
+    if focus.has-focus && InputMode.keyboard: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: R.md + 3px;
+        border-width: 2px;
+        border-color: Theme.accent-ring;
+    }
+
     touch := TouchArea {
         enabled: root.enabled && !root.busy;
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
-        clicked => { root.clicked(); }
+        clicked => {
+            // The pointer has said where it is, so the ring is noise from here
+            // until a key says otherwise.
+            InputMode.keyboard = false;
+            focus.focus();
+            root.clicked();
+        }
     }
 
-    accessible-role: button;
+    accessible-role: AccessibleRole.button;
     accessible-label: root.text;
     accessible-enabled: root.enabled;
 }
@@ -114,7 +152,7 @@ export component Segmented inherits Rectangle {
                     root.changed(i);
                 }
             }
-            accessible-role: button;
+            accessible-role: AccessibleRole.button;
             accessible-label: option;
         }
     }
@@ -161,6 +199,11 @@ export component Eyebrow inherits Text {
 export component Money inherits HorizontalLayout {
     in property <string> amount;
     in property <string> currency: "VRSC";
+    // Announced as one thing. Two adjacent texts would otherwise be read as
+    // two unrelated items, and an amount without its currency is not an
+    // amount.
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.amount + " " + root.currency;
     in property <length> size: Typo.num;
     // "neutral" | "positive" | "negative"
     in property <string> tone: "neutral";
@@ -205,6 +248,12 @@ export component StatusPill inherits HorizontalLayout {
     in property <string> state: "unknown";
     in property <string> text;
 
+    // The dot carries no information a screen reader can reach, and the text
+    // beside it is often just the chain name. Saying both is what makes the
+    // colour redundant rather than load-bearing.
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text + ", " + root.state;
+
     property <brush> tone: root.state == "online" ? Theme.positive
         : root.state == "degraded" || root.state == "pending" || root.state == "probing" ? Theme.warning
         : root.state == "offline" ? Theme.negative
@@ -233,6 +282,9 @@ export component StatusPill inherits HorizontalLayout {
 // so nothing shifts when the real content arrives.
 export component Skeleton inherits Rectangle {
     in property <length> radius: R.sm;
+    // A placeholder has nothing to say. Announcing it would put "group, group,
+    // group" between the reader and the content they are waiting for.
+    accessible-role: AccessibleRole.none;
     background: Theme.bg-inset;
     border-radius: root.radius;
     opacity: 0.7;
@@ -358,4 +410,15 @@ export component ListRow inherits Rectangle {
         enabled: root.interactive;
         clicked => { root.clicked(); }
     }
+
+    // A row that does something is a button, and it is announced by what it
+    // says rather than by what it looks like. The subtitle is included because
+    // in this application it is always the thing that tells two otherwise
+    // identical rows apart — an address, a URL, a transaction id.
+    // The role has to be a constant, so a row is always announced as a button
+    // and `accessible-enabled` carries whether it can actually be pressed —
+    // which is the distinction a reader needs anyway.
+    accessible-role: AccessibleRole.button;
+    accessible-enabled: root.interactive;
+    accessible-label: root.subtitle == "" ? root.title : root.title + ", " + root.subtitle;
 }

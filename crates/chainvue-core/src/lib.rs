@@ -658,6 +658,10 @@ impl Core {
             Command::RenameKey { from, to } => self.rename_key(&from, &to),
             Command::SetActiveKey(label) => self.set_active_key(&label),
             Command::SetAutoLockMinutes(minutes) => self.set_auto_lock(minutes),
+            Command::SetAppearance {
+                dark,
+                reduce_motion,
+            } => self.set_appearance(dark, reduce_motion),
             Command::SetAllowMainnetSpend {
                 on,
                 typed_confirmation,
@@ -917,6 +921,14 @@ impl Core {
         let Some(store) = &self.store else {
             return;
         };
+
+        // First, and before any figure: a theme that arrives after the first
+        // frame is a flash of the wrong one. Dark is the designed default, so
+        // a wallet that has never been told otherwise gets dark.
+        let _ = self.events.send(Event::Appearance {
+            dark: store.setting("theme").as_deref() != Some("light"),
+            reduce_motion: store.setting("reduce_motion").as_deref() == Some("1"),
+        });
 
         // The two caches that make the next refresh cheap: the chain's own
         // currency never changes, and a currency's name is fixed when it is
@@ -1484,6 +1496,20 @@ impl Core {
                 &error,
             ),
         }
+    }
+
+    /// Remember how the window should look.
+    ///
+    /// Written down and never read back within a session: the interface already
+    /// knows what it is showing, and echoing it would only be a chance for the
+    /// two to disagree. It comes back once, at the next start, from
+    /// [`Core::restore`].
+    fn set_appearance(&self, dark: bool, reduce_motion: bool) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        store.set_setting("theme", if dark { "dark" } else { "light" });
+        store.set_setting("reduce_motion", if reduce_motion { "1" } else { "0" });
     }
 
     fn set_auto_lock(&mut self, minutes: Option<u32>) {

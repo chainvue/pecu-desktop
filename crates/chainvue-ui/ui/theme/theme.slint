@@ -134,6 +134,23 @@ export global Typo {
     out property <int> w-semibold: 600;
 }
 
+// How the person in front of the window is driving it.
+//
+// # Why focus rings are conditional
+//
+// A focus ring is essential and it is also noise, depending entirely on who is
+// looking. Someone navigating by keyboard cannot use the interface without one.
+// Someone clicking has already said where they are with the pointer, and a ring
+// left behind on the last thing they clicked reads as a stuck state.
+//
+// So the ring follows the *input mode* rather than the focus: `keyboard` goes
+// true on the first key press and false on the next pointer press, and rings
+// render only while it is true. Focus itself is never removed — only its
+// decoration.
+export global InputMode {
+    in-out property <bool> keyboard: false;
+}
+
 export global Motion {
     // The reduce-motion master switch. Every `animate` block in this UI carries
     // `enabled: Motion.enabled;` — Slint 1.17 added that property, and it is

@@ -170,6 +170,19 @@ pub enum Command {
     },
     SetActiveKey(String),
     SetAutoLockMinutes(Option<u32>),
+    /// How the window should look, and whether it should move.
+    ///
+    /// Neither is wallet state and neither reaches a node — but both are
+    /// choices a person made, and a preference that resets every launch is not
+    /// a preference. So they go to the core to be written down, and come back
+    /// as [`crate::Event::Appearance`] at the next start.
+    SetAppearance {
+        dark: bool,
+        /// Motion off: no movement, no scale, no stagger. Cross-fades under
+        /// 100 ms stay — opacity is not a vestibular trigger, and a hard swap
+        /// is jarring for motion-sensitive people too.
+        reduce_motion: bool,
+    },
 
     // ── Network ─────────────────────────────────────────────────────────
     SelectNode(u32),

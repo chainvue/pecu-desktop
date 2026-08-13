@@ -14,6 +14,13 @@ use crate::models::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Wallet(WalletVm),
+    /// What the window looked like last time. Emitted once at startup, before
+    /// anything else — a theme that arrives after the first frame is a flash of
+    /// the wrong one.
+    Appearance {
+        dark: bool,
+        reduce_motion: bool,
+    },
     Network(NetworkVm),
     Portfolio(PortfolioVm),
     /// The balance over time, as readings rather than as a picture.

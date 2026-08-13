@@ -57,6 +57,17 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Wallet(vm) => apply_wallet(ui, vm),
 
+        // What the window looked like last time. Arrives before any figure, so
+        // there is no frame of the wrong theme.
+        Event::Appearance {
+            dark,
+            reduce_motion,
+        } => {
+            ui.global::<chainvue_ui::Theme>().set_dark(dark);
+            ui.global::<chainvue_ui::Motion>()
+                .set_enabled(!reduce_motion);
+        }
+
         Event::Locked { reason } => {
             tracing::info!(?reason, "locked");
             let state = ui.global::<WalletState>();
@@ -356,6 +367,8 @@ fn apply_wallet(ui: &AppWindow, vm: chainvue_protocol::WalletVm) {
             .into(),
     );
     state.set_active_key(vm.active_key.clone().unwrap_or_default().into());
+    // For speech only — see `chainvue_ui::spoken`.
+    state.set_address_spoken(chainvue_ui::spoken(&state.get_address()).into());
 
     let keys: Vec<KeyRow> = vm
         .keys

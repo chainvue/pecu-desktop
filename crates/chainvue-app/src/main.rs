@@ -23,7 +23,9 @@ use chainvue_protocol::{
     Command, ImportMaterial, PendingAction, RefreshScope, ScreenId, Secret, SendDraft,
 };
 use chainvue_ui::prelude::*;
-use chainvue_ui::{Actions, AppInfo, NetworkState, SeedState, SendState, Theme, WalletState};
+use chainvue_ui::{
+    Actions, AppInfo, Motion, NetworkState, SeedState, SendState, Theme, WalletState,
+};
 use slint::{Model, SharedString};
 
 /// The endpoints ChainVue ships with.
@@ -454,14 +456,32 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     let actions = ui.global::<Actions>();
 
     {
-        // The one action the core has no opinion about: how the window looks is
-        // not wallet state, so it never leaves the UI.
+        // Applied immediately, then written down. Waiting for the core to echo
+        // it back would put a round trip between pressing the control and the
+        // window changing.
+        let dispatcher = dispatcher.clone();
         let weak = ui.as_weak();
         actions.on_toggle_theme(move || {
-            if let Some(ui) = weak.upgrade() {
-                let theme = ui.global::<Theme>();
-                theme.set_dark(!theme.get_dark());
-            }
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let theme = ui.global::<Theme>();
+            let dark = !theme.get_dark();
+            theme.set_dark(dark);
+            dispatcher.send(Command::SetAppearance {
+                dark,
+                reduce_motion: !ui.global::<Motion>().get_enabled(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_set_appearance(move |dark, reduce_motion| {
+            dispatcher.send(Command::SetAppearance {
+                dark,
+                reduce_motion,
+            });
         });
     }
 

@@ -44,3 +44,38 @@ pub mod prelude {
     pub use crate::AppWindow;
     pub use slint::ComponentHandle;
 }
+
+/// An identifier written for **speech** rather than for sight.
+///
+/// A screen reader handed `RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX` produces an
+/// unbroken run of letters at speaking speed, which nobody can transcribe and
+/// nobody can check against anything. In four-character groups it becomes a
+/// sequence somebody can write down and compare — which is the entire reason a
+/// receive address is on screen at all.
+///
+/// Sight and speech want opposite things here: on screen the address must be
+/// exactly the characters it is, because a space someone copies is an address
+/// that fails its checksum. So the grouped form goes only to
+/// `accessible-value`, never to `text`.
+pub fn spoken(identifier: &str) -> String {
+    identifier
+        .chars()
+        .collect::<Vec<char>>()
+        .chunks(4)
+        .map(|group| group.iter().collect::<String>())
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_address_is_grouped_for_speech() {
+        assert_eq!(
+            super::spoken("RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX"),
+            "RQr2 cUkF 46n7 y8WR zDkd 1iV9 gHus SSQu zX",
+        );
+        assert_eq!(super::spoken(""), "");
+        assert_eq!(super::spoken("abc"), "abc");
+    }
+}

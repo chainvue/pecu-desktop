@@ -218,6 +218,7 @@ pub fn receiving(ui: &AppWindow) {
         key("savings", SECOND_ADDRESS, "generated", true, false),
     ]))));
     wallet.set_address(ADDRESS.into());
+    wallet.set_address_spoken(crate::spoken(ADDRESS).into());
     ui.global::<NetworkState>().set_effective("Testnet".into());
 
     // Scale factor 1: the offscreen renderer draws at exactly the size it is

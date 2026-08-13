@@ -1,4 +1,4 @@
-import { Theme, Sp, R, Typo, Motion } from "theme/theme.slint";
+import { Theme, Sp, R, Typo, Motion, InputMode } from "theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, Segmented } from "components/base.slint";
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
 import { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow } from "vm/structs.slint";
@@ -7,7 +7,7 @@ import { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
 export { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow }
-export { Theme, Motion }
+export { Theme, Motion, InputMode }
 
 // ── The data the UI is given ────────────────────────────────────────────────
 //
@@ -22,6 +22,10 @@ export global WalletState {
     in property <string> name: "";
     // The ACTIVE key's address — what Receive shows and what Send pays from.
     in property <string> address: "";
+    // The same address in four-character groups, for `accessible-value` only.
+    // Never rendered: a space somebody copies is an address that fails its
+    // checksum. See `chainvue_ui::spoken`.
+    in property <string> address-spoken: "";
     // Every key in the vault. Readable while locked, because an address is
     // public: that is what lets someone be paid without unlocking anything.
     in property <[KeyRow]> keys: [];
@@ -307,6 +311,9 @@ export global Actions {
     callback add-key(string);
     callback rename-key(string, string);
     callback select-key(string);
+    // How the window looks, and whether it moves. Sent so the core can write
+    // them down — a preference that resets every launch is not a preference.
+    callback set-appearance(bool, bool);
 
     // Sending. None of these carries a secret; the signed bytes never leave
     // the core, and what crosses here is a ticket number.
@@ -377,6 +384,15 @@ component Field inherits Rectangle {
         vertical-alignment: root.multiline ? top : center;
         overflow: elide;
     }
+
+    // The label a screen reader reads. The placeholder is the only description
+    // most of these fields have on screen, so it is the honest source for it.
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.placeholder;
+    // Deliberately NOT `accessible-value: input.text` when masked. A password
+    // field that publishes its contents to the accessibility tree has undone
+    // the masking for anything that can read that tree.
+    accessible-value: root.password ? "" : input.text;
 
     input := TextInput {
         // Never rendered as glyphs, and never logged.
@@ -1967,6 +1983,15 @@ component SettingsScreen inherits VerticalLayout {
     spacing: Sp.section-gap;
     property <[int]> lock-choices: [1, 5, 15, 60, 0];
 
+    // Applied here AND sent to be written down. Applying it locally rather than
+    // waiting for the core to echo it back is what keeps the button feeling
+    // immediate; the core's copy is only read at the next start.
+    function appearance(dark: bool, reduce: bool) {
+        Theme.dark = dark;
+        Motion.enabled = !reduce;
+        Actions.set-appearance(dark, reduce);
+    }
+
     Section {
         title: "SECURITY";
 
@@ -2039,6 +2064,69 @@ component SettingsScreen inherits VerticalLayout {
                 font-size: Typo.caption;
                 color: Theme.negative;
                 wrap: word-wrap;
+            }
+        }
+    }
+
+    Section {
+        title: "APPEARANCE";
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Theme";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: start;
+                Btn {
+                    text: "Dark";
+                    variant: Theme.dark ? "primary" : "secondary";
+                    clicked => { root.appearance(true, !Motion.enabled); }
+                }
+                Btn {
+                    text: "Light";
+                    variant: Theme.dark ? "secondary" : "primary";
+                    clicked => { root.appearance(false, !Motion.enabled); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Motion";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            Text {
+                // What "reduced" actually means here, because the usual
+                // implementation of this switch is "nothing happens at all"
+                // and that is not what this one does.
+                text: "Reduced motion removes movement, scaling and the chart's draw-in. Cross-fades stay: opacity is not a vestibular trigger, and a hard swap is jarring for motion-sensitive people too.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: start;
+                Btn {
+                    text: "Full motion";
+                    variant: Motion.enabled ? "primary" : "secondary";
+                    clicked => { root.appearance(Theme.dark, false); }
+                }
+                Btn {
+                    text: "Reduced";
+                    variant: Motion.enabled ? "secondary" : "primary";
+                    clicked => { root.appearance(Theme.dark, true); }
+                }
             }
         }
     }
@@ -2526,9 +2614,11 @@ component ReceiveScreen inherits VerticalLayout {
                         color: Theme.text-primary;
                         wrap: char-wrap;
                         // Announced in four-character groups, because a screen
-                        // reader saying raw base58 is unusable.
-                        accessible-role: text;
+                        // reader saying raw base58 at speaking speed produces
+                        // something nobody can transcribe or check.
+                        accessible-role: AccessibleRole.text;
                         accessible-label: "Receive address";
+                        accessible-value: WalletState.address-spoken;
                     }
                 }
 
@@ -2662,7 +2752,7 @@ component PhraseGrid inherits Rectangle {
                 // a shared office is a real failure mode, and the words must be
                 // read aloud only when someone asks for it — an opt-in button
                 // that is NOT built yet. Until it is, silence is the safe side.
-                accessible-role: none;
+                accessible-role: AccessibleRole.none;
             }
 
             Text {
@@ -2672,7 +2762,7 @@ component PhraseGrid inherits Rectangle {
                 color: Theme.text-primary;
                 vertical-alignment: center;
                 overflow: elide;
-                accessible-role: none;
+                accessible-role: AccessibleRole.none;
             }
         }
     }
@@ -2864,7 +2954,7 @@ component BackupPhrase inherits VerticalLayout {
                 }
             }
 
-            accessible-role: button;
+            accessible-role: AccessibleRole.button;
             accessible-label: "Hold to reveal the recovery phrase";
         }
     }
@@ -3069,93 +3159,155 @@ export component AppWindow inherits Window {
     // showing numbers nobody has authenticated for.
     in-out property <bool> restoring: false;
 
-    if !WalletState.exists || WalletState.locked: Onboarding {
-        restoring <=> root.restoring;
-        mode: WalletState.exists ? "unlock" : "create";
-        wallet-name: WalletState.name;
-        busy: WalletState.busy;
-        problem: WalletState.problem;
+    // Navigating is two statements — what the window shows, and telling the
+    // core which screen is open so it can start or stop screen-scoped polling.
+    // Both have to happen together, from the rail and from the keyboard alike.
+    function go(screen: string) {
+        root.screen = screen;
+        Actions.navigate(screen);
     }
 
-    // And before the shell too: a phrase on screen is the only thing that
-    // should be on screen. Nothing behind it is worth the risk of a stray
-    // click landing somewhere else while 24 words are visible.
-    if WalletState.exists && !WalletState.locked && SeedState.step != "": BackupScreen {}
+    // Keyboard shortcuts, and the switch that turns focus rings on.
+    //
+    // # Why this ENCLOSES the interface rather than sitting beside it
+    //
+    // Slint delivers a key to the focused element first and offers it to an
+    // ANCESTOR only when that element rejects it. A scope declared as a sibling
+    // would never see a key at all; one declared as an ancestor sees exactly
+    // what nothing else wanted. So a text field keeps every character somebody
+    // types, and only the command-modified keys and Escape reach here — a
+    // grabbing scope would eat the letter `l` out of a passphrase.
+    //
+    // Nothing in here can spend or reveal anything. `⌘L` locks, which is the
+    // safe direction; there is deliberately no shortcut that unlocks, sends, or
+    // shows a recovery phrase.
+    shortcuts := FocusScope {
+        width: 100%;
+        height: 100%;
 
-    if WalletState.exists && !WalletState.locked && SeedState.step == "": HorizontalLayout {
-        NavRail {
-            items: root.nav;
-            active: root.screen;
-            // Below ~1000px the rail collapses to glyphs so the content column
-            // keeps its shape rather than being squeezed. See `nav-expanded`.
-            expanded: root.nav-expanded;
-            selected(id) => {
-                root.screen = id;
-                Actions.navigate(id);
+        // Focused at startup so the shortcuts work before anything has been
+        // clicked. Focus moves away the moment a field or a button takes it,
+        // and the shortcuts keep working because keys bubble back up here.
+        init => { shortcuts.focus(); }
+
+        key-pressed(event) => {
+            // The first key press is what says a keyboard is in use. From here
+            // focus rings render, until a pointer press says otherwise.
+            InputMode.keyboard = true;
+
+            if (event.modifiers.control || event.modifiers.meta) {
+                if (event.text == "1") { root.go("dashboard"); return EventResult.accept; }
+                if (event.text == "2") { root.go("send"); return EventResult.accept; }
+                if (event.text == "3") { root.go("receive"); return EventResult.accept; }
+                if (event.text == "4") { root.go("activity"); return EventResult.accept; }
+                if (event.text == "5") { root.go("nodes"); return EventResult.accept; }
+                if (event.text == ",") { root.go("settings"); return EventResult.accept; }
+                // Slint reports the character produced, and `⌘L` without shift
+                // produces a lower-case `l`.
+                if (event.text == "l") { Actions.lock(); return EventResult.accept; }
+                if (event.text == "r") { Actions.refresh(); return EventResult.accept; }
             }
-        }
 
-        VerticalLayout {
-            TitleBar {
-                title: root.screen == "dashboard" ? "Dashboard"
-                    : root.screen == "nodes" ? "Network"
-                    : root.screen == "receive" ? "Receive"
-                    : root.screen == "send" ? "Send"
-                    : root.screen == "settings" ? "Settings"
-                    : root.screen == "activity" ? "Activity"
-                    : root.screen;
-                network: NetworkState.effective;
-                node-state: NetworkState.node-state;
-                mock-mode: NetworkState.mock-mode;
-                busy: WalletState.busy;
-                can-refresh: true;
-                toggle-theme => { Actions.toggle-theme(); }
-                lock => { Actions.lock(); }
-                refresh => { Actions.refresh(); }
-            }
-
-            Rectangle {
-                vertical-stretch: 1;
-                background: Theme.bg-base;
-                clip: true;
-
-                Flickable {
-                    viewport-height: content.preferred-height;
-
-                    content := VerticalLayout {
-                        padding: Sp.screen-pad;
-                        // Caps line length on a wide display. Cards that
-                        // stretch to 2000px read as a dashboard, not a product.
-                        max-width: Sp.content-max;
-
-                        if root.screen == "dashboard": DashboardScreen {}
-                        if root.screen == "send": SendScreen {}
-                        if root.screen == "activity": ActivityScreen {}
-                        if root.screen == "receive": ReceiveScreen {}
-                        if root.screen == "settings": SettingsScreen {}
-                        if root.screen == "nodes": NodesScreen {}
-                        if root.screen != "dashboard" && root.screen != "nodes"
-                            && root.screen != "receive" && root.screen != "send"
-                            && root.screen != "settings" && root.screen != "activity": ComingSoon {
-                            title: "Not built yet";
-                            body: "This part of the wallet is still being written.";
-                        }
-                    }
+            // Escape closes whatever is over the screen, innermost first.
+            if (event.text == Key.Escape) {
+                if (TxState.txid != "") {
+                    TxState.txid = "";
+                    return EventResult.accept;
+                }
+                if (SendState.step != "form") {
+                    SendState.step = "form";
+                    return EventResult.accept;
                 }
             }
 
-            StatusBar {
-                tip: NetworkState.tip;
-                latency: NetworkState.latency;
-                endpoint: NetworkState.endpoint;
-                sdk-rev: AppInfo.sdk-rev;
+            return EventResult.reject;
+        }
+
+        if !WalletState.exists || WalletState.locked: Onboarding {
+            restoring <=> root.restoring;
+            mode: WalletState.exists ? "unlock" : "create";
+            wallet-name: WalletState.name;
+            busy: WalletState.busy;
+            problem: WalletState.problem;
+        }
+
+        // And before the shell too: a phrase on screen is the only thing that
+        // should be on screen. Nothing behind it is worth the risk of a stray
+        // click landing somewhere else while 24 words are visible.
+        if WalletState.exists && !WalletState.locked && SeedState.step != "": BackupScreen {}
+
+        if WalletState.exists && !WalletState.locked && SeedState.step == "": HorizontalLayout {
+            NavRail {
+                items: root.nav;
+                active: root.screen;
+                // Below ~1000px the rail collapses to glyphs so the content column
+                // keeps its shape rather than being squeezed. See `nav-expanded`.
+                expanded: root.nav-expanded;
+                selected(id) => { root.go(id); }
+            }
+
+            VerticalLayout {
+                TitleBar {
+                    title: root.screen == "dashboard" ? "Dashboard"
+                        : root.screen == "nodes" ? "Network"
+                        : root.screen == "receive" ? "Receive"
+                        : root.screen == "send" ? "Send"
+                        : root.screen == "settings" ? "Settings"
+                        : root.screen == "activity" ? "Activity"
+                        : root.screen;
+                    network: NetworkState.effective;
+                    node-state: NetworkState.node-state;
+                    mock-mode: NetworkState.mock-mode;
+                    busy: WalletState.busy;
+                    can-refresh: true;
+                    toggle-theme => { Actions.toggle-theme(); }
+                    lock => { Actions.lock(); }
+                    refresh => { Actions.refresh(); }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.bg-base;
+                    clip: true;
+
+                    Flickable {
+                        viewport-height: content.preferred-height;
+
+                        content := VerticalLayout {
+                            padding: Sp.screen-pad;
+                            // Caps line length on a wide display. Cards that
+                            // stretch to 2000px read as a dashboard, not a product.
+                            max-width: Sp.content-max;
+
+                            if root.screen == "dashboard": DashboardScreen {}
+                            if root.screen == "send": SendScreen {}
+                            if root.screen == "activity": ActivityScreen {}
+                            if root.screen == "receive": ReceiveScreen {}
+                            if root.screen == "settings": SettingsScreen {}
+                            if root.screen == "nodes": NodesScreen {}
+                            if root.screen != "dashboard" && root.screen != "nodes"
+                                && root.screen != "receive" && root.screen != "send"
+                                && root.screen != "settings" && root.screen != "activity": ComingSoon {
+                                title: "Not built yet";
+                                body: "This part of the wallet is still being written.";
+                            }
+                        }
+                    }
+                }
+
+                StatusBar {
+                    tip: NetworkState.tip;
+                    latency: NetworkState.latency;
+                    endpoint: NetworkState.endpoint;
+                    sdk-rev: AppInfo.sdk-rev;
+                }
             }
         }
-    }
 
-    // Over everything, including the nav rail: a detail sheet that left the
-    // rail clickable would let someone navigate away from a transaction they
-    // are in the middle of reading.
-    if WalletState.exists && !WalletState.locked && SeedState.step == ""
-        && TxState.txid != "": TxSheet {}
+        // Over everything, including the nav rail: a detail sheet that left the
+        // rail clickable would let someone navigate away from a transaction they
+        // are in the middle of reading.
+        if WalletState.exists && !WalletState.locked && SeedState.step == ""
+            && TxState.txid != "": TxSheet {}
+    }
 }
