@@ -71,6 +71,18 @@ pub struct Store {
     cache: Connection,
 }
 
+/// An endpoint the user configured.
+///
+/// The id is the one SQLite assigned and it is stable for the life of the row,
+/// which is what lets the running node list and this table agree about which
+/// entry is which.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredNode {
+    pub id: i64,
+    pub label: String,
+    pub url: String,
+}
+
 /// A dashboard as it looked when the wallet last ran.
 pub struct Snapshot {
     pub portfolio: PortfolioVm,
@@ -129,6 +141,59 @@ impl Store {
             [key, value],
         ) {
             tracing::warn!(%error, key, "a setting could not be saved");
+        }
+    }
+
+    // ── Nodes the user added: durable ───────────────────────────────────────
+
+    /// Every endpoint the user configured, oldest first.
+    ///
+    /// The built-in nodes are **not** in here. They are compiled in, so
+    /// persisting them would mean a shipped endpoint could not be changed by
+    /// shipping a new build — and a stale row would quietly outrank the code.
+    pub fn nodes(&self) -> Vec<StoredNode> {
+        let Ok(mut statement) = self
+            .wallet
+            .prepare("SELECT id, label, url FROM node ORDER BY id")
+        else {
+            return Vec::new();
+        };
+        let Ok(rows) = statement.query_map([], |row| {
+            Ok(StoredNode {
+                id: row.get::<_, i64>(0)?,
+                label: row.get(1)?,
+                url: row.get(2)?,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.flatten().collect()
+    }
+
+    /// Remember an endpoint, and answer with the id it was given.
+    ///
+    /// `None` when it could not be written — including the case that matters:
+    /// the URL is already configured, which the UNIQUE constraint refuses. The
+    /// caller must not add it to the running list either, or the two would
+    /// disagree from that moment on.
+    pub fn add_node(&self, label: &str, url: &str) -> Option<i64> {
+        match self.wallet.execute(
+            "INSERT INTO node (label, url) VALUES (?1, ?2)",
+            [label, url],
+        ) {
+            Ok(_) => Some(self.wallet.last_insert_rowid()),
+            Err(error) => {
+                tracing::warn!(%error, url, "a node could not be saved");
+                None
+            }
+        }
+    }
+
+    /// Forget an endpoint. Silent about an id that was never in here — the
+    /// caller is removing something, and it is gone either way.
+    pub fn remove_node(&self, id: i64) {
+        if let Err(error) = self.wallet.execute("DELETE FROM node WHERE id = ?1", [id]) {
+            tracing::warn!(%error, id, "a node could not be removed");
         }
     }
 
@@ -367,6 +432,67 @@ mod tests {
         assert!(store(&dir).snapshot().is_none());
         assert!(store(&dir).native_currency().is_none());
         assert!(store(&dir).currency_names().is_empty());
+    }
+
+    #[test]
+    fn a_node_survives_a_restart_and_can_be_removed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let first = store(&dir)
+            .add_node("my node", "https://node.example")
+            .expect("added");
+        let second = store(&dir)
+            .add_node("another", "https://other.example")
+            .expect("added");
+        assert_ne!(first, second);
+
+        let nodes = store(&dir).nodes();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].label, "my node");
+        assert_eq!(nodes[0].url, "https://node.example");
+        assert_eq!(nodes[0].id, first);
+
+        store(&dir).remove_node(first);
+        let left = store(&dir).nodes();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, second);
+    }
+
+    /// Two entries for one endpoint would probe identically and disagree about
+    /// nothing, while looking like a choice.
+    #[test]
+    fn the_same_endpoint_cannot_be_added_twice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store(&dir);
+
+        assert!(store.add_node("first", "https://node.example").is_some());
+        assert!(
+            store.add_node("second", "https://node.example").is_none(),
+            "a duplicate URL was accepted",
+        );
+        assert_eq!(store.nodes().len(), 1);
+    }
+
+    /// SQLite reuses the highest rowid after a delete unless told not to. An id
+    /// that comes back meaning a different endpoint is exactly the confusion
+    /// `AUTOINCREMENT` is there to prevent.
+    #[test]
+    fn a_removed_node_does_not_hand_its_id_to_the_next_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store(&dir);
+
+        let first = store
+            .add_node("first", "https://one.example")
+            .expect("added");
+        store.remove_node(first);
+        let second = store
+            .add_node("second", "https://two.example")
+            .expect("added");
+
+        assert_ne!(
+            second, first,
+            "the id of a removed node was handed out again"
+        );
     }
 
     /// The whole reason the cache is a separate file: it can be deleted, and

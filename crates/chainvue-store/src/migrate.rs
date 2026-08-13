@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bumped when a durable table changes shape.
-const WALLET_VERSION: i64 = 1;
+const WALLET_VERSION: i64 = 2;
 
 /// Bumped when a cached table changes shape. Cheap to raise: an unrecognised
 /// cache is deleted, not migrated.
@@ -45,6 +45,27 @@ pub fn wallet(connection: &Connection, path: &Path) -> Result<(), StoreError> {
             "CREATE TABLE IF NOT EXISTS setting (
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
+             );",
+        )?;
+    }
+
+    if found < 2 {
+        connection.execute_batch(
+            // Endpoints the user added. Durable, because nothing can work out
+            // again which node someone chose to trust.
+            //
+            // `AUTOINCREMENT` rather than a bare rowid: SQLite otherwise reuses
+            // the highest id after a delete, and an id that comes back meaning
+            // a different endpoint is the sort of thing that is fine until the
+            // day it is not.
+            //
+            // The URL is UNIQUE so the same endpoint cannot be configured
+            // twice under two names — the id space would then have two entries
+            // that probe identically and disagree about nothing.
+            "CREATE TABLE IF NOT EXISTS node (
+                 id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                 label TEXT NOT NULL,
+                 url   TEXT NOT NULL UNIQUE
              );",
         )?;
     }
@@ -128,6 +149,43 @@ mod tests {
         // Running it again is a no-op, which is what makes every start safe.
         wallet(&connection, Path::new("wallet.sqlite")).expect("migrate again");
         assert_eq!(version(&connection).expect("version"), WALLET_VERSION);
+    }
+
+    /// The migrations are append-only, so a file written by an older build has
+    /// to arrive at the same schema as a fresh one — with what it already held
+    /// still in it.
+    #[test]
+    fn a_database_from_an_older_build_is_migrated_in_place() {
+        let connection = Connection::open_in_memory().expect("memory");
+
+        // Version 1, exactly as the first build left it.
+        connection
+            .execute_batch(
+                "CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO setting (key, value) VALUES ('auto_lock_minutes', '15');",
+            )
+            .expect("v1 schema");
+        set_version(&connection, 1).expect("set");
+
+        wallet(&connection, Path::new("wallet.sqlite")).expect("migrate");
+
+        assert_eq!(version(&connection).expect("version"), WALLET_VERSION);
+
+        let kept: String = connection
+            .query_row(
+                "SELECT value FROM setting WHERE key = 'auto_lock_minutes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the setting survived the migration");
+        assert_eq!(kept, "15");
+
+        connection
+            .execute(
+                "INSERT INTO node (label, url) VALUES ('n', 'https://a')",
+                [],
+            )
+            .expect("the node table now exists");
     }
 
     /// A settings file from a newer build must not be opened. Guessing at a

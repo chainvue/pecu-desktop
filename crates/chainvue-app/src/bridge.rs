@@ -156,18 +156,45 @@ fn apply(ui: &AppWindow, event: Event) {
             }
         }
 
-        Event::Notice(error) => {
+        Event::Notice(error) => apply_notice(ui, error),
+
+        // Core only ever replaces this list wholesale.
+        Event::Pending(other) => tracing::debug!(?other, "unexpected pending delta"),
+    }
+}
+
+/// Something the core wants said, put on the screen that asked for it.
+///
+/// Routing by code rather than showing everything in one place: a refusal has
+/// to appear next to the control that caused it, or it is indistinguishable
+/// from the button having done nothing. This is the stand-in for a proper toast
+/// host, and the codes it knows about are the ones with a screen of their own.
+fn apply_notice(ui: &AppWindow, error: chainvue_protocol::UiError) {
+    let network = ui.global::<NetworkState>();
+
+    match error.code {
+        // The node was accepted. The only signal the add form waits for — it
+        // deliberately does not clear itself on submit, so that a refused
+        // address survives to be corrected rather than retyped.
+        "node_added" => {
+            network.set_problem(SharedString::new());
+            network.set_draft_url(SharedString::new());
+            network.set_draft_label(SharedString::new());
+        }
+
+        "add_node" | "node_connect" => {
+            tracing::warn!(code = error.code, title = %error.title, "notice");
+            network.set_problem(error.title.into());
+        }
+
+        _ => {
             tracing::warn!(code = error.code, title = %error.title, "notice");
             // Until a toast host exists, an onboarding failure at least has to
-            // appear on the screen it came from — a button that does nothing is
-            // indistinguishable from a broken app.
+            // appear on the screen it came from.
             let state = ui.global::<WalletState>();
             state.set_busy(false);
             state.set_problem(error.title.into());
         }
-
-        // Core only ever replaces this list wholesale.
-        Event::Pending(other) => tracing::debug!(?other, "unexpected pending delta"),
     }
 }
 

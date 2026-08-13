@@ -449,6 +449,27 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     }
 
     {
+        // The URL is passed through untouched. Whether it is one this wallet
+        // may talk to is decided in the core by the SDK's own transport, which
+        // is what refuses plaintext to anything but loopback — a check the
+        // screen could skip would be no check at all.
+        let dispatcher = dispatcher.clone();
+        actions.on_add_node(move |label, url| {
+            dispatcher.send(Command::AddNode {
+                url: url.to_string(),
+                label: label.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_remove_node(move |id| {
+            dispatcher.send(Command::RemoveNode(u32::try_from(id).unwrap_or(0)));
+        });
+    }
+
+    {
         let dispatcher = dispatcher.clone();
         actions.on_refresh(move || dispatcher.send(Command::Refresh(RefreshScope::All)));
     }

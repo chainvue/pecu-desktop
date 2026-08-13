@@ -208,11 +208,16 @@ enum Work {
         ticket: u64,
         result: Box<Result<send::Prepared, send::SendError>>,
     },
-    /// The active node reported where the chain is.
+    /// A node reported where the chain is.
     Tip {
         node: u32,
         info: Box<Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>>,
         latency: std::time::Duration,
+        /// Whether this is the fifteen-second poll of the **active** node, as
+        /// opposed to a one-off probe of some other node. Only the poll may
+        /// release the poller's in-flight flag, and only the poll should be
+        /// able to conclude that a new block has arrived.
+        from_poller: bool,
     },
     /// The raw JSON for a transaction the detail sheet is showing.
     RawTransaction {
@@ -460,7 +465,8 @@ impl Core {
                 node,
                 info,
                 latency,
-            } => self.finish_tip(node, &info, latency),
+                from_poller,
+            } => self.finish_tip(node, &info, latency, from_poller),
             Work::OlderHistory(page) => self.finish_older_history(*page),
             Work::RawTransaction { txid, json } => self.finish_raw_transaction(&txid, *json),
             Work::Checked {
@@ -556,10 +562,13 @@ impl Core {
                 if self.nodes.set_active(id) {
                     // The client belongs to the node it was built for.
                     self.chain = None;
+                    self.remember_active_node();
                     self.emit_network();
                     self.refresh();
                 }
             }
+            Command::AddNode { url, label } => self.add_node(&url, &label),
+            Command::RemoveNode(id) => self.remove_node(id),
             Command::Refresh(_) => self.refresh(),
             Command::LoadHistory { .. } => self.load_older_history(),
             Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
@@ -858,6 +867,25 @@ impl Core {
             })
             .collect();
 
+        // Endpoints the user configured, put back beside the built-ins. Their
+        // ids are offset so a shipped node and a saved one can never collide —
+        // see `user_node_id`.
+        for saved in store.nodes() {
+            self.nodes
+                .add(user_node_id(saved.id), &saved.label, &saved.url);
+        }
+
+        // And whichever of them was in use. Matched by URL, so a build that
+        // ships a new node ahead of the others cannot silently move someone
+        // onto a different chain.
+        if let Some(url) = store.setting("active_node_url") {
+            if !url.is_empty() && !self.nodes.set_active_by_url(&url) {
+                // The endpoint it names is not configured any more. Whatever
+                // is first stays active, which is the shipped default.
+                tracing::info!(%url, "the node last in use is no longer configured");
+            }
+        }
+
         if let Some(minutes) = store.setting("auto_lock_minutes") {
             self.wallet.auto_lock = minutes
                 .parse::<u64>()
@@ -923,6 +951,7 @@ impl Core {
                     node: id,
                     info: Box::new(info),
                     latency,
+                    from_poller: true,
                 }
             },
             self.work.clone(),
@@ -934,10 +963,16 @@ impl Core {
         node: u32,
         info: &Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>,
         latency: std::time::Duration,
+        from_poller: bool,
     ) {
-        self.polling_tip = false;
+        if from_poller {
+            self.polling_tip = false;
+        }
 
-        let before = self.nodes.active().and_then(|n| n.tip);
+        // This node's own previous height. Comparing against the ACTIVE node's
+        // would mean a probe of some other endpoint could look like a new
+        // block here and trigger a refresh of everything.
+        let before = self.nodes.get(node).and_then(|n| n.tip);
         let requested = self.nodes.requested().cloned().unwrap_or(Network::Testnet);
 
         let Some(entry) = self.nodes.get_mut(node) else {
@@ -953,10 +988,155 @@ impl Core {
 
         // A new block is the only reason to re-read anything. Polling the tip
         // and refreshing regardless would turn a one-request poll into seven.
-        if info.is_ok() && after != before {
+        //
+        // Only for the node the wallet is actually reading from: another node
+        // finding a block says nothing about the balances on screen, which were
+        // read somewhere else.
+        let active = self.nodes.active().map(|n| n.id) == Some(node);
+        if info.is_ok() && active && after != before {
             tracing::debug!(?before, ?after, "a new block");
             self.refresh();
         }
+    }
+
+    // ── Endpoints the user configured ───────────────────────────────────────
+
+    /// Add an endpoint.
+    ///
+    /// Three refusals, in order, and each of them says something different:
+    /// a URL this wallet may not talk to, an endpoint that is already
+    /// configured, and a row that could not be written down. The last one
+    /// matters more than it looks — accepting a node the store refused would
+    /// leave the running list and the file disagreeing from that moment on,
+    /// and the disagreement would only surface after a restart.
+    fn add_node(&mut self, url: &str, label: &str) {
+        let url = url.trim();
+        let label = label.trim();
+
+        if url.is_empty() {
+            return;
+        }
+
+        // The SDK's own check: the scheme allowlist, and the refusal to send
+        // plaintext anywhere but loopback. No connection is opened, so this
+        // says the URL is one we may use — not that anything is listening.
+        if let Err(error) = chainvue_chain::validate_url(url) {
+            self.notice("add_node", &url_refusal_title(&error), &error);
+            return;
+        }
+
+        if self.nodes.has_url(url) {
+            self.notice_warning(
+                "add_node",
+                "That endpoint is already in the list",
+                "Two entries for one node would probe identically and could never disagree \
+                 about anything, which makes choosing between them meaningless.",
+            );
+            return;
+        }
+
+        let Some(store) = &self.store else {
+            self.notice_warning(
+                "add_node",
+                "ChainVue cannot save a node right now",
+                "The wallet database could not be opened, so a node added now would be gone \
+                 at the next start. It has not been added.",
+            );
+            return;
+        };
+
+        // A node with no name of its own is named after its host, which is
+        // what someone would have typed anyway.
+        let label = if label.is_empty() {
+            host_of(url)
+        } else {
+            label.to_string()
+        };
+
+        let Some(row) = store.add_node(&label, url) else {
+            self.notice_warning(
+                "add_node",
+                "That node could not be saved",
+                "It has not been added, because a node the wallet cannot write down would \
+                 disappear at the next start without saying so.",
+            );
+            return;
+        };
+
+        self.nodes.add(user_node_id(row), &label, url);
+        tracing::info!(%label, %url, "a node was added");
+        self.emit_network();
+        // The one signal the form waits for. It does not clear itself on
+        // submit, so that a refused address is still there to be corrected.
+        self.notice_info("node_added", "Node added");
+
+        // Ask it what it is straight away. An entry sitting at "unknown" until
+        // someone presses Probe reads as a node that did not work.
+        self.probe_one(user_node_id(row), url);
+    }
+
+    /// Remove an endpoint the user added.
+    ///
+    /// The running list decides whether this is allowed — it is the one that
+    /// knows which nodes are built in — so the file is only touched once the
+    /// removal has actually happened.
+    fn remove_node(&mut self, id: u32) {
+        let was_active = self.nodes.active().map(|node| node.id) == Some(id);
+
+        if !self.nodes.remove(id) {
+            return;
+        }
+
+        if let (Some(store), Some(row)) = (&self.store, stored_node_id(id)) {
+            store.remove_node(row);
+        }
+
+        if was_active {
+            // The client was built for the node that just went away.
+            self.chain = None;
+            self.remember_active_node();
+        }
+
+        tracing::info!(id, "a node was removed");
+        self.emit_network();
+
+        if was_active {
+            // Whatever inherited the active slot has never been asked anything.
+            self.refresh();
+        }
+    }
+
+    /// Ask one node what it is.
+    ///
+    /// The same request as the tip poll, aimed at a specific node rather than
+    /// the active one — which is what a newly added endpoint needs, since it is
+    /// not active and the poller would never reach it.
+    fn probe_one(&mut self, id: u32, url: &str) {
+        let url = url.to_string();
+        self.blocking.dispatch(
+            move || {
+                let (info, latency) = chainvue_chain::probe(&url);
+                Work::Tip {
+                    node: id,
+                    info: Box::new(info),
+                    latency,
+                    from_poller: false,
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    /// Write down which endpoint is in use.
+    ///
+    /// By URL, not by id: a built-in's id is its position in a compiled-in
+    /// list, and a build that ships a third node ahead of the others would
+    /// otherwise silently move the user onto a different chain.
+    fn remember_active_node(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        store.set_setting("active_node_url", self.nodes.active_url().unwrap_or(""));
     }
 
     // ── Transactions whose fate is unknown ──────────────────────────────────
@@ -1489,6 +1669,21 @@ impl Core {
         ));
     }
 
+    /// A refusal that has no underlying error to quote — the wallet decided,
+    /// and it should say why in its own words rather than dress a decision up
+    /// as a failure.
+    fn notice_warning(&self, code: &'static str, title: &str, detail: &str) {
+        tracing::info!(code, title, "refused");
+        let _ = self
+            .events
+            .send(Event::Notice(chainvue_protocol::UiError::simple(
+                code,
+                title.to_string(),
+                detail.to_string(),
+                chainvue_protocol::Severity::Warning,
+            )));
+    }
+
     /// A notice that is not a failure. Same channel, so the UI has one place to
     /// render everything it is told.
     fn notice_info(&self, code: &'static str, title: &str) {
@@ -1600,6 +1795,54 @@ fn refusal_title(refused: &chainvue_chain::SpendRefused) -> String {
     // Deliberately specific. "Refused" tells someone nothing about what to do,
     // and each of these has a different answer.
     refused.to_string()
+}
+
+/// Where the ids of user-added nodes start.
+///
+/// The built-ins are numbered from zero by their position in a compiled-in
+/// list; the saved ones are numbered by SQLite, also from one. Without a gap
+/// the two schemes would collide on the second node ever added, and the
+/// collision would look like the wrong endpoint being selected rather than like
+/// a numbering bug. A thousand is far more built-in nodes than this will ever
+/// ship, and the arithmetic is exact in both directions.
+const USER_NODE_ID_BASE: u32 = 1000;
+
+/// A stored row id as it is numbered in the running list.
+fn user_node_id(row: i64) -> u32 {
+    USER_NODE_ID_BASE.saturating_add(u32::try_from(row).unwrap_or(0))
+}
+
+/// The stored row a running id refers to, or `None` for a built-in.
+fn stored_node_id(id: u32) -> Option<i64> {
+    id.checked_sub(USER_NODE_ID_BASE).map(i64::from)
+}
+
+/// What the network screen says when a URL is refused before anything is sent.
+///
+/// The plaintext case gets its own sentence because it is the one that sounds
+/// like the wallet being difficult, and it is not: it is the one refusal that
+/// prevents every address in this wallet from being readable by whoever is on
+/// the path between here and that node.
+fn url_refusal_title(error: &verus_sdk::network::RpcError) -> String {
+    use verus_sdk::network::RpcError;
+
+    match error {
+        RpcError::InsecureUrl { .. } => "That address is not encrypted".to_string(),
+        _ => "That is not an address ChainVue can use".to_string(),
+    }
+}
+
+/// The host of a URL, for a node the user did not name.
+///
+/// Best-effort and deliberately so: this only produces a label. Anything it
+/// cannot parse falls back to the URL itself, which is at least true.
+fn host_of(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .filter(|host| !host.is_empty())
+        .unwrap_or(url)
+        .to_string()
 }
 
 fn to_node_vm(node: &Node) -> NodeVm {
@@ -1988,6 +2231,217 @@ mod tests {
         );
 
         assert_eq!(auto_lock.expect("wallet state"), Some(15));
+    }
+
+    /// Wait for a network event the caller is interested in, ignoring the rest.
+    /// Bounded, so a test that will never see what it wants fails rather than
+    /// hanging the suite.
+    async fn network_until(
+        events: &mut mpsc::UnboundedReceiver<Event>,
+        want: impl Fn(&NetworkVm) -> bool,
+    ) -> NetworkVm {
+        for _ in 0..40 {
+            let vm = next_network(events).await;
+            if want(&vm) {
+                return vm;
+            }
+        }
+        panic!("the core never reported the network state this test was waiting for");
+    }
+
+    /// The whole point of writing a node down: it is still there next time.
+    #[tokio::test]
+    async fn a_user_added_node_is_remembered_across_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let config = || Config {
+            nodes: testnet_nodes(),
+            network: Network::Testnet,
+            mock: false,
+            vault_path: dir.path().join("vault.json"),
+        };
+
+        {
+            let (dispatcher, mut events) = start(&handle, config());
+            let _ = next_network(&mut events).await;
+
+            dispatcher.send(Command::AddNode {
+                url: "https://my-node.invalid".to_string(),
+                label: "mine".to_string(),
+            });
+
+            let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
+            let added = vm
+                .nodes
+                .iter()
+                .find(|node| node.url == "https://my-node.invalid")
+                .expect("the added node");
+            assert_eq!(added.label, "mine");
+            assert!(!added.builtin, "a user-added node claimed to be built in");
+
+            // Selecting it is a choice, and choices are written down too.
+            dispatcher.send(Command::SelectNode(added.id));
+            let vm = network_until(&mut events, |vm| vm.active_node == Some(added.id)).await;
+            assert_eq!(vm.active_node, Some(added.id));
+
+            dispatcher.send(Command::Shutdown);
+        }
+
+        // A second run, with the same built-ins and the same directory.
+        let (_dispatcher, mut events) = start(&handle, config());
+        let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
+
+        let restored = vm
+            .nodes
+            .iter()
+            .find(|node| node.url == "https://my-node.invalid")
+            .expect("the node survived the restart");
+        assert_eq!(restored.label, "mine");
+        // The active node is remembered by URL, so it comes back even though
+        // its id is assigned afresh each run.
+        assert_eq!(vm.active_node, Some(restored.id));
+    }
+
+    /// The refusal that matters: plaintext to anything but loopback would put
+    /// every address this wallet asks about in front of whoever is on the path.
+    #[tokio::test]
+    async fn a_url_that_would_leak_in_transit_is_refused_and_not_saved() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        dispatcher.send(Command::AddNode {
+            url: "http://my-node.invalid".to_string(),
+            label: "mine".to_string(),
+        });
+
+        let notice = loop {
+            match events.recv().await {
+                Some(Event::Notice(notice)) => break notice,
+                Some(_) => {}
+                None => panic!("the core stopped before refusing"),
+            }
+        };
+        assert_eq!(notice.code, "add_node");
+        assert!(notice.title.contains("not encrypted"), "{}", notice.title);
+
+        // And nothing was written down, so a restart does not resurrect it.
+        let store = chainvue_store::Store::open(dir.path()).expect("store");
+        assert!(store.nodes().is_empty(), "a refused node was saved anyway");
+    }
+
+    /// A duplicate would probe identically and could never disagree about
+    /// anything, which makes choosing between the two entries meaningless.
+    #[tokio::test]
+    async fn an_endpoint_that_is_already_configured_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        // `testnet_nodes` ships exactly this endpoint.
+        dispatcher.send(Command::AddNode {
+            url: "https://example.invalid/".to_string(),
+            label: "again".to_string(),
+        });
+
+        let notice = loop {
+            match events.recv().await {
+                Some(Event::Notice(notice)) => break notice,
+                Some(_) => {}
+                None => panic!("the core stopped before refusing"),
+            }
+        };
+        assert_eq!(notice.code, "add_node");
+        assert!(notice.title.contains("already"), "{}", notice.title);
+    }
+
+    /// Removing whichever node is in use must not leave the wallet pointed at
+    /// an endpoint that is no longer configured.
+    #[tokio::test]
+    async fn removing_the_active_node_falls_back_to_one_that_is_left() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: dir.path().join("vault.json"),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        dispatcher.send(Command::AddNode {
+            url: "https://my-node.invalid".to_string(),
+            label: "mine".to_string(),
+        });
+        let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
+        let added = vm
+            .nodes
+            .iter()
+            .find(|node| !node.builtin)
+            .expect("the added node")
+            .id;
+
+        dispatcher.send(Command::SelectNode(added));
+        let _ = network_until(&mut events, |vm| vm.active_node == Some(added)).await;
+
+        dispatcher.send(Command::RemoveNode(added));
+        let vm = network_until(&mut events, |vm| vm.nodes.len() == 1).await;
+
+        assert_eq!(vm.active_node, Some(0), "the wallet was left with no node");
+
+        // Gone from the file too, so it does not come back at the next start.
+        let store = chainvue_store::Store::open(dir.path()).expect("store");
+        assert!(store.nodes().is_empty());
+    }
+
+    /// A built-in comes from the build. "Removing" one would last until the
+    /// next start and then quietly undo itself.
+    #[tokio::test]
+    async fn a_builtin_node_cannot_be_removed() {
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                vault_path: std::path::PathBuf::from("/nonexistent/vault.json"),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        dispatcher.send(Command::RemoveNode(0));
+        // Nothing to wait for, so ask a question whose answer has to come after
+        // the removal was handled — commands are processed in order.
+        dispatcher.send(Command::SelectNode(0));
+
+        let vm = next_network(&mut events).await;
+        assert_eq!(vm.nodes.len(), 1, "a built-in node was removed");
     }
 
     #[tokio::test]

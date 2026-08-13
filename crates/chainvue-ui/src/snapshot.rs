@@ -151,5 +151,5 @@ pub const CASES: &[Case] = &[
     ("send", "send-review", crate::fixtures::reviewing),
     ("receive", "receive", crate::fixtures::receiving),
     ("settings", "settings", crate::fixtures::settings),
-    ("nodes", "network", crate::fixtures::unlocked),
+    ("nodes", "network", crate::fixtures::network),
 ];

@@ -217,6 +217,33 @@ pub fn connect(url: &str, timeout: Duration) -> Result<Client, RpcError> {
     ))
 }
 
+/// Check that a URL is one this wallet may talk to, without contacting it.
+///
+/// The gate a user-added endpoint has to pass before it is written down. It is
+/// deliberately the SDK's own check rather than one of ours: `HttpTransport`
+/// refuses a scheme it does not know and refuses plaintext `http://` to
+/// anything but loopback, because every address the wallet asks about would
+/// otherwise be readable by anyone on the path.
+///
+/// What this does **not** say is that anything is listening. That answer costs
+/// a request, and it is the probe's job.
+pub fn validate_url(url: &str) -> Result<(), RpcError> {
+    HttpTransport::new(url).map(|_| ())
+}
+
+/// Two URLs that mean the same endpoint.
+///
+/// Only the differences that are certainly cosmetic: surrounding whitespace and
+/// a trailing slash. Deliberately not case-folding the whole URL — a host is
+/// case-insensitive but a path is not, and treating `/API` and `/api` as one
+/// endpoint would be this function inventing a fact about somebody's server.
+fn same_endpoint(left: &str, right: &str) -> bool {
+    fn tidy(url: &str) -> &str {
+        url.trim().trim_end_matches('/')
+    }
+    tidy(left) == tidy(right)
+}
+
 /// Ask a node what it is, and how long it took to answer.
 ///
 /// One `chain_info()` call yields the chain name, the tip, the sync state and
@@ -271,6 +298,70 @@ impl NodeManager {
         } else {
             false
         }
+    }
+
+    /// The node currently in use, by URL.
+    ///
+    /// The URL rather than the id, because the id of a built-in is its position
+    /// in a compiled-in list and that position is not a promise. This is what
+    /// gets written down so the choice survives a restart that reordered them.
+    pub fn active_url(&self) -> Option<&str> {
+        self.active().map(|node| node.url.as_str())
+    }
+
+    /// Make active whichever node serves `url`, if one does.
+    pub fn set_active_by_url(&mut self, url: &str) -> bool {
+        let Some(id) = self
+            .nodes
+            .iter()
+            .find(|node| same_endpoint(&node.url, url))
+            .map(|node| node.id)
+        else {
+            return false;
+        };
+        self.active = Some(id);
+        true
+    }
+
+    /// Whether some node already serves this endpoint.
+    pub fn has_url(&self, url: &str) -> bool {
+        self.nodes.iter().any(|node| same_endpoint(&node.url, url))
+    }
+
+    /// Add an endpoint the user configured.
+    ///
+    /// The caller supplies the id, because the id has to be the one the durable
+    /// store assigned — a list that numbered its own entries would disagree
+    /// with the file the moment anything was removed.
+    ///
+    /// Does **not** validate the URL. That is [`validate_url`], and it belongs
+    /// before the row is written rather than after.
+    pub fn add(&mut self, id: u32, label: &str, url: &str) {
+        self.nodes.push(Node::user_added(id, label, url));
+    }
+
+    /// Remove a user-added endpoint.
+    ///
+    /// Refuses a built-in: those come from the build, so "removing" one would
+    /// last until the next start and then quietly undo itself.
+    ///
+    /// Removing the active node hands the active slot to the first one left,
+    /// so the wallet is never pointed at something that is no longer there.
+    /// `true` when it was removed.
+    pub fn remove(&mut self, id: u32) -> bool {
+        let Some(index) = self
+            .nodes
+            .iter()
+            .position(|node| node.id == id && !node.builtin)
+        else {
+            return false;
+        };
+
+        self.nodes.remove(index);
+        if self.active == Some(id) {
+            self.active = self.nodes.first().map(|node| node.id);
+        }
+        true
     }
 
     pub fn requested(&self) -> Option<&Network> {
@@ -433,6 +524,98 @@ mod tests {
         // never the dangerous direction.
         assert!(manager.set_allow_mainnet_spend(false, ""));
         assert!(!manager.allow_mainnet_spend());
+    }
+
+    /// The check that stands between a user-added endpoint and every address
+    /// this wallet is about to ask about.
+    #[test]
+    fn a_url_that_would_leak_in_transit_is_refused() {
+        assert!(validate_url("https://api.verustest.net").is_ok());
+        // Loopback is allowed: there is no network to read it off.
+        assert!(validate_url("http://127.0.0.1:27486").is_ok());
+
+        // Plaintext to anything else would put every address the wallet asks
+        // about in front of whoever is on the path.
+        assert!(validate_url("http://api.verustest.net").is_err());
+        // And a scheme that is not HTTP at all.
+        assert!(validate_url("ftp://example.invalid").is_err());
+        assert!(validate_url("not a url").is_err());
+        assert!(validate_url("").is_err());
+    }
+
+    #[test]
+    fn a_user_added_node_can_be_removed_and_a_builtin_cannot() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "shipped", "https://builtin.invalid")],
+            Network::Testnet,
+        );
+        manager.add(1000, "mine", "https://mine.invalid");
+        assert_eq!(manager.nodes().len(), 2);
+
+        // A built-in comes from the build. "Removing" one would last until the
+        // next start and then undo itself.
+        assert!(!manager.remove(0));
+        assert_eq!(manager.nodes().len(), 2);
+
+        assert!(manager.remove(1000));
+        assert_eq!(manager.nodes().len(), 1);
+        // And removing something that was never there is not a removal.
+        assert!(!manager.remove(1000));
+    }
+
+    /// Removing whichever node is in use must not leave the wallet pointed at
+    /// an endpoint that is no longer configured.
+    #[test]
+    fn removing_the_active_node_moves_the_active_slot() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "shipped", "https://builtin.invalid")],
+            Network::Testnet,
+        );
+        manager.add(1000, "mine", "https://mine.invalid");
+        assert!(manager.set_active(1000));
+
+        assert!(manager.remove(1000));
+        assert_eq!(manager.active().map(|node| node.id), Some(0));
+    }
+
+    /// The active node is remembered by URL, because the id of a built-in is
+    /// its position in a compiled-in list and that position is not a promise.
+    #[test]
+    fn the_active_node_is_identified_by_its_url() {
+        let mut manager = NodeManager::new(
+            vec![
+                Node::builtin(0, "one", "https://one.invalid"),
+                Node::builtin(1, "two", "https://two.invalid"),
+            ],
+            Network::Testnet,
+        );
+
+        assert_eq!(manager.active_url(), Some("https://one.invalid"));
+        assert!(manager.set_active_by_url("https://two.invalid"));
+        assert_eq!(manager.active().map(|node| node.id), Some(1));
+
+        // A trailing slash is the same endpoint; an unknown one changes nothing.
+        assert!(manager.set_active_by_url("https://one.invalid/"));
+        assert_eq!(manager.active().map(|node| node.id), Some(0));
+        assert!(!manager.set_active_by_url("https://elsewhere.invalid"));
+        assert_eq!(manager.active().map(|node| node.id), Some(0));
+    }
+
+    #[test]
+    fn an_endpoint_that_is_already_configured_is_recognised() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "one", "https://one.invalid")],
+            Network::Testnet,
+        );
+        manager.add(1000, "mine", "https://mine.invalid/");
+
+        assert!(manager.has_url("https://one.invalid"));
+        assert!(manager.has_url("  https://one.invalid/  "));
+        assert!(manager.has_url("https://mine.invalid"));
+        assert!(!manager.has_url("https://other.invalid"));
+        // A path is not case-insensitive, and pretending otherwise would be
+        // this wallet inventing a fact about somebody's server.
+        assert!(!manager.has_url("https://one.invalid/API"));
     }
 
     #[test]

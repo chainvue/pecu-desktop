@@ -26,7 +26,7 @@ pub mod node;
 pub mod permit;
 
 pub use network::Network;
-pub use node::{backoff, connect, probe, Client, Node, NodeManager, NodeStatus};
+pub use node::{backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus};
 pub use permit::{SpendPermit, SpendRefused};
 
 use verus_sdk::money::Amount;

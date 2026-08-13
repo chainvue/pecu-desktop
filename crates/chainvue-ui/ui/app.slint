@@ -173,6 +173,18 @@ export global NetworkState {
     // but a balance read against a stale tip is wrong in a way that only shows
     // up when a transaction is rejected.
     in property <bool> syncing: false;
+    // Why the last node the user tried was refused. Shown on the network
+    // screen, because that is where the button they pressed is — a refusal that
+    // appears somewhere else is indistinguishable from nothing happening.
+    in-out property <string> problem: "";
+    // What is in the add-a-node form.
+    //
+    // Held here rather than inside the form so that Rust can clear it when the
+    // node is actually accepted — and, more to the point, so that it is NOT
+    // cleared when the node is refused. A rejected address that vanishes from
+    // the field takes with it the only copy of what the person typed.
+    in-out property <string> draft-url: "";
+    in-out property <string> draft-label: "";
 }
 
 export global AppInfo {
@@ -240,6 +252,10 @@ export global Actions {
     callback refresh();
     callback probe-nodes();
     callback select-node(int);
+    // Label then URL. The URL is checked in the core, by the SDK's own
+    // transport — which is what refuses plaintext to anything but loopback.
+    callback add-node(string, string);
+    callback remove-node(int);
     callback toggle-theme();
 }
 
@@ -258,6 +274,10 @@ component Field inherits Rectangle {
     // typing it is by definition its owner.
     in property <bool> multiline: false;
     in property <bool> mono: false;
+    // Shown only while the field is empty. An example of the shape expected,
+    // never a label — a placeholder that stands in for a label disappears
+    // exactly when someone starts typing and needs it most.
+    in property <string> placeholder: "";
     in-out property <string> text <=> input.text;
     callback accepted();
     callback edited();
@@ -271,6 +291,20 @@ component Field inherits Rectangle {
         : input.has-focus ? Theme.accent
         : Theme.border-default;
     animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+    // Behind the input, and non-interactive: it must never intercept a click
+    // aimed at the field it is sitting in.
+    if root.placeholder != "" && input.text == "": Text {
+        text: root.placeholder;
+        font-family: root.mono ? Typo.mono : "";
+        font-size: Typo.body;
+        color: Theme.text-disabled;
+        x: Sp.s5;
+        width: parent.width - Sp.s5 * 2;
+        height: parent.height;
+        vertical-alignment: root.multiline ? top : center;
+        overflow: elide;
+    }
 
     input := TextInput {
         // Never rendered as glyphs, and never logged.
@@ -850,6 +884,88 @@ component DashboardScreen inherits VerticalLayout {
     Rectangle { vertical-stretch: 1; }
 }
 
+// Configuring an endpoint of your own.
+//
+// Its own component because its two inputs have to be readable from one place —
+// an input declared inside an `if` cannot be reached from outside it — and
+// because the form has to be able to clear itself once the node is accepted.
+component AddNodeForm inherits VerticalLayout {
+    spacing: Sp.s4;
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Sp.s3;
+            Text {
+                text: "Address";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+            }
+            url := Field {
+                mono: true;
+                placeholder: "https://my-node.example:27486";
+                text <=> NetworkState.draft-url;
+                accepted => { root.submit(); }
+                edited => { NetworkState.problem = ""; }
+            }
+        }
+
+        VerticalLayout {
+            width: 200px;
+            spacing: Sp.s3;
+            Text {
+                text: "Name (optional)";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+            }
+            name := Field {
+                placeholder: "my node";
+                text <=> NetworkState.draft-label;
+                accepted => { root.submit(); }
+            }
+        }
+    }
+
+    if NetworkState.problem != "": Text {
+        text: NetworkState.problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        wrap: word-wrap;
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s5;
+        Text {
+            horizontal-stretch: 1;
+            // The one sentence worth having here. Someone typing an address in
+            // is about to be told "no" by a rule they cannot see otherwise.
+            text: "ChainVue only talks to encrypted endpoints, so an https:// address is required unless the node is on this machine. It never sends a key to a node.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+        Btn {
+            text: "Add node";
+            variant: "primary";
+            enabled: url.text != "";
+            y: (parent.height - self.height) / 2;
+            clicked => { root.submit(); }
+        }
+    }
+
+    // The fields are NOT cleared here. Rust clears them once the node has
+    // actually been accepted — so a refused address is still on screen to be
+    // corrected rather than retyped from memory.
+    function submit() {
+        if (url.text == "") { return; }
+        NetworkState.problem = "";
+        Actions.add-node(name.text, url.text);
+    }
+}
+
 component NodesScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -912,6 +1028,24 @@ component NodesScreen inherits VerticalLayout {
                         font-size: Typo.caption;
                         color: Theme.warning;
                         vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // Which chain this node says it is on. Never derived from
+                    // the URL — a hostname containing "test" proves nothing.
+                    if node.network != "": Text {
+                        text: node.network;
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+
+                    if node.tip != "": Text {
+                        text: node.tip;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
                     }
 
                     if node.latency != "": Text {
@@ -922,12 +1056,53 @@ component NodesScreen inherits VerticalLayout {
                         vertical-alignment: center;
                     }
 
+                    // The status word, not the chain name. Colour is never the
+                    // only signal that a node is reachable — a green dot beside
+                    // "Testnet" says which chain and nothing at all about
+                    // whether it answered.
+                    //
+                    // Fixed width so the pills line up down the column. Every
+                    // item before this one is optional, so without it each row
+                    // ends wherever its own content happens to run out.
                     StatusPill {
+                        width: 88px;
                         state: node.status;
-                        text: node.network == "" ? node.status : node.network;
+                        text: node.status;
                         y: (parent.height - self.height) / 2;
                     }
+
+                    // The slot is always here; the button is not. Reserving the
+                    // space keeps the status column straight whether or not the
+                    // row can be removed — and a column that shifts by a button
+                    // width is the sort of thing that reads as unfinished
+                    // without anyone being able to say why.
+                    Rectangle {
+                        width: 96px;
+
+                        // Only what the user added. A built-in comes from the
+                        // build, so removing one would last until the next
+                        // start and then quietly undo itself — the core refuses
+                        // it, and offering a button that cannot work is worse
+                        // than not offering one.
+                        if !node.builtin: Btn {
+                            text: "Remove";
+                            x: parent.width - self.width;
+                            y: (parent.height - self.height) / 2;
+                            clicked => { Actions.remove-node(node.id); }
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow { text: "ADD A NODE"; }
+        Card {
+            VerticalLayout {
+                padding: Sp.card-pad;
+                AddNodeForm {}
             }
         }
     }

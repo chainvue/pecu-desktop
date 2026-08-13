@@ -311,6 +311,51 @@ fn masked(count: i32) -> Vec<SeedWord> {
         .collect()
 }
 
+/// The network screen with nodes that have actually been asked something.
+///
+/// The default fixture leaves every node at "unknown", which is true for about
+/// two seconds after launch and hides everything this screen is for: the status
+/// column, the latency, and the Remove button that only a user-added endpoint
+/// gets. All three are laid out here at once, because a row that looks right
+/// alone can still collide with the one beside it.
+pub fn network(ui: &AppWindow) {
+    unlocked(ui);
+
+    let nodes = vec![
+        NodeRow {
+            status: "online".into(),
+            network: "Testnet".into(),
+            tip: "1 187 500".into(),
+            latency: "84 ms".into(),
+            ..node(0, "VRSCTEST (public)", "https://api.verustest.net", true)
+        },
+        NodeRow {
+            // Answering perfectly about the wrong chain. Degraded, not online —
+            // and the note is what says which, since the colour alone cannot.
+            status: "degraded".into(),
+            network: "Mainnet".into(),
+            tip: "3 402 118".into(),
+            latency: "132 ms".into(),
+            note: "this node is on Mainnet".into(),
+            ..node(1, "VRSC (public)", "https://api.verus.services", false)
+        },
+        NodeRow {
+            builtin: false,
+            status: "offline".into(),
+            note: "connection refused".into(),
+            ..node(1000, "my node", "https://my-node.example:27486", false)
+        },
+    ];
+
+    let net = ui.global::<NetworkState>();
+    net.set_nodes(ModelRc::from(Rc::new(VecModel::from(nodes))));
+    net.set_effective("Testnet".into());
+    // The footer reads its height from here, not from the active row, so
+    // without this the picture says "no block height" beside an online node.
+    net.set_tip("1 187 500".into());
+    net.set_latency("84 ms".into());
+}
+
 fn nodes(ui: &AppWindow) {
     // The real binary shows the pinned SDK revision here. Leaving the fixture
     // blank rendered "sdk unknown", which is a difference between the snapshot
