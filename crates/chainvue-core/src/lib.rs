@@ -464,6 +464,34 @@ impl Core {
             return;
         }
 
+        // The node has to be on the chain this wallet is for.
+        //
+        // # Why reading needs a guard and not only spending
+        //
+        // The spend permit has always required `requested == effective`, on the
+        // reasoning that only signing needs the distinction — reading a balance
+        // on another chain was thought harmless.
+        //
+        // It is not. These addresses exist on this chain; on another they are
+        // simply absent, so the node answers honestly with nothing and the
+        // wallet renders that as YOUR BALANCE. A real session ran for eight
+        // minutes against a node the wallet had itself marked `WrongNetwork`,
+        // reading VRSCTEST addresses against a PBaaS chain, and every refresh
+        // failed while a cached list sat on screen looking current.
+        //
+        // Zero is a claim about somebody's money. It is not one to make from a
+        // node that was never asked about this chain.
+        if let Some(wrong) = self.reading_the_wrong_chain() {
+            self.notice_warning(
+                "wrong_chain",
+                &format!("This node is on {wrong}, not {}", self.requested_name()),
+                "ChainVue is not reading balances from it. The addresses in this wallet do not \
+                 exist on that chain, so anything it reported would be a figure about somebody \
+                 else's — or about nothing at all. Choose a node on the right chain.",
+            );
+            return;
+        }
+
         let addresses: Vec<String> = self
             .wallet
             .view()
@@ -488,6 +516,23 @@ impl Core {
             move || Work::Portfolio(Box::new(portfolio::read(&chain, &addresses, cached))),
             self.work.clone(),
         );
+    }
+
+    /// The chain the active node reports, when it is not the one asked for.
+    ///
+    /// `None` while no node has answered yet: not knowing is not the same as
+    /// disagreeing, and refusing to read before the first probe would leave a
+    /// cold start blank for no reason.
+    fn reading_the_wrong_chain(&self) -> Option<String> {
+        let reported = self.nodes.active()?.network.as_ref()?;
+        let requested = self.nodes.requested()?;
+        (reported != requested).then(|| reported.to_string())
+    }
+
+    fn requested_name(&self) -> String {
+        self.nodes
+            .requested()
+            .map_or_else(|| "the requested chain".to_string(), ToString::to_string)
     }
 
     fn finish_work(&mut self, work: Work) {
@@ -3019,6 +3064,59 @@ mod tests {
             payment_summary(2, Some(now - 90_000), now),
             "2 payments · last yesterday",
         );
+    }
+
+    /// Reading from a node on another chain is refused.
+    ///
+    /// Found the hard way: a real session spent eight minutes reading VRSCTEST
+    /// addresses against a PBaaS node the wallet had itself marked
+    /// `WrongNetwork`, while a cached list sat on screen looking current. The
+    /// spend permit had always required agreement about the chain; reading had
+    /// not, on the reasoning that a balance from elsewhere is harmless. It is
+    /// not — these addresses do not exist over there, so the node answers
+    /// honestly with nothing and the wallet renders that as your balance.
+    #[tokio::test]
+    async fn a_node_on_another_chain_is_not_read_from() {
+        use chainvue_chain::NodeStatus;
+
+        let mut nodes = NodeManager::new(
+            vec![Node::builtin(0, "one", "https://example.invalid")],
+            Network::Testnet,
+        );
+
+        // Nothing has answered yet: not knowing is not disagreeing, and a cold
+        // start must not refuse to read.
+        assert!(reading_refused(&nodes).is_none());
+
+        if let Some(node) = nodes.get_mut(0) {
+            node.status = NodeStatus::Online;
+            node.network = Some(Network::Testnet);
+        }
+        assert!(
+            reading_refused(&nodes).is_none(),
+            "a node on the requested chain was refused",
+        );
+
+        if let Some(node) = nodes.get_mut(0) {
+            node.network = Some(Network::Other("CHIPS".to_string()));
+        }
+        assert_eq!(reading_refused(&nodes).as_deref(), Some("CHIPS"));
+
+        // Mainnet against a testnet wallet is the same refusal, and the one
+        // that would matter most.
+        if let Some(node) = nodes.get_mut(0) {
+            node.network = Some(Network::Mainnet);
+        }
+        assert_eq!(reading_refused(&nodes).as_deref(), Some("Mainnet"));
+    }
+
+    /// The same decision `Core::reading_the_wrong_chain` makes, over a manager
+    /// a test can arrange — the core itself is only reachable through the
+    /// actor, and this is the rule rather than the plumbing.
+    fn reading_refused(nodes: &NodeManager) -> Option<String> {
+        let reported = nodes.active()?.network.as_ref()?;
+        let requested = nodes.requested()?;
+        (reported != requested).then(|| reported.to_string())
     }
 
     /// The anchor the whole chart hangs from.

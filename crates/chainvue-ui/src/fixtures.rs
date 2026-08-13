@@ -162,6 +162,39 @@ pub fn young_wallet(ui: &AppWindow) {
     crate::chart::seed(ui, &points, true, "VRSCTEST", now);
 }
 
+/// The dashboard with the wallet complaining.
+///
+/// Two at once, and one of them repeated, because that is the shape a real
+/// session produced: a refusal that happens once and a refresh that fails every
+/// fifteen seconds. The second is why these are counted rather than stacked.
+pub fn complaining(ui: &AppWindow) {
+    use chainvue_protocol::{Severity, UiError};
+
+    funded(ui);
+    crate::toast::install(ui);
+
+    crate::toast::show(
+        ui,
+        &UiError::simple(
+            "spend_refused",
+            "This node is on Mainnet, not Testnet",
+            "ChainVue will not sign against a chain you did not choose.",
+            Severity::Danger,
+        ),
+    );
+    for _ in 0..7 {
+        crate::toast::show(
+            ui,
+            &UiError::simple(
+                "history",
+                "Could not read this wallet\'s activity",
+                "The balance is still current. Only the transaction list failed to load.",
+                Severity::Warning,
+            ),
+        );
+    }
+}
+
 /// The dashboard with a payment whose fate is unknown.
 ///
 /// The state that is hardest to get right and rarest to see, which is exactly

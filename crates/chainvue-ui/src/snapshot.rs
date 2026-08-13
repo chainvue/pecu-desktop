@@ -156,6 +156,7 @@ pub const CASES: &[Case] = &[
     ("dashboard", "backup-phrase", crate::fixtures::backup_phrase),
     ("dashboard", "backup-verify", crate::fixtures::backup_verify),
     ("dashboard", "unconfirmed", crate::fixtures::unconfirmed),
+    ("dashboard", "toasts", crate::fixtures::complaining),
     ("activity", "activity", crate::fixtures::funded),
     ("activity", "tx-detail", crate::fixtures::tx_detail),
     ("send", "send-form", crate::fixtures::sending),

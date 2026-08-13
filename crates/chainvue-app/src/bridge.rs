@@ -76,6 +76,10 @@ fn apply(ui: &AppWindow, event: Event) {
             // Core drops the phrase on lock. The screen goes with it, and the
             // words it was holding are overwritten rather than merely hidden.
             seed::close(ui);
+            // And whatever the wallet was complaining about belonged to a
+            // session that has ended. Leaving it over the unlock form would be
+            // shouting at whoever turns up next.
+            chainvue_ui::toast::clear(ui);
         }
 
         // A backup has started: how many words there will be, and which of them
@@ -200,26 +204,49 @@ fn apply_notice(ui: &AppWindow, error: chainvue_protocol::UiError) {
             network.set_draft_label(SharedString::new());
         }
 
+        // ── Inline, next to the control that caused it ──────────────────
+        //
+        // These four have a form on screen with a field to correct, and a
+        // message beside that field beats one in the corner. Everything else
+        // falls through to a toast.
         "add_node" | "node_connect" => {
             tracing::warn!(code = error.code, title = %error.title, "notice");
             network.set_problem(error.title.into());
         }
 
-        // Beside the key list, where the button that caused it is. The forms
-        // stay open and keep what was typed — see `close_finished_key_forms`.
         "add_key" | "rename_key" => {
             tracing::warn!(code = error.code, title = %error.title, "notice");
             ui.global::<WalletState>()
                 .set_key_problem(error.title.into());
         }
 
-        _ => {
+        // ── The unlock and restore forms ────────────────────────────────
+        //
+        // These happen while the shell is not on screen, so a toast would be
+        // rendered over an onboarding screen that has a better place for it.
+        "unlock" | "import_key" | "wallet_create" => {
             tracing::warn!(code = error.code, title = %error.title, "notice");
-            // Until a toast host exists, an onboarding failure at least has to
-            // appear on the screen it came from.
             let state = ui.global::<WalletState>();
             state.set_busy(false);
             state.set_problem(error.title.into());
+        }
+
+        // The passphrase re-prompt on the backup screen.
+        "reveal_backup" => {
+            tracing::warn!(code = error.code, title = %error.title, "notice");
+            ui.global::<SeedState>().set_problem(error.title.into());
+        }
+
+        // ── Everything else ─────────────────────────────────────────────
+        //
+        // Which used to mean "nowhere". A refused spend, a payment that could
+        // not be recorded, a history that would not load, a node failover — all
+        // of them landed on a property rendered only by the unlock form, so
+        // while the wallet was open they happened in silence.
+        _ => {
+            tracing::warn!(code = error.code, title = %error.title, "notice");
+            ui.global::<WalletState>().set_busy(false);
+            chainvue_ui::toast::show(ui, &error);
         }
     }
 }

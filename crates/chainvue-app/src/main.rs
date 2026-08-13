@@ -89,6 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_log_path(log_dir().display().to_string().into());
 
     chainvue_ui::chart::install(&ui);
+    chainvue_ui::toast::install(&ui);
     wire_actions(&ui, dispatcher.clone());
     bridge::pump(runtime.handle(), ui.as_weak(), events);
 
