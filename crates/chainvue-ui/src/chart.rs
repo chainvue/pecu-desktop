@@ -21,7 +21,9 @@
 
 use std::cell::RefCell;
 
-use chainvue_chart::{Plot, Point, Range, Viewport};
+pub use chainvue_chart::Range;
+
+use chainvue_chart::{Plot, Point, Viewport};
 use chainvue_protocol::ChartVm;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
@@ -176,13 +178,22 @@ pub fn install(ui: &AppWindow) {
 ///
 /// Not `#[cfg(test)]`: `examples/render_shots.rs` and `tests/visual.rs` are
 /// both outside this crate's test build, and they are the two callers.
-pub fn seed(ui: &AppWindow, points: &[Point], covers: i64, complete: bool, ticker: &str, now: i64) {
+pub fn seed(
+    ui: &AppWindow,
+    points: &[Point],
+    covers: i64,
+    complete: bool,
+    ticker: &str,
+    now: i64,
+    range: Range,
+) {
     CHART.with_borrow_mut(|chart| {
         chart.series = points.to_vec();
         chart.covers = covers;
         chart.complete = complete;
         chart.ticker = ticker.to_string();
         chart.pinned_now = Some(now);
+        chart.range = range;
         chart.generation = chart.generation.wrapping_add(1);
     });
     clear_cursor(ui);
@@ -233,7 +244,7 @@ fn refresh(ui: &AppWindow) {
         // drawn rather than from a slightly different set.
         let now = chart.pinned_now.unwrap_or_else(now);
         let windowed = match chart.range.seconds() {
-            Some(seconds) => chainvue_chart::since(&chart.series, now, seconds),
+            Some(seconds) => chainvue_chart::since(&chart.series, now, seconds, chart.complete),
             None => chart.series.clone(),
         };
         let thinned = chainvue_chart::downsample(&windowed, chainvue_chart::MAX_POINTS);
@@ -290,7 +301,8 @@ fn plot_at(width: f32, height: f32) -> Option<Plot> {
         if !fresh {
             let view = Viewport::new(width, height);
             let now = chart.pinned_now.unwrap_or_else(now);
-            chart.plot = chainvue_chart::build(&chart.series, now, chart.range, &view);
+            chart.plot =
+                chainvue_chart::build(&chart.series, now, chart.range, chart.complete, &view);
             chart.plotted_for = (width, height);
             chart.plotted_generation = chart.generation;
         }
@@ -376,10 +388,13 @@ fn caption(chart: &Chart, readings: usize) -> SharedString {
     }
 }
 
-/// Put the crosshair on the sample nearest `x`.
+/// Put the crosshair where the pointer is, on the step it is standing on.
 ///
-/// On the **sample**, not under the pointer: a dot floating between two
-/// readings points at a balance that was never held.
+/// Follows the pointer in x rather than snapping to a reading. Between two
+/// readings a balance is not estimated — it was exactly that from one
+/// transaction until the next — so the dot riding the step reports a figure
+/// that is as exact as the reading itself, and the cursor stops jumping to the
+/// last transaction however far right somebody points.
 fn cursor(ui: &AppWindow, x: f32) {
     let state = ui.global::<ChartState>();
 
@@ -388,13 +403,18 @@ fn cursor(ui: &AppWindow, x: f32) {
         if plot.xs.is_empty() {
             return None;
         }
-        let index = chainvue_chart::index_at(&plot.xs, x);
+
+        // Clamped to the plot area: a dot outside it points at a time the axis
+        // does not cover.
+        let x = x.clamp(plot.pad_left, plot.pad_left + plot.plot_width);
+        let index = chainvue_chart::step_at(&plot.xs, x);
+
         Some((
             index,
-            *plot.xs.get(index)?,
+            x,
             *plot.ys.get(index)?,
             *plot.values.get(index)?,
-            *plot.times.get(index)?,
+            chainvue_chart::time_at(plot, x),
         ))
     });
 

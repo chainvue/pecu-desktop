@@ -128,6 +128,48 @@ fn key(label: &str, address: &str, origin: &str, backed_up: bool, active: bool) 
     }
 }
 
+/// A wallet somebody started using this morning, on a year's axis.
+///
+/// The shape that exposed the bug this exists to catch: four movements inside
+/// one hour, nine hours ago, and a scan that has reached the start of the
+/// chain. Every range button used to draw the same picture, because the axis
+/// was derived from the readings — and the same four readings are inside every
+/// window. Here the year is a year: nothing for fifty-one weeks, then a rise in
+/// the last sliver.
+pub fn young_wallet(ui: &AppWindow) {
+    const HOUR: i64 = 3_600;
+    let now = 1_770_000_000;
+
+    funded(ui);
+
+    let points: Vec<chainvue_chart::Point> = [
+        (9 * HOUR, 0_i64),
+        (9 * HOUR - 60, 5_000_000_000),
+        (8 * HOUR - 600, 4_889_990_000),
+        (8 * HOUR, 5_389_990_000),
+        (0, 5_389_990_000),
+    ]
+    .iter()
+    .map(|(ago, sats)| chainvue_chart::Point {
+        t: now - ago,
+        value: *sats,
+    })
+    .collect();
+
+    // `complete`: the scan reached the chain start, so the balance before the
+    // first transaction is known and the window may honestly be drawn back to
+    // its own start.
+    crate::chart::seed(
+        ui,
+        &points,
+        9 * HOUR,
+        true,
+        "VRSCTEST",
+        now,
+        crate::chart::Range::Year,
+    );
+}
+
 /// The dashboard with a payment whose fate is unknown.
 ///
 /// The state that is hardest to get right and rarest to see, which is exactly
@@ -398,7 +440,15 @@ fn balance_history(ui: &AppWindow) {
         })
         .collect();
 
-    crate::chart::seed(ui, &points, 90 * DAY, false, "VRSCTEST", now);
+    crate::chart::seed(
+        ui,
+        &points,
+        90 * DAY,
+        false,
+        "VRSCTEST",
+        now,
+        crate::chart::Range::All,
+    );
 }
 
 fn dated(direction: &str, amount: &str, when: &str, group: &str, height: i32) -> ActivityRow {

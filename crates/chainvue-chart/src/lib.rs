@@ -35,7 +35,7 @@ pub mod plot;
 pub mod series;
 
 pub use lttb::downsample;
-pub use plot::{index_at, plot, Plot, Viewport};
+pub use plot::{plot, step_at, time_at, Plot, Viewport};
 pub use series::{from_deltas, since, span, Point};
 
 /// The most points worth drawing.
@@ -106,13 +106,30 @@ impl Range {
 /// One function so the order cannot be got wrong: window first, then thin, then
 /// plot. Thinning before windowing would spend the budget of 240 points on
 /// history the window is about to throw away.
-pub fn build(points: &[Point], now: i64, range: Range, view: &Viewport) -> Option<Plot> {
+pub fn build(
+    points: &[Point],
+    now: i64,
+    range: Range,
+    complete: bool,
+    view: &Viewport,
+) -> Option<Plot> {
+    // The window the axis covers, which is the range that was asked for —
+    // **not** whatever the data happens to span. Deriving it from the data is
+    // why every range button drew the same picture on a wallet whose entire
+    // history is nine hours old: the same five readings are inside every
+    // window, so the axis came out nine hours wide whichever button was
+    // pressed.
+    let window = match range.seconds() {
+        Some(seconds) => (now.saturating_sub(seconds), now),
+        None => (points.first().map_or(now, |first| first.t), now),
+    };
+
     let windowed = match range.seconds() {
-        Some(seconds) => series::since(points, now, seconds),
+        Some(seconds) => series::since(points, now, seconds, complete),
         None => points.to_vec(),
     };
     let thinned = downsample(&windowed, MAX_POINTS);
-    plot(&thinned, view, CORNER)
+    plot(&thinned, view, CORNER, window)
 }
 
 #[cfg(test)]
@@ -143,7 +160,14 @@ mod tests {
             .collect();
         let now = 365 * 86_400;
 
-        let week = build(&points, now, Range::Week, &Viewport::new(400.0, 200.0)).expect("plot");
+        let week = build(
+            &points,
+            now,
+            Range::Week,
+            true,
+            &Viewport::new(400.0, 200.0),
+        )
+        .expect("plot");
         // Seven days of readings all survive: the window cut it down long
         // before the downsampler had anything to do.
         assert!(week.values.len() >= 7, "{}", week.values.len());
@@ -151,6 +175,60 @@ mod tests {
             week.high - week.low < 1_000,
             "a week's range covered a year's worth of movement",
         );
+    }
+
+    /// The failure this whole window rework exists for: a wallet whose entire
+    /// history is nine hours old drew an identical picture for every range
+    /// button, because the axis was derived from the data and the same five
+    /// readings are inside every window.
+    #[test]
+    fn a_wider_range_draws_a_wider_axis() {
+        const HOUR: i64 = 3_600;
+        let now = 1_800_000_000;
+
+        // Four movements inside one hour, nine hours ago — the shape of a
+        // wallet somebody has just started using.
+        let points = vec![
+            Point {
+                t: now - 9 * HOUR,
+                value: 0,
+            },
+            Point {
+                t: now - 9 * HOUR + 60,
+                value: 5_000_000_000,
+            },
+            Point {
+                t: now - 8 * HOUR,
+                value: 5_389_990_000,
+            },
+            Point {
+                t: now,
+                value: 5_389_990_000,
+            },
+        ];
+        let view = Viewport::new(800.0, 200.0);
+
+        let week = build(&points, now, Range::Week, true, &view).expect("a week");
+        let year = build(&points, now, Range::Year, true, &view).expect("a year");
+
+        assert_eq!(week.span, (now - 7 * 86_400, now));
+        assert_eq!(year.span, (now - 365 * 86_400, now));
+        assert_ne!(
+            week.line, year.line,
+            "every range button drew the same picture",
+        );
+
+        // On the year's axis nine hours is a sliver at the right, so the rise
+        // happens in the last fraction of a percent of the width.
+        let rise = year.xs.get(1).copied().unwrap_or_default();
+        assert!(
+            rise > view.plot_width() * 0.99,
+            "a nine-hour history did not sit at the right-hand end of a year",
+        );
+
+        // And the year starts at nothing, because the scan reached the chain
+        // start and the balance before the first transaction is known.
+        assert_eq!(year.values.first().copied(), Some(0));
     }
 
     #[test]
@@ -165,6 +243,7 @@ mod tests {
             &points,
             5_000 * 60,
             Range::All,
+            true,
             &Viewport::new(800.0, 240.0),
         )
         .expect("plot");

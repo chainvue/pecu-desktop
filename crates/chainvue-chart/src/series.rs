@@ -74,11 +74,25 @@ pub fn from_deltas(now: i64, balance_now: i64, deltas: &[(i64, i64)]) -> Vec<Poi
 /// opened rather than at the first transaction inside it. Without that, a
 /// month with one transaction in it would draw a line starting on the day of
 /// that transaction and say nothing about the three weeks before.
-pub fn since(points: &[Point], now: i64, seconds: i64) -> Vec<Point> {
+///
+/// # `extend`: what to do when the window reaches further back than the wallet
+///
+/// Set it when the scan has reached the start of the chain. Then the earliest
+/// reading is the balance before this wallet's first transaction — a real
+/// figure, usually zero — and the window can honestly be drawn back to its own
+/// start at that value. A year's axis on a nine-hour-old wallet then shows a
+/// year of nothing and a rise at the right, which is exactly what happened.
+///
+/// Leave it clear when the scan has not reached the start. The wallet then does
+/// not know what was held before its earliest reading, and drawing a flat run
+/// back to the window's edge would be inventing one — the interface refuses
+/// those ranges for the same reason.
+pub fn since(points: &[Point], now: i64, seconds: i64, extend: bool) -> Vec<Point> {
     let cutoff = now.saturating_sub(seconds);
 
     let first_inside = points.iter().position(|point| point.t >= cutoff);
     let Some(first_inside) = first_inside else {
+        let _ = extend;
         // Everything is older than the window. The balance has not moved
         // inside it, so the window is one flat line at what it is now.
         return match points.last() {
@@ -102,6 +116,15 @@ pub fn since(points: &[Point], now: i64, seconds: i64) -> Vec<Point> {
             t: cutoff,
             value: before.value,
         });
+    } else if extend {
+        // The window opens before anything this wallet has ever done, and the
+        // scan reached the chain start — so what was held then is known.
+        if let Some(first) = points.first().filter(|first| first.t > cutoff) {
+            kept.push(Point {
+                t: cutoff,
+                value: first.value,
+            });
+        }
     }
     kept.extend_from_slice(&points[first_inside..]);
     kept
@@ -200,11 +223,41 @@ mod tests {
         ];
         // A window covering the last 750 seconds: only the t=900 point is
         // inside it, but the balance at the edge was 20.
-        let kept = since(&points, 1_000, 750);
+        let kept = since(&points, 1_000, 750, false);
 
         assert_eq!(kept[0], Point { t: 250, value: 20 });
         assert_eq!(kept[1], Point { t: 900, value: 30 });
         assert_eq!(kept.len(), 2);
+    }
+
+    /// A window wider than the wallet's whole history, on a wallet whose whole
+    /// history is known. The balance before the first transaction is a real
+    /// figure, so the window can be drawn back to its own start at that value —
+    /// which is what makes 1Y look different from 1W.
+    #[test]
+    fn a_complete_history_can_be_drawn_back_to_the_window_s_start() {
+        let points = vec![
+            Point { t: 9_000, value: 0 },
+            Point {
+                t: 9_100,
+                value: 500,
+            },
+            Point {
+                t: 10_000,
+                value: 500,
+            },
+        ];
+
+        // A window reaching back to t=0, on a wallet whose earliest reading is
+        // t=9000. Extended: the line starts at the window's edge, at nothing.
+        let kept = since(&points, 10_000, 10_000, true);
+        assert_eq!(kept.first().copied(), Some(Point { t: 0, value: 0 }));
+        assert_eq!(kept.len(), 4);
+
+        // Not extended, because the scan has not reached the chain start and
+        // nobody knows what was held at t=0. The series is left alone.
+        let kept = since(&points, 10_000, 10_000, false);
+        assert_eq!(kept, points);
     }
 
     /// A quiet month is still a month. It draws as a flat line at what the
@@ -212,7 +265,7 @@ mod tests {
     #[test]
     fn a_window_with_nothing_in_it_is_flat_rather_than_empty() {
         let points = vec![Point { t: 100, value: 42 }];
-        let kept = since(&points, 100_000, 1_000);
+        let kept = since(&points, 100_000, 1_000, false);
 
         assert_eq!(kept.len(), 2);
         assert!(kept.iter().all(|point| point.value == 42));

@@ -32,14 +32,18 @@ impl Viewport {
         Self {
             width,
             height,
-            pad_left: 0.0,
+            // Not zero. The first reading is usually a riser — the balance
+            // going from nothing to something — and at zero it sits exactly on
+            // the boundary with half its stroke outside, which reads as a chart
+            // that has been cut off rather than one that starts there.
+            pad_left: 3.0,
             pad_right: 8.0,
             pad_top: 10.0,
             pad_bottom: 10.0,
         }
     }
 
-    fn plot_width(&self) -> f32 {
+    pub fn plot_width(&self) -> f32 {
         (self.width - self.pad_left - self.pad_right).max(1.0)
     }
 
@@ -71,6 +75,18 @@ pub struct Plot {
     /// The range the y axis covers, in satoshis.
     pub low: i64,
     pub high: i64,
+    /// The window the x axis covers, in unix seconds.
+    ///
+    /// Explicit rather than derived from the data, and that is the whole
+    /// difference between a range control that works and one that does not: a
+    /// wallet whose entire history is nine hours old has the same five readings
+    /// in every window, so an axis derived from them draws exactly the same
+    /// picture for 1W, 1M, 1Y and ALL.
+    pub span: (i64, i64),
+    /// Where the plot area starts and how wide it is, so a pointer position can
+    /// be turned back into a time.
+    pub pad_left: f32,
+    pub plot_width: f32,
     /// The balance never moved across this window.
     ///
     /// The chart draws a flat line and **suppresses the gradient**: a fill that
@@ -102,19 +118,19 @@ pub struct Plot {
 /// Not to position in the list. Spacing points evenly would make the axis
 /// "transaction number", and a month with three payments in its first day would
 /// then draw them across the whole width. The hover lookup pays for this with
-/// [`index_at`] instead of arithmetic in the interface, which is a fair trade
+/// [`step_at`] instead of arithmetic in the interface, which is a fair trade
 /// for an axis that means what it says.
 ///
 /// `None` when there is nothing to draw.
-pub fn plot(points: &[Point], view: &Viewport, corner: f32) -> Option<Plot> {
+pub fn plot(points: &[Point], view: &Viewport, corner: f32, window: (i64, i64)) -> Option<Plot> {
     if points.len() < 2 {
-        return single(points, view);
+        return single(points, view, window);
     }
 
-    let (first, last) = (points.first()?, points.last()?);
-    let span = last.t.saturating_sub(first.t);
+    let (start, end) = window;
+    let span = end.saturating_sub(start);
     if span <= 0 {
-        return single(&points[points.len() - 1..], view);
+        return single(&points[points.len() - 1..], view, window);
     }
 
     let low = points.iter().map(|point| point.value).min()?;
@@ -127,7 +143,7 @@ pub fn plot(points: &[Point], view: &Viewport, corner: f32) -> Option<Plot> {
             // The only place a time becomes a float, and it becomes one as a
             // fraction of the span rather than as a timestamp — an i64 of
             // seconds since 1970 does not survive an f32.
-            let fraction = ratio(point.t.saturating_sub(first.t), span);
+            let fraction = ratio(point.t.saturating_sub(start), span);
             view.pad_left + fraction * view.plot_width()
         })
         .collect();
@@ -159,12 +175,15 @@ pub fn plot(points: &[Point], view: &Viewport, corner: f32) -> Option<Plot> {
         low,
         high,
         flat,
+        span: window,
+        pad_left: view.pad_left,
+        plot_width: view.plot_width(),
     })
 }
 
 /// One reading, or several at the same instant: a flat line with the gradient
 /// suppressed. A gradient under a horizontal line looks like a rendering fault.
-fn single(points: &[Point], view: &Viewport) -> Option<Plot> {
+fn single(points: &[Point], view: &Viewport, window: (i64, i64)) -> Option<Plot> {
     let point = points.last()?;
     let y = view.pad_top + view.plot_height() / 2.0;
     let (left, right) = (view.pad_left, view.pad_left + view.plot_width());
@@ -180,6 +199,9 @@ fn single(points: &[Point], view: &Viewport) -> Option<Plot> {
         low: point.value,
         high: point.value,
         flat: true,
+        span: window,
+        pad_left: view.pad_left,
+        plot_width: view.plot_width(),
     })
 }
 
@@ -265,29 +287,67 @@ fn ratio(part: i64, whole: i64) -> f32 {
     (fraction.clamp(0.0, 1.0)) as f32
 }
 
-/// The sample nearest a pointer position.
+/// The reading that governs the balance at `x`.
 ///
-/// The crosshair sits on a **sample**, not under the cursor: a dot that floats
-/// between two readings is pointing at a balance that was never held. Because x
-/// is proportional to time rather than to position in the list, this is a
-/// search rather than a division — which is the price of an axis that means
-/// what it says, and it is one comparison per visible point.
-pub fn index_at(xs: &[f32], x: f32) -> usize {
-    let mut best = 0;
-    let mut best_distance = f32::INFINITY;
+/// The **last** reading at or before the pointer, not the nearest one.
+///
+/// # Why this changed
+///
+/// It used to snap to the nearest reading, on the reasoning that a dot floating
+/// between two of them points at a balance nobody held. That is true of an
+/// interpolated curve and false of a staircase: between two readings a balance
+/// is not estimated, it is *known* — it was exactly that from one transaction
+/// until the next. Snapping protected against nothing and made the cursor
+/// useless, because a wallet with a quiet week has one reading at the start of
+/// it and the dot would sit there however far right you pointed.
+///
+/// So the crosshair follows the pointer and the dot rides the step it is
+/// standing on. Every figure it reports is exact.
+pub fn step_at(xs: &[f32], x: f32) -> usize {
+    let mut governing = 0;
     for (index, candidate) in xs.iter().enumerate() {
-        let distance = (candidate - x).abs();
-        if distance < best_distance {
-            best_distance = distance;
-            best = index;
+        if *candidate <= x {
+            governing = index;
+        } else {
+            break;
         }
     }
-    best
+    governing
+}
+
+/// What time the pointer is over.
+///
+/// Exact for a step chart in a way it would not be for a curve: the x axis is a
+/// linear map of the window, so this is the instant under the cursor rather
+/// than an estimate of one.
+pub fn time_at(plot: &Plot, x: f32) -> i64 {
+    let (start, end) = plot.span;
+    let span = end.saturating_sub(start);
+    if span <= 0 || plot.plot_width <= 0.0 {
+        return end;
+    }
+
+    let fraction = f64::from((x - plot.pad_left) / plot.plot_width).clamp(0.0, 1.0);
+    // A window is at most a few years of seconds — under 2^27 — so both casts
+    // are exact and the rounding is to the nearest second. Nothing here is
+    // money; it is a timestamp for a tooltip.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let offset = (fraction * span as f64).round() as i64;
+    start.saturating_add(offset)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window a series would be drawn in when nothing narrower is asked
+    /// for: its own extent.
+    fn window_of(points: &[Point]) -> (i64, i64) {
+        match (points.first(), points.last()) {
+            (Some(first), Some(last)) => (first.t, last.t),
+            _ => (0, 0),
+        }
+    }
 
     fn view() -> Viewport {
         Viewport {
@@ -310,7 +370,7 @@ mod tests {
             Point { t: 50, value: 100 },
             Point { t: 100, value: 100 },
         ];
-        let plot = plot(&points, &view(), 4.0).expect("a plot");
+        let plot = plot(&points, &view(), 4.0, window_of(&points)).expect("a plot");
 
         assert_eq!(
             plot.line,
@@ -342,7 +402,7 @@ mod tests {
             Point { t: 90, value: 55 },
             Point { t: 120, value: 55 },
         ];
-        let plot = plot(&points, &view(), 4.0).expect("a plot");
+        let plot = plot(&points, &view(), 4.0, window_of(&points)).expect("a plot");
 
         // Every `L` moves in exactly one axis. The `Q` corners move in both by
         // construction — that is what a rounded corner is — so they are the
@@ -413,7 +473,7 @@ mod tests {
         ];
 
         for points in awkward {
-            let Some(plot) = plot(&points, &view(), 4.0) else {
+            let Some(plot) = plot(&points, &view(), 4.0, window_of(&points)) else {
                 continue;
             };
             for path in [&plot.line, &plot.area] {
@@ -433,7 +493,7 @@ mod tests {
             Point { t: 50, value: 500 },
             Point { t: 100, value: 500 },
         ];
-        let plot = plot(&points, &view(), 4.0).expect("a plot");
+        let plot = plot(&points, &view(), 4.0, window_of(&points)).expect("a plot");
 
         assert!(plot.flat);
         assert_eq!(plot.low, 500);
@@ -448,7 +508,7 @@ mod tests {
 
     #[test]
     fn one_reading_draws_a_line_and_no_fill() {
-        let plot = plot(&[Point { t: 0, value: 3 }], &view(), 4.0).expect("a plot");
+        let plot = plot(&[Point { t: 0, value: 3 }], &view(), 4.0, (0, 0)).expect("a plot");
         assert!(plot.flat);
         assert!(plot.area.is_empty(), "a single point got a gradient");
         assert_eq!(plot.values, vec![3]);
@@ -456,7 +516,7 @@ mod tests {
 
     #[test]
     fn nothing_at_all_draws_nothing() {
-        assert!(plot(&[], &view(), 4.0).is_none());
+        assert!(plot(&[], &view(), 4.0, (0, 100)).is_none());
     }
 
     /// The corner cannot be wider than the run it belongs to, or the path
@@ -471,7 +531,7 @@ mod tests {
             Point { t: 51, value: 0 },
             Point { t: 100, value: 50 },
         ];
-        let plot = plot(&points, &view(), 4.0).expect("a plot");
+        let plot = plot(&points, &view(), 4.0, window_of(&points)).expect("a plot");
 
         // x never goes backwards, which is what a corner wider than its run
         // would cause.
@@ -485,14 +545,38 @@ mod tests {
         }
     }
 
+    /// The dot rides the step it is standing on, rather than jumping to the
+    /// nearest reading. On a quiet week that is the difference between a cursor
+    /// that follows you and one that sits at the last transaction whatever you
+    /// point at.
     #[test]
-    fn the_crosshair_snaps_to_the_nearest_sample() {
+    fn the_cursor_reads_the_step_it_is_standing_on() {
         let xs = [0.0, 10.0, 40.0, 100.0];
 
-        assert_eq!(index_at(&xs, -5.0), 0);
-        assert_eq!(index_at(&xs, 4.0), 0);
-        assert_eq!(index_at(&xs, 6.0), 1);
-        assert_eq!(index_at(&xs, 39.0), 2);
-        assert_eq!(index_at(&xs, 1_000.0), 3);
+        assert_eq!(step_at(&xs, -5.0), 0, "before the first reading");
+        assert_eq!(step_at(&xs, 0.0), 0);
+        // Anywhere along a run belongs to the reading that started it — this is
+        // the case the old nearest-match got wrong, since 39 is nearer to 40.
+        assert_eq!(step_at(&xs, 9.9), 0);
+        assert_eq!(step_at(&xs, 39.0), 1);
+        assert_eq!(step_at(&xs, 40.0), 2);
+        assert_eq!(step_at(&xs, 1_000.0), 3);
+    }
+
+    /// The pointer's position maps back to an instant, exactly — the axis is a
+    /// linear map of the window, so this is the time under the cursor rather
+    /// than an estimate of it.
+    #[test]
+    fn a_pointer_position_maps_back_to_a_time() {
+        let points = vec![Point { t: 100, value: 1 }, Point { t: 200, value: 2 }];
+        let window = (100, 200);
+        let plot = plot(&points, &view(), 4.0, window).expect("a plot");
+
+        assert_eq!(time_at(&plot, 0.0), 100);
+        assert_eq!(time_at(&plot, 100.0), 200);
+        assert_eq!(time_at(&plot, 50.0), 150);
+        // Off either end clamps rather than running past the window.
+        assert_eq!(time_at(&plot, -50.0), 100);
+        assert_eq!(time_at(&plot, 5_000.0), 200);
     }
 }
