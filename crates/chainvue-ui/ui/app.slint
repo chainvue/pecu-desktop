@@ -436,6 +436,12 @@ component PassphraseForm inherits VerticalLayout {
         field := Field {
             width: 360px;
             password: true;
+            // A masked box with nothing in it and no label above it is
+            // indistinguishable from a box that is broken. The sentence above
+            // explains what a passphrase IS; this says what to put here.
+            placeholder: root.mode == "create"
+                ? "A passphrase you will remember"
+                : "Passphrase";
             invalid: root.problem != "";
             accepted => { root.submit(); }
         }
@@ -835,17 +841,9 @@ component BalanceChart inherits VerticalLayout {
     Rectangle {
         height: 200px;
 
-        if ChartState.has-data: ChartPlot {
+        ChartPlot {
             width: parent.width;
             height: parent.height;
-        }
-
-        // Not a spinner and not a blank card. Before the first refresh there
-        // is genuinely nothing to draw, and saying so beats a shape that
-        // implies data is on its way when no node has answered.
-        if !ChartState.has-data: EmptyState {
-            title: "No history to chart yet";
-            body: "The balance over time appears once ChainVue has read this wallet's transactions.";
         }
     }
 
@@ -1026,7 +1024,13 @@ component DashboardScreen inherits VerticalLayout {
     // The balance over time. Directly under the figure it is a chart of, so
     // the two can be read as one statement rather than as two facts that
     // happen to share a screen.
-    Card {
+    //
+    // Absent entirely until there is something to draw. A wallet with no
+    // transactions would otherwise stack three empty states — "no chart", "no
+    // assets", "no transactions" — which says one thing three times and makes
+    // the screen look broken rather than new. The card arriving with the first
+    // transaction is information; a placeholder for it is not.
+    if ChartState.has-data: Card {
         VerticalLayout {
             padding: Sp.card-pad;
             BalanceChart {}
@@ -1285,6 +1289,7 @@ component NodesScreen inherits VerticalLayout {
                     : Theme.text-tertiary;
                 title: node.label;
                 subtitle: node.url;
+                subtitle-mono: true;
                 selected: node.active;
                 clicked => { Actions.select-node(node.id); }
 
@@ -1401,6 +1406,10 @@ component SendForm inherits HorizontalLayout {
                 }
                 to := Field {
                     mono: true;
+                    // The two shapes this accepts, so nobody has to find out by
+                    // being refused. Not an example address anybody could copy:
+                    // the prefix and the ellipsis are the whole point.
+                    placeholder: "R… or a VerusID@";
                     invalid: to.text != "" && !SendState.to-valid;
                     edited => { root.check(); }
                 }
@@ -1430,6 +1439,7 @@ component SendForm inherits HorizontalLayout {
                 }
                 amount := Field {
                     mono: true;
+                    placeholder: "0.0000 0000";
                     invalid: amount.text != "" && !SendState.amount-valid;
                     edited => { root.check(); }
                     accepted => { root.review(); }
@@ -1693,6 +1703,7 @@ component MainnetArm inherits HorizontalLayout {
     confirm := Field {
         horizontal-stretch: 1;
         mono: true;
+        placeholder: "mainnet";
         accepted => { root.arm(); }
     }
     Btn {
@@ -1760,7 +1771,10 @@ component PassphraseChange inherits VerticalLayout {
             font-size: Typo.caption;
             color: Theme.text-secondary;
         }
-        current := Field { password: true; }
+        current := Field {
+            password: true;
+            placeholder: "Passphrase";
+        }
     }
 
     VerticalLayout {
@@ -1772,6 +1786,7 @@ component PassphraseChange inherits VerticalLayout {
         }
         fresh := Field {
             password: true;
+            placeholder: "A new passphrase";
             accepted => { root.submit(); }
         }
     }
@@ -1897,6 +1912,7 @@ component KeyRowItem inherits VerticalLayout {
         glyph-tone: root.entry.active ? Theme.accent : Theme.text-tertiary;
         title: root.entry.label;
         subtitle: root.entry.address;
+        subtitle-mono: true;
         selected: root.entry.active;
         clicked => { Actions.select-key(root.entry.label); }
 
@@ -2079,6 +2095,17 @@ component SettingsScreen inherits VerticalLayout {
 // One transaction, in the list.
 component ActivityRowItem inherits VerticalLayout {
     in property <ActivityRow> entry;
+    // Mined, and therefore in a block with a time and a depth.
+    property <bool> settled: !root.entry.pending && root.entry.height > 0;
+    // Depth, guarded and capped.
+    //
+    // Guarded because a tip that is briefly behind a block — during a reorg, or
+    // between a new block arriving and the next poll — would otherwise print a
+    // negative count. Capped because past a thousand the exact number carries
+    // no information anybody uses: what matters is 1 (it is in a block) and
+    // 100 (a coinbase has matured), and "1 187 402 confirmations" is a figure
+    // that only makes the useful ones harder to read.
+    property <int> depth: max(0, WalletState.tip-height - root.entry.height + 1);
     spacing: Sp.s2;
 
     // The day heading, above the first row of that day. Its own layout so the
@@ -2105,7 +2132,8 @@ component ActivityRowItem inherits VerticalLayout {
         title: root.entry.direction == "in" ? "Received"
             : root.entry.direction == "out" ? "Sent"
             : "Moved";
-        subtitle: root.entry.txid;
+        subtitle: root.entry.txid-short;
+        subtitle-mono: true;
         interactive: true;
         clicked => { Actions.open-tx(root.entry.txid); }
 
@@ -2116,20 +2144,31 @@ component ActivityRowItem inherits VerticalLayout {
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
-                Text {
+
+                // A settled transaction has a time and a depth. An unsettled
+                // one has neither, and saying "pending" above "unconfirmed"
+                // was one fact printed twice.
+                if root.settled: Text {
                     text: root.entry.when;
                     font-size: Typo.caption;
                     color: Theme.text-tertiary;
                     horizontal-alignment: right;
                 }
-                Text {
+                if root.settled: Text {
                     // Derived, never stored: `tip - height + 1`. A new block
                     // changes one number and every row here follows.
-                    text: root.entry.pending || root.entry.height == 0 ? "unconfirmed"
-                        : WalletState.tip-height == 0 ? ""
-                        : (WalletState.tip-height - root.entry.height + 1) + " confirmations";
+                    text: WalletState.tip-height == 0 ? ""
+                        : root.depth == 1 ? "1 confirmation"
+                        : root.depth > 999 ? "999+ confirmations"
+                        : root.depth + " confirmations";
                     font-size: Typo.micro;
-                    color: root.entry.pending ? Theme.warning : Theme.text-disabled;
+                    color: Theme.text-disabled;
+                    horizontal-alignment: right;
+                }
+                if !root.settled: Text {
+                    text: "unconfirmed";
+                    font-size: Typo.caption;
+                    color: Theme.warning;
                     horizontal-alignment: right;
                 }
             }
@@ -2385,7 +2424,7 @@ component TxSheet inherits Rectangle {
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Btn {
-                        text: TxState.advanced ? "Hide raw transaction" : "Raw transaction";
+                        text: TxState.advanced ? "Hide raw transaction" : "Show raw transaction";
                         variant: "ghost";
                         clicked => { TxState.advanced = !TxState.advanced; }
                     }
@@ -2710,6 +2749,7 @@ component BackupPassphrase inherits VerticalLayout {
         field := Field {
             width: 360px;
             password: true;
+            placeholder: "Passphrase";
             invalid: SeedState.problem != "";
             accepted => { root.submit(); }
         }

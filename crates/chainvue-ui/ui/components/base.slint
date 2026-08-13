@@ -297,6 +297,11 @@ export component ListRow inherits Rectangle {
     in property <brush> glyph-tone: Theme.text-secondary;
     in property <string> title;
     in property <string> subtitle;
+    // Every subtitle in this application is either prose or an identifier — a
+    // URL, an address, a transaction id — and an identifier set in a
+    // proportional font reads as prose. Mono says "this is a thing you compare
+    // character by character" before anybody reads a character of it.
+    in property <bool> subtitle-mono: false;
     in property <bool> selected: false;
     in property <bool> interactive: true;
     callback clicked();
@@ -339,7 +344,8 @@ export component ListRow inherits Rectangle {
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
-                font-size: Typo.caption;
+                font-family: root.subtitle-mono ? Typo.mono : "";
+                font-size: root.subtitle-mono ? Typo.num-sm : Typo.caption;
                 color: Theme.text-tertiary;
                 overflow: elide;
             }

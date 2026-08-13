@@ -307,6 +307,8 @@ pub fn detail(
     let amount_is_native = entry.net_native != SignedAmount::ZERO;
 
     chainvue_protocol::TxDetailVm {
+        // In full. The sheet has room for it, and the whole point of opening a
+        // transaction is to be able to check it against something else.
         txid: entry.txid.to_string(),
         height: entry.height,
         // Derived from the tip, not asked for. A confirmation count is
@@ -656,6 +658,7 @@ fn row(entry: &HistoryEntry, now: i64, named: &BTreeMap<String, String>) -> Hist
 
     HistoryRowVm {
         txid: entry.txid.to_string(),
+        txid_short: short(&entry.txid.to_string()),
         height: entry.height,
         block_time: entry.block_time,
         direction,
@@ -679,11 +682,13 @@ fn small(net: SignedAmount) -> bool {
     net.magnitude().to_sat() < chainvue_protocol::SATS_PER_COIN as u64 / 10
 }
 
-/// An i-address squeezed onto one line, for a currency the node would not name.
+/// An identifier squeezed onto one line: a currency the node would not name,
+/// or a transaction id in a list that has no room for sixty-four characters.
 ///
-/// Head and tail, not just the tail: the leading `i` is what says this is an
-/// identifier at all. A bare `…2xhwfL` reads as the end of an address someone
-/// was paid at — which is what it looked like on a real screen.
+/// Head and tail, not just the tail. For an i-address the leading `i` is what
+/// says this is an identifier at all — a bare `…2xhwfL` reads as the end of an
+/// address someone was paid at, which is what it looked like on a real screen.
+/// For a txid the head is what anybody actually recognises it by.
 fn short(id: &str) -> String {
     let characters: Vec<char> = id.chars().collect();
     if characters.len() <= 12 {

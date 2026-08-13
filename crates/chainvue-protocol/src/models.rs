@@ -282,6 +282,14 @@ pub enum TxDirection {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryRowVm {
     pub txid: String,
+    /// The same id, head and tail, for a line that has room for neither.
+    ///
+    /// Head **and** tail rather than just the tail: sixty-four hex characters
+    /// elided to fit are indistinguishable from each other, and a bare `…a5f2`
+    /// could be the end of anything. Truncated here rather than in the
+    /// interface so that one rule decides what an abbreviated identifier looks
+    /// like everywhere.
+    pub txid_short: String,
     /// 0 while unconfirmed.
     pub height: u32,
     pub block_time: i64,

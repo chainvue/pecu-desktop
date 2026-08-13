@@ -228,59 +228,18 @@ pub fn receiving(ui: &AppWindow) {
     }
 }
 
-/// The dashboard with a chart on it.
-///
-/// Twelve movements over three months, because the shape this has to lay out
-/// well is a staircase with runs of very different lengths — a chart drawn from
-/// evenly spaced points would look fine here and wrong in the wallet, since x
-/// is proportional to time rather than to position in the list.
-///
-/// Mock mode is on, inherited from [`funded`], so the figures cannot be
-/// mistaken for anybody's.
-pub fn charted(ui: &AppWindow) {
-    // A day, in seconds, and hundredths of a coin — the unit these readings are
-    // legible in. Satoshis would be eight zeros per line and the shape of the
-    // series would be impossible to read off the source.
-    const DAY: i64 = 86_400;
-    const CENTI: i64 = 1_000_000;
-
-    funded(ui);
-
-    // A fixed "now", so the picture is the same every time it is rendered. A
-    // real timestamp would make every snapshot differ from the last one by
-    // however long passed between them, and the visual test would be noise.
-    let now = 1_770_000_000;
-
-    let movements: [(i64, i64); 12] = [
-        (90, 0),
-        (88, 40_000),
-        (74, 38_000),
-        (73, 120_000),
-        (55, 115_000),
-        (40, 580_000),
-        (39, 575_000),
-        (22, 990_000),
-        (14, 985_000),
-        (9, 1_240_000),
-        (2, 1_248_242),
-        (0, 1_248_242),
-    ];
-
-    let points: Vec<chainvue_chart::Point> = movements
-        .iter()
-        .map(|(days_ago, centi)| chainvue_chart::Point {
-            t: now - days_ago * DAY,
-            value: centi * CENTI,
-        })
-        .collect();
-
-    crate::chart::seed(ui, &points, 90 * DAY, false, "VRSCTEST", now);
-}
-
 /// A wallet with money in it — **mock mode on**, so the picture says so.
 pub fn funded(ui: &AppWindow) {
     unlocked(ui);
-    ui.global::<NetworkState>().set_mock_mode(true);
+
+    let net = ui.global::<NetworkState>();
+    net.set_mock_mode(true);
+    // A wallet with figures on it has been read from somewhere. Leaving these
+    // blank put "Not connected · no block height" underneath a full dashboard,
+    // which is a state the wallet cannot actually be in.
+    net.set_effective("Testnet".into());
+    net.set_tip("1 187 500".into());
+    net.set_latency("84 ms".into());
 
     let wallet = ui.global::<WalletState>();
     wallet.set_ticker("VRSCTEST".into());
@@ -339,6 +298,57 @@ pub fn funded(ui: &AppWindow) {
             1_184_000,
         ),
     ]))));
+
+    balance_history(ui);
+}
+
+/// The balance over time behind [`funded`].
+///
+/// Twelve movements over three months, because the shape this has to lay out
+/// well is a staircase with runs of very different lengths — a chart drawn from
+/// evenly spaced points would look fine here and wrong in the wallet, since x
+/// is proportional to time rather than to position in the list.
+///
+/// It is part of `funded` rather than a fixture of its own so that every screen
+/// showing a wallet with history also shows a chart. A dashboard with four
+/// transactions on it and "no history to chart yet" above them is a state that
+/// cannot happen.
+fn balance_history(ui: &AppWindow) {
+    // A day, in seconds, and hundredths of a coin — the unit these readings are
+    // legible in. Satoshis would be eight zeros per line and the shape of the
+    // series would be impossible to read off the source.
+    const DAY: i64 = 86_400;
+    const CENTI: i64 = 1_000_000;
+
+    // A fixed "now", so the picture is the same every time it is rendered. A
+    // real timestamp would make every snapshot differ from the last one by
+    // however long passed between them, and the visual test would be noise.
+    let now = 1_770_000_000;
+
+    let movements: [(i64, i64); 12] = [
+        (90, 0),
+        (88, 40_000),
+        (74, 38_000),
+        (73, 120_000),
+        (55, 115_000),
+        (40, 580_000),
+        (39, 575_000),
+        (22, 990_000),
+        (14, 985_000),
+        (9, 1_240_000),
+        (2, 1_248_242),
+        (0, 1_248_242),
+    ];
+
+    let points: Vec<chainvue_chart::Point> = movements
+        .iter()
+        .map(|(days_ago, centi)| chainvue_chart::Point {
+            t: now - days_ago * DAY,
+            value: centi * CENTI,
+        })
+        .collect();
+
+    crate::chart::seed(ui, &points, 90 * DAY, false, "VRSCTEST", now);
 }
 
 fn dated(direction: &str, amount: &str, when: &str, group: &str, height: i32) -> ActivityRow {
@@ -365,6 +375,7 @@ fn activity_in(
         // the mock chain's `mock…` ids: it must be impossible to mistake for
         // something you could look up.
         txid: "fixture-not-a-real-transaction".into(),
+        txid_short: "fixtu…ction".into(),
         direction: direction.into(),
         amount: amount.into(),
         when: when.into(),

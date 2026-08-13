@@ -86,6 +86,9 @@ export struct AssetRow {
 
 export struct ActivityRow {
     txid: string,
+    // The same id, head and tail. Sixty-four hex characters elided to fit a row
+    // are indistinguishable from each other; a head and a tail are not.
+    txid-short: string,
     // "in" | "out" | "self"
     direction: string,
     amount: string,

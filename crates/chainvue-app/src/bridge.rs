@@ -519,6 +519,7 @@ fn is_zero(sats: &str) -> bool {
 fn activity_row(row: &HistoryRowVm) -> ActivityRow {
     ActivityRow {
         txid: row.txid.clone().into(),
+        txid_short: row.txid_short.clone().into(),
         direction: match row.direction {
             TxDirection::Incoming => "in",
             TxDirection::Outgoing => "out",
