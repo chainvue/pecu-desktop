@@ -1,12 +1,12 @@
 import { Theme, Sp, R, Typo, Motion, InputMode } from "theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, Segmented } from "components/base.slint";
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
-import { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow } from "vm/structs.slint";
+import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow } from "vm/structs.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
-export { NavItem, NodeRow, KeyRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow }
+export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow }
 export { Theme, Motion, InputMode }
 
 // ── The data the UI is given ────────────────────────────────────────────────
@@ -143,10 +143,23 @@ export global SendState {
     in property <string> change: "";
     in property <string> balance-after: "";
     in property <string> from-address: "";
+    // This wallet has never successfully paid the recipient before. Worth
+    // saying: a mistyped address that happens to be valid looks exactly like a
+    // correct one, and "you have paid this before" is the only thing the wallet
+    // can offer that a checksum cannot.
+    in property <bool> first-time-recipient: false;
 
     // Payments handed over whose outcome is unknown. Survives a restart,
     // because the bytes do.
     in property <[PendingRow]> pending-rows: [];
+
+    // Who this wallet has paid. On the settings screen, and consulted by the
+    // recipient field — a name is only worth having where somebody is checking
+    // an address they just pasted.
+    in property <[KnownAddressRow]> known: [];
+    // Which address the naming form is open on, and what is being typed.
+    in-out property <string> naming: "";
+    in-out property <string> name-draft: "";
 
     // The outcome.
     in property <string> txid: "";
@@ -311,6 +324,8 @@ export global Actions {
 
     // Keys. None of these carries a secret — a label is a name, and adding a
     // key needs the wallet open rather than the passphrase again.
+    callback label-address(string, string);
+    callback forget-address(string);
     callback add-key(string);
     callback rename-key(string, string);
     callback select-key(string);
@@ -1588,6 +1603,34 @@ component SendScreen inherits VerticalLayout {
                     }
                 }
 
+                // Above the outputs, because it is about the one line down
+                // there that matters and somebody should read it first.
+                if SendState.first-time-recipient: Rectangle {
+                    background: Theme.warning-soft;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s2;
+                        Text {
+                            text: "You have not paid this address before";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.warning;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            // The one thing a wallet can check that a checksum
+                            // cannot. A mistyped address that happens to be
+                            // valid looks exactly like a correct one, and coins
+                            // sent to it are gone.
+                            text: "Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
                 VerticalLayout {
                     spacing: Sp.s2;
                     Eyebrow { text: "OUTPUTS"; }
@@ -2041,6 +2084,103 @@ component KeyRowItem inherits VerticalLayout {
     }
 }
 
+// Naming one address.
+//
+// Its own component because its input has to be addressable, and because a
+// form that lives inside an `if` cannot be reached from outside it.
+component NameAddressForm inherits HorizontalLayout {
+    in property <string> address;
+    spacing: Sp.s4;
+
+    field := Field {
+        horizontal-stretch: 1;
+        placeholder: "the exchange";
+        text <=> SendState.name-draft;
+        accepted => { root.submit(); }
+    }
+
+    Btn {
+        text: "Save";
+        variant: "primary";
+        y: (parent.height - self.height) / 2;
+        clicked => { root.submit(); }
+    }
+
+    Btn {
+        text: "Cancel";
+        variant: "ghost";
+        y: (parent.height - self.height) / 2;
+        clicked => { SendState.naming = ""; }
+    }
+
+    // An empty name is allowed, and it means "forget the name" rather than
+    // "forget the address" — the wallet still knows it was paid, which is what
+    // stops the review warning about it again.
+    function submit() {
+        Actions.label-address(root.address, field.text);
+    }
+}
+
+// One address the wallet has paid.
+component KnownAddressItem inherits VerticalLayout {
+    in property <KnownAddressRow> entry;
+    spacing: Sp.s3;
+
+    ListRow {
+        // The name where there is one, the address where there is not. An
+        // unnamed row must not read as an empty row.
+        title: root.entry.label == "" ? root.entry.address : root.entry.label;
+        title-mono: root.entry.label == "";
+        subtitle: root.entry.label == "" ? root.entry.summary : root.entry.address;
+        subtitle-mono: root.entry.label != "";
+        interactive: false;
+
+        HorizontalLayout {
+            spacing: Sp.s5;
+            alignment: end;
+
+            if root.entry.label != "": Text {
+                text: root.entry.summary;
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: 88px;
+                Btn {
+                    text: root.entry.label == "" ? "Name" : "Rename";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        SendState.naming = root.entry.address;
+                        SendState.name-draft = root.entry.label;
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 88px;
+                Btn {
+                    // Not destructive-red. Forgetting an address costs nothing
+                    // and undoes nothing — the payment already happened and is
+                    // on the chain. What it does is make the review warn about
+                    // that address again, which is what somebody removing it
+                    // is asking for.
+                    text: "Forget";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => { Actions.forget-address(root.entry.address); }
+                }
+            }
+        }
+    }
+
+    if SendState.naming == root.entry.address: NameAddressForm {
+        address: root.entry.address;
+    }
+}
+
 component SettingsScreen inherits VerticalLayout {
     spacing: Sp.section-gap;
     property <[int]> lock-choices: [1, 5, 15, 60, 0];
@@ -2127,6 +2267,21 @@ component SettingsScreen inherits VerticalLayout {
                 color: Theme.negative;
                 wrap: word-wrap;
             }
+        }
+    }
+
+    Section {
+        title: "ADDRESSES";
+        body: "Who this wallet has paid. ChainVue records a recipient once a node has accepted the payment, so it can tell you when you are paying somewhere new — the one check it can make that a checksum cannot.";
+
+        if SendState.known.length == 0: Text {
+            text: "Nothing yet. An address appears here the first time you pay it.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+        }
+
+        for entry in SendState.known: KnownAddressItem {
+            entry: entry;
         }
     }
 

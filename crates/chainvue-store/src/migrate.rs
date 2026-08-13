@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bumped when a durable table changes shape.
-const WALLET_VERSION: i64 = 2;
+const WALLET_VERSION: i64 = 3;
 
 /// Bumped when a cached table changes shape. Cheap to raise: an unrecognised
 /// cache is deleted, not migrated.
@@ -66,6 +66,28 @@ pub fn wallet(connection: &Connection, path: &Path) -> Result<(), StoreError> {
                  id    INTEGER PRIMARY KEY AUTOINCREMENT,
                  label TEXT NOT NULL,
                  url   TEXT NOT NULL UNIQUE
+             );",
+        )?;
+    }
+
+    if found < 3 {
+        connection.execute_batch(
+            // Who this wallet has paid.
+            //
+            // Durable rather than cached, for two reasons. The label is a
+            // choice nobody can reconstruct. And `payments` is what makes the
+            // review able to say "you have not paid this address before" — a
+            // warning that would be worse than useless if it came back after
+            // every cache wipe, because a warning that cries wolf is one people
+            // learn to click through.
+            //
+            // The address is the key. It is what the chain agrees on; a label
+            // is this wallet's private note about it.
+            "CREATE TABLE IF NOT EXISTS address_book (
+                 address  TEXT PRIMARY KEY,
+                 label    TEXT NOT NULL DEFAULT '',
+                 paid_at  INTEGER,
+                 payments INTEGER NOT NULL DEFAULT 0
              );",
         )?;
     }
@@ -186,6 +208,9 @@ mod tests {
                 [],
             )
             .expect("the node table now exists");
+        connection
+            .execute("INSERT INTO address_book (address) VALUES ('R…')", [])
+            .expect("the address book now exists");
     }
 
     /// A settings file from a newer build must not be opened. Guessing at a

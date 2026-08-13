@@ -77,6 +77,20 @@ export struct KeyRow {
     active: bool,
 }
 
+// An address this wallet has paid, or been given a name for.
+//
+// On screen because a wallet that quietly keeps a list of who you paid, and
+// never shows it, is keeping a secret from its owner. Everything here is
+// already on the chain — what is private is the NAME, which is this wallet's
+// note and nobody else's.
+export struct KnownAddressRow {
+    address: string,
+    // Empty until somebody names it.
+    label: string,
+    // "3 payments · last 2 days ago", or "never paid".
+    summary: string,
+}
+
 export struct AssetRow {
     name: string,
     amount: string,

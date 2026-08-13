@@ -348,6 +348,10 @@ export component ListRow inherits Rectangle {
     in property <string> glyph;
     in property <brush> glyph-tone: Theme.text-secondary;
     in property <string> title;
+    // Set when the TITLE is an identifier rather than a name — an address on a
+    // row nobody has named. Same reasoning as `subtitle-mono`: a base58 string
+    // set in a proportional font reads as prose.
+    in property <bool> title-mono: false;
     in property <string> subtitle;
     // Every subtitle in this application is either prose or an identifier — a
     // URL, an address, a transaction id — and an identifier set in a
@@ -389,8 +393,9 @@ export component ListRow inherits Rectangle {
             spacing: 2px;
             Text {
                 text: root.title;
-                font-size: Typo.body;
-                font-weight: Typo.w-medium;
+                font-family: root.title-mono ? Typo.mono : "";
+                font-size: root.title-mono ? Typo.num : Typo.body;
+                font-weight: root.title-mono ? Typo.w-regular : Typo.w-medium;
                 color: Theme.text-primary;
                 overflow: elide;
             }

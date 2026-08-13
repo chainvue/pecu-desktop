@@ -83,6 +83,19 @@ pub struct StoredNode {
     pub url: String,
 }
 
+/// An address this wallet has paid, or been told the name of.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KnownAddress {
+    pub address: String,
+    /// What the user called it. Empty until they say.
+    pub label: String,
+    /// Unix seconds of the last payment, if there has been one.
+    pub paid_at: Option<i64>,
+    /// How many times this wallet has paid it. Zero for an address that was
+    /// named but never used — which is a normal state, not a broken one.
+    pub payments: i64,
+}
+
 /// A dashboard as it looked when the wallet last ran.
 pub struct Snapshot {
     pub portfolio: PortfolioVm,
@@ -194,6 +207,74 @@ impl Store {
     pub fn remove_node(&self, id: i64) {
         if let Err(error) = self.wallet.execute("DELETE FROM node WHERE id = ?1", [id]) {
             tracing::warn!(%error, id, "a node could not be removed");
+        }
+    }
+
+    // ── Who this wallet has paid: durable ───────────────────────────────────
+
+    /// Every address this wallet knows about, most recently paid first.
+    pub fn known_addresses(&self) -> Vec<KnownAddress> {
+        let Ok(mut statement) = self.wallet.prepare(
+            "SELECT address, label, paid_at, payments FROM address_book
+             ORDER BY paid_at DESC NULLS LAST, address",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = statement.query_map([], |row| {
+            Ok(KnownAddress {
+                address: row.get(0)?,
+                label: row.get(1)?,
+                paid_at: row.get(2)?,
+                payments: row.get(3)?,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.flatten().collect()
+    }
+
+    /// Record that a payment to `address` went out.
+    ///
+    /// Called after a broadcast the node accepted, never before. An address
+    /// recorded on an attempt would make the review stop warning about a
+    /// recipient the wallet has in fact never successfully paid — which is
+    /// precisely the case the warning is for.
+    pub fn note_payment(&self, address: &str, at: i64) {
+        if let Err(error) = self.wallet.execute(
+            "INSERT INTO address_book (address, paid_at, payments) VALUES (?1, ?2, 1)
+             ON CONFLICT (address) DO UPDATE SET
+                 paid_at  = excluded.paid_at,
+                 payments = address_book.payments + 1",
+            rusqlite::params![address, at],
+        ) {
+            tracing::warn!(%error, "a payment could not be recorded against its address");
+        }
+    }
+
+    /// Name an address, or rename it. An empty label clears the name without
+    /// forgetting that the address was paid.
+    pub fn label_address(&self, address: &str, label: &str) {
+        if let Err(error) = self.wallet.execute(
+            "INSERT INTO address_book (address, label) VALUES (?1, ?2)
+             ON CONFLICT (address) DO UPDATE SET label = excluded.label",
+            [address, label],
+        ) {
+            tracing::warn!(%error, "an address could not be named");
+        }
+    }
+
+    /// Forget an address entirely.
+    ///
+    /// Which also forgets that it was ever paid, so the review will warn about
+    /// it again. That is the honest consequence of the request rather than a
+    /// bug: somebody who removes an address is saying they no longer recognise
+    /// it, and being warned next time is what they asked for.
+    pub fn forget_address(&self, address: &str) {
+        if let Err(error) = self
+            .wallet
+            .execute("DELETE FROM address_book WHERE address = ?1", [address])
+        {
+            tracing::warn!(%error, "an address could not be forgotten");
         }
     }
 
@@ -493,6 +574,87 @@ mod tests {
             second, first,
             "the id of a removed node was handed out again"
         );
+    }
+
+    #[test]
+    fn a_paid_address_is_remembered_and_counted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let address = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+
+        assert!(store(&dir).known_addresses().is_empty());
+
+        store(&dir).note_payment(address, 1_700_000_000);
+        store(&dir).note_payment(address, 1_700_000_100);
+
+        let known = store(&dir).known_addresses();
+        assert_eq!(known.len(), 1, "a second payment created a second row");
+        assert_eq!(known[0].address, address);
+        assert_eq!(known[0].payments, 2);
+        assert_eq!(known[0].paid_at, Some(1_700_000_100));
+        assert_eq!(known[0].label, "", "nobody has named it yet");
+    }
+
+    /// Naming an address must not disturb what the wallet knows about paying
+    /// it, and paying it must not wipe the name.
+    #[test]
+    fn a_name_and_a_payment_history_do_not_overwrite_each_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let address = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+
+        store(&dir).label_address(address, "the exchange");
+        let known = store(&dir).known_addresses();
+        assert_eq!(known[0].label, "the exchange");
+        // Named but never paid is a normal state, not a broken one.
+        assert_eq!(known[0].payments, 0);
+        assert_eq!(known[0].paid_at, None);
+
+        store(&dir).note_payment(address, 1_700_000_000);
+        let known = store(&dir).known_addresses();
+        assert_eq!(known[0].label, "the exchange", "paying it wiped its name");
+        assert_eq!(known[0].payments, 1);
+
+        store(&dir).label_address(address, "somewhere else");
+        let known = store(&dir).known_addresses();
+        assert_eq!(known[0].label, "somewhere else");
+        assert_eq!(known[0].payments, 1, "renaming it reset its history");
+    }
+
+    /// Most recently paid first, with the never-paid ones after — which is the
+    /// order somebody scanning the list is looking for.
+    #[test]
+    fn addresses_are_listed_by_when_they_were_last_paid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store(&dir);
+
+        store.note_payment("RVGTY4w2GrdBFrzGaAASBvT6prBr4MxDfJ", 1_700_000_000);
+        store.note_payment("RGZbQcWU9LNSa9rat45UMKaeP1q32NBduM", 1_800_000_000);
+        store.label_address("RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX", "never paid");
+
+        let order: Vec<String> = store
+            .known_addresses()
+            .into_iter()
+            .map(|known| known.address)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                "RGZbQcWU9LNSa9rat45UMKaeP1q32NBduM",
+                "RVGTY4w2GrdBFrzGaAASBvT6prBr4MxDfJ",
+                "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX",
+            ],
+        );
+    }
+
+    /// Forgetting an address forgets that it was paid, so the review warns
+    /// about it again. That is the honest consequence of the request.
+    #[test]
+    fn forgetting_an_address_forgets_that_it_was_paid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let address = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+
+        store(&dir).note_payment(address, 1_700_000_000);
+        store(&dir).forget_address(address);
+        assert!(store(&dir).known_addresses().is_empty());
     }
 
     /// The whole reason the cache is a separate file: it can be deleted, and

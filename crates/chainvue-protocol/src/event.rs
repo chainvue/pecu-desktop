@@ -7,8 +7,8 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, HistoryRowVm, ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, SeedWordVm,
-    SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
+    ChartVm, HistoryRowVm, KnownAddressVm, ListDelta, LockReason, NetworkVm, PendingVm,
+    PortfolioVm, SeedWordVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +21,8 @@ pub enum Event {
         dark: bool,
         reduce_motion: bool,
     },
+    /// Who this wallet has paid, and what they have been named.
+    AddressBook(Vec<KnownAddressVm>),
     Network(NetworkVm),
     Portfolio(PortfolioVm),
     /// The balance over time, as readings rather than as a picture.

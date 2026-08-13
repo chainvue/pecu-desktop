@@ -121,6 +121,7 @@ pub fn start(
         polling: Polling::default(),
         broadcasting: false,
         history: HistoryScan::default(),
+        known: std::collections::BTreeMap::new(),
         store,
     };
 
@@ -172,6 +173,12 @@ struct Core {
     /// A payment is being handed to a node right now. See `fail_over`.
     broadcasting: bool,
     history: HistoryScan,
+
+    /// Every address this wallet has paid or been told the name of, by
+    /// address. Kept in memory because the send review consults it on every
+    /// prepare, and a screen that has to wait for a query to say "you have not
+    /// paid this before" would say it late or not at all.
+    known: std::collections::BTreeMap<String, String>,
 
     /// Settings, and a cache the wallet is free to throw away. `None` when the
     /// databases could not be opened — the wallet works without them, it just
@@ -283,6 +290,7 @@ impl Core {
         // A payment left unresolved by a previous run is the first thing worth
         // saying — it is money whose fate nobody knows.
         self.emit_pending();
+        self.emit_address_book();
 
         // The idle check. Five seconds is fine granularity for a five-minute
         // timeout and costs nothing — it compares two `Instant`s and returns.
@@ -601,12 +609,7 @@ impl Core {
             Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
 
             // ── Send ─────────────────────────────────────────────────
-            Command::ValidateDraft(draft) => {
-                let _ = self.events.send(Event::SendValidation(send::validate(
-                    &draft,
-                    self.spendable,
-                )));
-            }
+            Command::ValidateDraft(draft) => self.validate_draft(&draft),
             Command::PrepareSend(draft) => self.prepare_send(draft),
             Command::ConfirmSend { ticket } => self.confirm_send(ticket),
             Command::CancelSend { ticket } => {
@@ -676,6 +679,8 @@ impl Core {
             }
             Command::AddKey { label } => self.add_key(&label),
             Command::RenameKey { from, to } => self.rename_key(&from, &to),
+            Command::LabelAddress { address, label } => self.label_address(&address, &label),
+            Command::ForgetAddress(address) => self.forget_address(&address),
             Command::SetActiveKey(label) => self.set_active_key(&label),
             Command::SetAutoLockMinutes(minutes) => self.set_auto_lock(minutes),
             Command::SetAppearance {
@@ -964,6 +969,12 @@ impl Core {
             .filter_map(|(address, name)| {
                 Some((portfolio::currency_from_i_address(address)?, name.clone()))
             })
+            .collect();
+
+        self.known = store
+            .known_addresses()
+            .into_iter()
+            .map(|known| (known.address, known.label))
             .collect();
 
         // Endpoints the user configured, put back beside the built-ins. Their
@@ -1307,6 +1318,81 @@ impl Core {
         );
     }
 
+    /// Name an address, or clear its name.
+    fn label_address(&mut self, address: &str, label: &str) {
+        let label = label.trim();
+        if address.is_empty() {
+            return;
+        }
+        self.known.insert(address.to_string(), label.to_string());
+        if let Some(store) = &self.store {
+            store.label_address(address, label);
+        }
+        self.emit_address_book();
+    }
+
+    fn forget_address(&mut self, address: &str) {
+        self.known.remove(address);
+        if let Some(store) = &self.store {
+            store.forget_address(address);
+        }
+        self.emit_address_book();
+    }
+
+    /// Everything the wallet has recorded about who it has paid.
+    ///
+    /// Read from the store rather than from the in-memory map, because the map
+    /// holds only addresses and names — the counts and the dates live in the
+    /// file, and a summary assembled from half the facts would be worse than
+    /// none.
+    fn emit_address_book(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+
+        let rows: Vec<chainvue_protocol::KnownAddressVm> = store
+            .known_addresses()
+            .into_iter()
+            .map(|known| chainvue_protocol::KnownAddressVm {
+                summary: payment_summary(known.payments, known.paid_at, now()),
+                address: known.address,
+                label: known.label,
+            })
+            .collect();
+
+        let _ = self.events.send(Event::AddressBook(rows));
+    }
+
+    /// Record that the recipient of `record` has now been paid.
+    ///
+    /// Driven off the pending ledger rather than off the draft, because the
+    /// ledger row is the thing that exists exactly once per payment and is
+    /// removed once it is settled. Calling this twice for one payment — a
+    /// resend succeeding *and* the original turning out to have landed — finds
+    /// no row the second time, because the first call's `forget_confirmed`
+    /// removed it.
+    ///
+    /// Only after a node has accepted. Recording on the attempt would make the
+    /// review stop warning about a recipient this wallet has never actually
+    /// paid, which is precisely the case the warning is for.
+    fn remember_recipient(&mut self, record: u64) {
+        let Some(address) = self.pending.get(record).map(|row| row.to_address.clone()) else {
+            return;
+        };
+        if address.is_empty() {
+            return;
+        }
+
+        // Kept even without a store: the warning should stop for the rest of
+        // this session either way, and a wallet that cannot write is not a
+        // wallet that should nag.
+        self.known.entry(address.clone()).or_default();
+        if let Some(store) = &self.store {
+            store.note_payment(&address, now());
+        }
+        self.emit_address_book();
+    }
+
     /// Write down which endpoint is in use.
     ///
     /// By URL, not by id: a built-in's id is its position in a compiled-in
@@ -1514,6 +1600,9 @@ impl Core {
         if confirmations.is_some() {
             // Settled. It was on its way all along.
             tracing::info!(record, ?confirmations, "an uncertain payment confirmed");
+            // It landed after all, which is the first time this recipient can
+            // honestly be called paid.
+            self.remember_recipient(record);
             self.pending.set_state(record, pending::State::Confirmed);
             self.pending.forget_confirmed();
             self.last_checked.remove(&record);
@@ -1598,6 +1687,7 @@ impl Core {
         match result {
             Ok(txid) => {
                 tracing::info!(record, %txid, "the same bytes were accepted on a resend");
+                self.remember_recipient(record);
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
                 self.last_checked.remove(&record);
@@ -1716,6 +1806,33 @@ impl Core {
 
     // ── Send ────────────────────────────────────────────────────────────────
 
+    /// Check a draft, and say what the wallet knows about the recipient.
+    ///
+    /// Runs on every keystroke, so it touches nothing but memory: address
+    /// parsing and amount parsing are both offline and both exact, and the name
+    /// comes from a map that was loaded at startup.
+    fn validate_draft(&self, draft: &chainvue_protocol::SendDraft) {
+        let mut verdict = send::validate(draft, self.spendable);
+
+        // A name this wallet gave the address, appended to the line that
+        // already says what the address is. That is where somebody checking a
+        // pasted address is looking, and "the exchange" tells them more than
+        // any amount of checksum arithmetic can.
+        if let Some(label) = self
+            .known
+            .get(draft.to.trim())
+            .filter(|label| !label.is_empty())
+        {
+            verdict.to_note = if verdict.to_note.is_empty() {
+                label.clone()
+            } else {
+                format!("{} · {label}", verdict.to_note)
+            };
+        }
+
+        let _ = self.events.send(Event::SendValidation(verdict));
+    }
+
     /// Build and sign, off the actor.
     ///
     /// `prepare_send` reads the funding set first, so this is several requests
@@ -1752,9 +1869,13 @@ impl Core {
         match result {
             Ok(prepared) => {
                 let from = self.wallet.active_address().unwrap_or_default();
+                // Whether this wallet has ever successfully paid the recipient.
+                // Not "have we seen the address" — an address that was typed,
+                // reviewed and cancelled is still one nobody has paid.
+                let known = self.known.contains_key(&prepared.to);
                 // Built from the SIGNED bytes, not from the draft — see
                 // `send::review`.
-                let review = send::review(ticket, &prepared, &from, self.spendable, false);
+                let review = send::review(ticket, &prepared, &from, self.spendable, known);
                 self.prepared.insert(ticket, prepared);
                 let _ = self.events.send(Event::SendPrepared(review));
             }
@@ -1847,6 +1968,7 @@ impl Core {
 
         match result {
             Ok(sent) => {
+                self.remember_recipient(record);
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
                 let _ = self.events.send(Event::SendResult(SendOutcomeVm::Sent {
@@ -2289,6 +2411,34 @@ fn confirmed_native(reading: &portfolio::Reading) -> i64 {
         .saturating_add(reading.immature.to_sat())
         .saturating_add(reading.pending_out.to_sat());
     i64::try_from(total).unwrap_or(i64::MAX)
+}
+
+/// "3 payments · 2 days ago", or what to say when there have been none.
+///
+/// An address that was named but never paid is a normal state — somebody typed
+/// a name in before sending — and saying "0 payments" about it reads as a
+/// failure rather than as a plan.
+fn payment_summary(payments: i64, paid_at: Option<i64>, now: i64) -> String {
+    let Some(paid_at) = paid_at.filter(|_| payments > 0) else {
+        return "never paid".to_string();
+    };
+
+    let count = if payments == 1 {
+        "1 payment".to_string()
+    } else {
+        format!("{payments} payments")
+    };
+
+    let age = now.saturating_sub(paid_at);
+    let when = match age {
+        ..3_600 => "in the last hour".to_string(),
+        3_600..86_400 => format!("{} hours ago", age / 3_600),
+        86_400..172_800 => "yesterday".to_string(),
+        172_800..2_592_000 => format!("{} days ago", age / 86_400),
+        _ => format!("{} months ago", age / 2_592_000),
+    };
+
+    format!("{count} · last {when}")
 }
 
 /// Seconds since the epoch, for "2 hours ago".
@@ -2775,6 +2925,101 @@ mod tests {
 
         ledger.set_state(record, pending::State::Confirmed);
         assert!(!resolution_pending(&ledger));
+    }
+
+    /// The address book, end to end: named, shown, resolved on the send form,
+    /// and forgotten.
+    #[tokio::test]
+    async fn a_named_address_is_remembered_and_shown_where_it_is_needed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let address = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+
+        let config = || Config {
+            nodes: testnet_nodes(),
+            network: Network::Testnet,
+            mock: false,
+            vault_path: dir.path().join("vault.json"),
+        };
+
+        let (dispatcher, mut events) = start(&handle, config());
+
+        dispatcher.send(Command::LabelAddress {
+            address: address.to_string(),
+            label: "the exchange".to_string(),
+        });
+        let book = next_address_book(&mut events, |rows| !rows.is_empty()).await;
+        assert_eq!(book[0].address, address);
+        assert_eq!(book[0].label, "the exchange");
+        // Named but never paid is a normal state, and the summary has to say so
+        // rather than reporting zero of something.
+        assert_eq!(book[0].summary, "never paid");
+
+        // The name reaches the one place somebody is checking a pasted
+        // address: the recipient line on the send form.
+        dispatcher.send(Command::ValidateDraft(chainvue_protocol::SendDraft {
+            from_label: String::new(),
+            to: address.to_string(),
+            amount: "1.0".to_string(),
+        }));
+        let note = loop {
+            match events.recv().await {
+                Some(Event::SendValidation(vm)) => break vm.to_note,
+                Some(_) => {}
+                None => panic!("the core stopped before validating"),
+            }
+        };
+        assert!(note.contains("the exchange"), "{note}");
+
+        dispatcher.send(Command::Shutdown);
+
+        // It survives a restart, because a name is a choice nobody can
+        // reconstruct.
+        let (dispatcher, mut events) = start(&handle, config());
+        let book = next_address_book(&mut events, |rows| !rows.is_empty()).await;
+        assert_eq!(book[0].label, "the exchange");
+
+        dispatcher.send(Command::ForgetAddress(address.to_string()));
+        let book = next_address_book(&mut events, Vec::is_empty).await;
+        assert!(book.is_empty());
+    }
+
+    async fn next_address_book(
+        events: &mut mpsc::UnboundedReceiver<Event>,
+        want: impl Fn(&Vec<chainvue_protocol::KnownAddressVm>) -> bool,
+    ) -> Vec<chainvue_protocol::KnownAddressVm> {
+        for _ in 0..40 {
+            match events.recv().await {
+                Some(Event::AddressBook(rows)) if want(&rows) => return rows,
+                Some(_) => {}
+                None => panic!("the core stopped before sending an address book"),
+            }
+        }
+        panic!("the core never sent the address book this test was waiting for");
+    }
+
+    /// "never paid" rather than "0 payments", and singular where it should be.
+    #[test]
+    fn a_payment_summary_reads_as_a_sentence() {
+        let now = 1_800_000_000;
+
+        assert_eq!(payment_summary(0, None, now), "never paid");
+        // A row with a date but no payments cannot happen through the store,
+        // and if it ever does the count is the fact to trust.
+        assert_eq!(payment_summary(0, Some(now), now), "never paid");
+
+        assert_eq!(
+            payment_summary(1, Some(now - 60), now),
+            "1 payment · last in the last hour",
+        );
+        assert_eq!(
+            payment_summary(3, Some(now - 2 * 86_400), now),
+            "3 payments · last 2 days ago",
+        );
+        assert_eq!(
+            payment_summary(2, Some(now - 90_000), now),
+            "2 payments · last yesterday",
+        );
     }
 
     /// The anchor the whole chart hangs from.

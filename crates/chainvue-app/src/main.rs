@@ -337,6 +337,23 @@ fn wire_settings(ui: &AppWindow, dispatcher: &Dispatcher) {
     }
 
     {
+        let dispatcher = dispatcher.clone();
+        actions.on_label_address(move |address, label| {
+            dispatcher.send(Command::LabelAddress {
+                address: address.to_string(),
+                label: label.trim().to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_forget_address(move |address| {
+            dispatcher.send(Command::ForgetAddress(address.to_string()));
+        });
+    }
+
+    {
         // Keys. None of these carries a secret: a label is a name, and
         // generating a key needs the wallet open rather than the passphrase
         // again — the data key is what seals it.

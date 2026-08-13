@@ -36,9 +36,9 @@ pub use event::Event;
 pub use format::{coins, coins_u64};
 pub use models::{
     AssetVm, BalanceVm, ChartPointVm, ChartVm, DraftValidationVm, HistoryRowVm, KeyOrigin, KeyVm,
-    ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability, ReviewOutputVm,
-    ScreenId, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm,
-    TxDirection, WalletVm,
+    KnownAddressVm, ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability,
+    ReviewOutputVm, ScreenId, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind,
+    TxDetailVm, TxDirection, WalletVm,
 };
 pub use secret::Secret;
 

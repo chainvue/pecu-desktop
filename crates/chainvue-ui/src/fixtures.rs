@@ -20,8 +20,8 @@ use std::rc::Rc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::{
-    ActivityRow, AppInfo, AppWindow, AssetRow, KeyRow, NetworkState, NodeRow, PendingRow,
-    ReviewOutput, SeedState, SeedWord, SendState, TxState, WalletState,
+    ActivityRow, AppInfo, AppWindow, AssetRow, KeyRow, KnownAddressRow, NetworkState, NodeRow,
+    PendingRow, ReviewOutput, SeedState, SeedWord, SendState, TxState, WalletState,
 };
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -70,6 +70,29 @@ pub fn keys(ui: &AppWindow) {
         // be a warning about something that cannot be fixed.
         key("cold-storage", THIRD_ADDRESS, "wif", true, false),
     ]))));
+}
+
+/// The address book, with the two shapes a row can take: named, and not.
+///
+/// Both at once because they are laid out differently — an unnamed row puts the
+/// address in the title and its summary in the subtitle, and a named one puts
+/// the name in the title and pushes the summary to the far side.
+pub fn addresses(ui: &AppWindow) {
+    settings(ui);
+
+    ui.global::<SendState>()
+        .set_known(ModelRc::from(Rc::new(VecModel::from(vec![
+            KnownAddressRow {
+                address: SECOND_ADDRESS.into(),
+                label: "the exchange".into(),
+                summary: "3 payments · last 2 days ago".into(),
+            },
+            KnownAddressRow {
+                address: THIRD_ADDRESS.into(),
+                label: SharedString::new(),
+                summary: "1 payment · last in the last hour".into(),
+            },
+        ]))));
 }
 
 /// The keys section with a rename in progress, which is where the form and the
@@ -200,6 +223,10 @@ pub fn reviewing(ui: &AppWindow) {
     send.set_total("50.0001 0000".into());
     send.set_change("12 332.4199 0000".into());
     send.set_balance_after("12 332.4199 0000".into());
+    // The state worth a reference image: the warning is the reason the review
+    // step exists at all, and it is the one thing on this screen somebody has
+    // to read rather than glance at.
+    send.set_first_time_recipient(true);
 
     send.set_outputs(ModelRc::from(Rc::new(VecModel::from(vec![
         ReviewOutput {

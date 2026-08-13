@@ -14,8 +14,8 @@ use chainvue_protocol::{
 };
 use chainvue_ui::prelude::*;
 use chainvue_ui::{
-    qr, seed, ActivityRow, AppWindow, AssetRow, KeyRow, NetworkState, NodeRow, PendingRow,
-    ReviewOutput, SeedState, SendState, TxState, WalletState,
+    qr, seed, ActivityRow, AppWindow, AssetRow, KeyRow, KnownAddressRow, NetworkState, NodeRow,
+    PendingRow, ReviewOutput, SeedState, SendState, TxState, WalletState,
 };
 use slint::{Model, ModelRc, SharedString, VecModel, Weak};
 use tokio::sync::mpsc;
@@ -109,6 +109,8 @@ fn apply(ui: &AppWindow, event: Event) {
                 );
             }
         }
+
+        Event::AddressBook(rows) => apply_address_book(ui, &rows),
 
         Event::Portfolio(vm) => apply_portfolio(ui, &vm),
 
@@ -222,6 +224,30 @@ fn apply_notice(ui: &AppWindow, error: chainvue_protocol::UiError) {
     }
 }
 
+/// Who this wallet has paid.
+fn apply_address_book(ui: &AppWindow, rows: &[chainvue_protocol::KnownAddressVm]) {
+    let send = ui.global::<SendState>();
+
+    let rows: Vec<KnownAddressRow> = rows
+        .iter()
+        .map(|row| KnownAddressRow {
+            address: row.address.clone().into(),
+            label: row.label.clone().into(),
+            summary: row.summary.clone().into(),
+        })
+        .collect();
+    send.set_known(ModelRc::from(Rc::new(VecModel::from(rows))));
+
+    // The naming form is finished when a fresh book arrives, because the core
+    // only sends one after it has acted. Derived from the wallet's answer
+    // rather than from a "that worked" message — the same reasoning as the key
+    // forms, and the same consequence: a refusal would leave the form as it is.
+    if !send.get_naming().is_empty() {
+        send.set_naming(SharedString::new());
+        send.set_name_draft(SharedString::new());
+    }
+}
+
 /// One transaction, opened.
 fn apply_tx_detail(ui: &AppWindow, vm: chainvue_protocol::TxDetailVm) {
     let tx = ui.global::<TxState>();
@@ -298,6 +324,7 @@ fn apply_review(ui: &AppWindow, vm: &chainvue_protocol::SendReviewVm) {
     send.set_change(vm.change_display.clone().into());
     send.set_balance_after(vm.balance_after_display.clone().into());
     send.set_from_address(vm.from_address.clone().into());
+    send.set_first_time_recipient(vm.first_time_recipient);
 
     let outputs: Vec<ReviewOutput> = vm
         .outputs

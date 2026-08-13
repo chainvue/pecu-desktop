@@ -224,6 +224,21 @@ pub struct PortfolioVm {
     pub tokens_unknown: bool,
 }
 
+/// An address this wallet has paid, or been given a name for.
+///
+/// On screen because a wallet that quietly keeps a list of who you paid, and
+/// never shows it to you, is keeping a secret from its owner. Everything in
+/// here is already on the chain — what is private is the *name*, which is this
+/// wallet's note and nobody else's.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownAddressVm {
+    pub address: String,
+    /// Empty until somebody names it.
+    pub label: String,
+    /// "3 payments · 2 days ago", or "never paid" for one that was only named.
+    pub summary: String,
+}
+
 // ── The chart ───────────────────────────────────────────────────────────────
 
 /// One reading of the balance.

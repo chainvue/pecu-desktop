@@ -168,6 +168,17 @@ pub enum Command {
         from: String,
         to: String,
     },
+    /// Name an address, or rename it. An empty label clears the name without
+    /// forgetting that the address was paid.
+    LabelAddress {
+        address: String,
+        label: String,
+    },
+    /// Forget an address — which also forgets that it was paid, so the review
+    /// will warn about it again. That is the honest consequence of the
+    /// request: somebody removing an address is saying they no longer
+    /// recognise it.
+    ForgetAddress(String),
     SetActiveKey(String),
     SetAutoLockMinutes(Option<u32>),
     /// How the window should look, and whether it should move.
