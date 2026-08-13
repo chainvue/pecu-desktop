@@ -14,7 +14,7 @@ use chainvue_protocol::{
 use chainvue_ui::prelude::*;
 use chainvue_ui::{
     qr, seed, ActivityRow, AppWindow, AssetRow, NetworkState, NodeRow, PendingRow, ReviewOutput,
-    SeedState, SendState, WalletState,
+    SeedState, SendState, TxState, WalletState,
 };
 use slint::{Model, ModelRc, SharedString, VecModel, Weak};
 use tokio::sync::mpsc;
@@ -130,6 +130,12 @@ fn apply(ui: &AppWindow, event: Event) {
                 .set_pending_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
         }
 
+        Event::TxDetail(vm) => apply_tx_detail(ui, vm),
+
+        Event::HistoryExhausted(complete) => {
+            ui.global::<WalletState>().set_history_complete(complete);
+        }
+
         Event::Busy { task, on } => {
             tracing::debug!(?task, on, "busy");
             // The Refresh control says "Reading…" while a read is in flight.
@@ -142,6 +148,9 @@ fn apply(ui: &AppWindow, event: Event) {
                 chainvue_protocol::TaskKind::PreparingSend
                 | chainvue_protocol::TaskKind::Broadcasting => {
                     ui.global::<SendState>().set_busy(on);
+                }
+                chainvue_protocol::TaskKind::LoadingHistory => {
+                    ui.global::<WalletState>().set_loading_history(on);
                 }
                 _ => {}
             }
@@ -157,10 +166,45 @@ fn apply(ui: &AppWindow, event: Event) {
             state.set_problem(error.title.into());
         }
 
-        other => {
-            tracing::debug!(?other, "event not rendered yet");
-        }
+        // Core only ever replaces this list wholesale.
+        Event::Pending(other) => tracing::debug!(?other, "unexpected pending delta"),
     }
+}
+
+/// One transaction, opened.
+fn apply_tx_detail(ui: &AppWindow, vm: chainvue_protocol::TxDetailVm) {
+    let tx = ui.global::<TxState>();
+    tx.set_txid(vm.txid.into());
+    tx.set_when(vm.when_display.into());
+    tx.set_amount(vm.net_display.into());
+    tx.set_direction(
+        match vm.direction {
+            TxDirection::Incoming => "in",
+            TxDirection::Outgoing => "out",
+            TxDirection::Self_ => "self",
+        }
+        .into(),
+    );
+    tx.set_amount_is_native(vm.amount_is_native);
+    tx.set_height(vm.height.to_string().into());
+    tx.set_confirmations(
+        vm.confirmations
+            .map(|count| count.to_string())
+            .unwrap_or_default()
+            .into(),
+    );
+    // Empty means the node did not report one, which the sheet says in
+    // words rather than showing a zero.
+    tx.set_fee(vm.fee_display.unwrap_or_default().into());
+    tx.set_explorer(vm.explorer_url.unwrap_or_default().into());
+    tx.set_raw(vm.raw_json.unwrap_or_default().into());
+
+    let lines: Vec<SharedString> = vm
+        .currency_lines
+        .iter()
+        .map(|line| SharedString::from(line.as_str()))
+        .collect();
+    tx.set_currency_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
 }
 
 /// The activity list, and the dashboard's excerpt of it.

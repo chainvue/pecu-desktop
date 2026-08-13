@@ -453,6 +453,26 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
         actions.on_refresh(move || dispatcher.send(Command::Refresh(RefreshScope::All)));
     }
 
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_open_tx(move |txid| {
+            dispatcher.send(Command::LoadTxDetail(txid.to_string()));
+        });
+    }
+
+    {
+        // Core knows how far down it has already looked; the screen only asks
+        // for more. Sending a height from here would be the UI deciding where
+        // the list ends.
+        let dispatcher = dispatcher.clone();
+        actions.on_load_older(move || {
+            dispatcher.send(Command::LoadHistory {
+                key: String::new(),
+                before_height: None,
+            });
+        });
+    }
+
     actions.on_navigate(move |screen| {
         let id = match screen.as_str() {
             "send" => ScreenId::Send,

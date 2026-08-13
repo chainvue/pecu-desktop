@@ -122,3 +122,72 @@ fn a_real_address_reads_coherently() {
         println!("  {} {} {}", row.when_display, row.net_display, row.txid);
     }
 }
+
+/// A real read must actually reach the cache, and come back out of it.
+///
+/// # Why this test exists
+///
+/// It was written after finding that it did not. The restore path was built
+/// and tested, the write path was not wired at all, and everything looked
+/// right: the cold-start test seeded the database itself, so it passed against
+/// a cache nothing ever filled. A round trip through real data is the only
+/// shape of test that could have caught that.
+#[ignore = "talks to api.verustest.net"]
+#[test]
+fn a_real_read_round_trips_through_the_cache() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let chain = Chain::live(TESTNET).expect("a client for the testnet endpoint");
+
+    let reading = portfolio::read(&chain, &[address()], portfolio::Cached::default());
+    assert!(reading.failure.is_none(), "{:?}", reading.failure);
+
+    let now = 1_800_000_000;
+    let portfolio_vm = reading.portfolio("VRSCTEST");
+    let rows = reading.rows(now);
+
+    {
+        let store = chainvue_store::Store::open(dir.path()).expect("store");
+        store.save_snapshot(&portfolio_vm, &rows, now);
+        if let Some(native) = reading.native {
+            store.remember_native_currency(&portfolio::i_address(native));
+        }
+        store.remember_currency_names(
+            &reading
+                .names
+                .iter()
+                .map(|(id, name)| (portfolio::i_address(*id), name.clone()))
+                .collect(),
+        );
+    }
+
+    // A different process would see exactly this.
+    let store = chainvue_store::Store::open(dir.path()).expect("reopen");
+
+    let restored = store.snapshot().expect("the snapshot was written");
+    assert_eq!(
+        restored.portfolio.balance.total_display,
+        portfolio_vm.balance.total_display,
+    );
+    assert_eq!(restored.history.len(), rows.len());
+
+    // The caches that make the next refresh cheap.
+    let native = store
+        .native_currency()
+        .expect("the native currency was cached");
+    assert!(native.starts_with('i'), "{native}");
+    assert_eq!(
+        portfolio::currency_from_i_address(&native),
+        reading.native,
+        "the currency id did not survive the round trip",
+    );
+
+    for (id, name) in &reading.names {
+        assert_eq!(
+            store.currency_names().get(&portfolio::i_address(*id)),
+            Some(name),
+            "a currency name was not cached",
+        );
+    }
+
+    println!("cached {} rows, {} names", rows.len(), reading.names.len());
+}

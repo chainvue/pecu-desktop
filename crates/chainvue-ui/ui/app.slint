@@ -44,6 +44,11 @@ export global WalletState {
     // Two models rather than one sliced, because Slint's `for` has no window.
     in property <[ActivityRow]> activity: [];
     in property <[ActivityRow]> history: [];
+    // The scan has reached the start of the chain. Until it has, there may be
+    // older transactions nobody has looked for yet — which is not the same as
+    // there being none.
+    in property <bool> history-complete: false;
+    in property <bool> loading-history: false;
     // The chain tip, so a row can work out its own confirmations. A new block
     // updates ONE integer and every visible row recomputes itself — no model
     // mutation, no notification storm.
@@ -129,6 +134,29 @@ export global SendState {
     in-out property <string> problem: "";
 }
 
+// One transaction, opened.
+export global TxState {
+    // Empty when nothing is open. The sheet is the txid being non-empty —
+    // there is no second flag that could disagree with it.
+    in-out property <string> txid: "";
+    in property <string> when: "";
+    in property <string> amount: "";
+    in property <string> direction: "in";
+    // False when the amount is already a token line naming its own currency —
+    // appending the chain's ticker would read as "12 345 mambo VRSCTEST".
+    in property <bool> amount-is-native: true;
+    in property <string> confirmations: "";
+    in property <string> height: "";
+    // Empty when the node did not volunteer one. A fee is inputs minus
+    // outputs, and the input values live in other transactions.
+    in property <string> fee: "";
+    in property <[string]> currency-lines: [];
+    in property <string> explorer: "";
+    // Arrives one request later, so the sheet opens instantly and this fills in.
+    in property <string> raw: "";
+    in-out property <bool> advanced: false;
+}
+
 export global NetworkState {
     in property <[NodeRow]> nodes: [];
     in property <string> requested: "Testnet";
@@ -204,6 +232,8 @@ export global Actions {
     callback cancel-send(int);
     // "check" | "resend" | "abandon" — for a payment whose fate is unknown.
     callback resolve-pending(int, string);
+    callback load-older();
+    callback open-tx(string);
 
     callback lock();
     callback navigate(string);
@@ -1440,7 +1470,8 @@ component ActivityRowItem inherits VerticalLayout {
             : root.entry.direction == "out" ? "Sent"
             : "Moved";
         subtitle: root.entry.txid;
-        interactive: false;
+        interactive: true;
+        clicked => { Actions.open-tx(root.entry.txid); }
 
         HorizontalLayout {
             spacing: Sp.s5;
@@ -1506,7 +1537,245 @@ component ActivityScreen inherits VerticalLayout {
         }
     }
 
+    // Offered until the scan has actually reached the start of the chain.
+    // History is fetched in windows of blocks, so an empty stretch is not the
+    // end of the list — and a wallet that stopped at the first quiet week would
+    // simply be hiding transactions.
+    if WalletState.history.length > 0 && !WalletState.history-complete: HorizontalLayout {
+        alignment: center;
+        Btn {
+            text: WalletState.loading-history ? "Reading…" : "Load older transactions";
+            enabled: !WalletState.loading-history;
+            clicked => { Actions.load-older(); }
+        }
+    }
+
+    if WalletState.history.length > 0 && WalletState.history-complete: Text {
+        text: "That is everything on the chain for this wallet.";
+        font-size: Typo.caption;
+        color: Theme.text-tertiary;
+        horizontal-alignment: center;
+    }
+
     Rectangle { vertical-stretch: 1; }
+}
+
+// Where to look a transaction up.
+//
+// Shown, not opened. Launching a browser is a capability a wallet does not
+// otherwise have, and it is one process spawn away from being a way to run
+// something else.
+component ExplorerLink inherits VerticalLayout {
+    spacing: Sp.s3;
+    Eyebrow { text: "LOOK IT UP"; }
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+        link := TextInput {
+            horizontal-stretch: 1;
+            text: TxState.explorer;
+            read-only: true;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-secondary;
+            wrap: char-wrap;
+        }
+        Btn {
+            text: "Copy link";
+            y: 0;
+            clicked => {
+                link.select-all();
+                link.copy();
+            }
+        }
+    }
+}
+
+// One transaction, over whatever is behind it.
+//
+// A sheet rather than a screen: it is a detour, and coming back should not need
+// a decision about where you were.
+component TxSheet inherits Rectangle {
+    // Dims what is behind without hiding it, so the list is still the context.
+    background: Theme.dark ? #0B0C0EC0 : #FBFBFCC0;
+
+    // Swallows clicks so nothing behind the sheet can be pressed through it,
+    // and closes on a click outside the card.
+    TouchArea {
+        clicked => { TxState.txid = ""; }
+    }
+
+    Card {
+        width: 600px;
+        height: min(root.height - Sp.s11 * 2, content.preferred-height);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        // The card itself must not close it.
+        TouchArea {}
+
+        Flickable {
+            viewport-height: content.preferred-height;
+
+            content := VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                HorizontalLayout {
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Sp.s2;
+                        Text {
+                            text: TxState.direction == "in" ? "Received"
+                                : TxState.direction == "out" ? "Sent"
+                                : "Moved between your own addresses";
+                            font-size: Typo.title2;
+                            font-weight: Typo.w-semibold;
+                            color: Theme.text-primary;
+                        }
+                        Text {
+                            text: TxState.when;
+                            font-size: Typo.caption;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                    Btn {
+                        text: "Close";
+                        variant: "ghost";
+                        y: 0;
+                        clicked => { TxState.txid = ""; }
+                    }
+                }
+
+                Money {
+                    amount: TxState.amount;
+                    currency: WalletState.ticker;
+                    show-currency: TxState.amount-is-native;
+                    size: Typo.title1;
+                    mono: false;
+                    tone: TxState.direction == "in" ? "positive"
+                        : TxState.direction == "out" ? "negative"
+                        : "neutral";
+                }
+
+                for line in TxState.currency-lines: Text {
+                    text: line;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.text-secondary;
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s4;
+
+                    HorizontalLayout {
+                        Text {
+                            text: "Confirmations";
+                            font-size: Typo.body;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: TxState.confirmations == "" ? "unconfirmed" : TxState.confirmations;
+                            font-family: Typo.mono;
+                            font-size: Typo.num;
+                            color: TxState.confirmations == "" ? Theme.warning : Theme.text-primary;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: "Block";
+                            font-size: Typo.body;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: TxState.height == "0" ? "not mined yet" : TxState.height;
+                            font-family: Typo.mono;
+                            font-size: Typo.num;
+                            color: Theme.text-primary;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: "Fee";
+                            font-size: Typo.body;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            // "Not reported" rather than a zero. A fee is
+                            // inputs minus outputs, and the input values live
+                            // in other transactions — a wallet that printed 0
+                            // here would be stating something it does not know.
+                            text: TxState.fee == "" ? "not reported by this node" : TxState.fee;
+                            font-family: TxState.fee == "" ? "" : Typo.mono;
+                            font-size: TxState.fee == "" ? Typo.caption : Typo.num;
+                            color: TxState.fee == "" ? Theme.text-tertiary : Theme.text-primary;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "TRANSACTION ID"; }
+                    txid := TextInput {
+                        text: TxState.txid;
+                        read-only: true;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-primary;
+                        wrap: char-wrap;
+                    }
+                }
+
+                // Its own component, so the field and the button that copies
+                // it live in the same scope — an element declared inside an
+                // `if` cannot be reached from outside it.
+                if TxState.explorer != "": ExplorerLink {}
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: "Copy id";
+                        clicked => {
+                            txid.select-all();
+                            txid.copy();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        text: TxState.advanced ? "Hide raw transaction" : "Raw transaction";
+                        variant: "ghost";
+                        clicked => { TxState.advanced = !TxState.advanced; }
+                    }
+                }
+
+                if TxState.advanced: Rectangle {
+                    height: 220px;
+                    background: Theme.bg-inset;
+                    border-radius: R.md;
+
+                    Flickable {
+                        viewport-height: raw.preferred-height;
+                        raw := Text {
+                            text: TxState.raw == "" ? "Waiting for the node…" : TxState.raw;
+                            font-family: Typo.mono;
+                            font-size: Typo.micro;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                            x: Sp.s5;
+                            width: parent.width - Sp.s5 * 2;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 component ReceiveScreen inherits VerticalLayout {
@@ -2193,4 +2462,10 @@ export component AppWindow inherits Window {
             }
         }
     }
+
+    // Over everything, including the nav rail: a detail sheet that left the
+    // rail clickable would let someone navigate away from a transaction they
+    // are in the middle of reading.
+    if WalletState.exists && !WalletState.locked && SeedState.step == ""
+        && TxState.txid != "": TxSheet {}
 }

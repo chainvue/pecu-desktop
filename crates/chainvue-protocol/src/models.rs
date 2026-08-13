@@ -273,8 +273,23 @@ pub struct TxDetailVm {
     pub block_time: i64,
     pub when_display: String,
     pub net_display: String,
+    /// Whether `net_display` is the chain's own currency.
+    ///
+    /// False for a transaction that moved a token and no native value: the
+    /// amount is then already a token line naming its own currency, and
+    /// labelling it with the chain's ticker as well would read as
+    /// "12 345 mambo VRSCTEST".
+    pub amount_is_native: bool,
+    /// Only when the node reported one. A fee is inputs minus outputs, and the
+    /// input values live in *other* transactions — computing it for an
+    /// arbitrary transaction would cost one lookup per input. `None` means
+    /// unknown, and the screen says so rather than showing a zero.
     pub fee_display: Option<String>,
     pub direction: TxDirection,
+    /// Non-native currencies this transaction moved, pre-formatted.
+    pub currency_lines: Vec<String>,
+    /// Where to look this up. Not opened for you — see the Advanced section.
+    pub explorer_url: Option<String>,
     /// Raw decoded JSON, shown only under Advanced. `None` when the node
     /// declined or has not been asked.
     pub raw_json: Option<String>,

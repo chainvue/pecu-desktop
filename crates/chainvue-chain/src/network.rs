@@ -64,6 +64,22 @@ impl Network {
     }
 }
 
+impl Network {
+    /// Where to look a transaction up, for the chains that have a public
+    /// explorer.
+    ///
+    /// `None` for anything else — a PBaaS chain has no explorer this build
+    /// knows about, and guessing a hostname would send someone to a page that
+    /// does not exist, or worse, to somebody else's chain.
+    pub fn explorer(&self, txid: &str) -> Option<String> {
+        match self {
+            Self::Mainnet => Some(format!("https://explorer.verus.io/tx/{txid}")),
+            Self::Testnet => Some(format!("https://testex.verus.io/tx/{txid}")),
+            Self::Other(_) => None,
+        }
+    }
+}
+
 impl core::fmt::Display for Network {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.label())
@@ -90,6 +106,22 @@ mod tests {
         assert_eq!(other, Network::Other("SOMEPBAAS".to_string()));
         assert!(!other.is_mainnet());
         assert_eq!(other.label(), "SOMEPBAAS");
+    }
+
+    #[test]
+    fn only_the_chains_with_an_explorer_offer_one() {
+        let txid = "abc123";
+        assert_eq!(
+            Network::Mainnet.explorer(txid).as_deref(),
+            Some("https://explorer.verus.io/tx/abc123"),
+        );
+        assert_eq!(
+            Network::Testnet.explorer(txid).as_deref(),
+            Some("https://testex.verus.io/tx/abc123"),
+        );
+        // A guessed hostname sends someone to a page that does not exist, or
+        // to somebody else's chain.
+        assert_eq!(Network::Other("SOMEPBAAS".to_string()).explorer(txid), None);
     }
 
     /// The property that matters most: nothing about a hostname can make a

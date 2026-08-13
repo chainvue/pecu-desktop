@@ -21,6 +21,12 @@ pub enum Event {
         delta: ListDelta<HistoryRowVm>,
     },
     TxDetail(TxDetailVm),
+    /// Whether the scan has reached the start of the chain.
+    ///
+    /// Separate from the list itself, because "there is nothing older" and
+    /// "this is what we have so far" are different claims and only one of them
+    /// justifies taking the button away.
+    HistoryExhausted(bool),
     Pending(ListDelta<PendingVm>),
 
     SendValidation(DraftValidationVm),

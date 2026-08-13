@@ -35,8 +35,23 @@ use verus_sdk::network::{self, FlowError, HistoryEntry, SignedAmount};
 use verus_sdk::verus_keys::{Address, AddressKind};
 
 /// How many transactions the dashboard's "recent" list shows. The Activity
-/// screen gets all of them.
+/// screen gets everything fetched so far.
 pub const RECENT: usize = 6;
+
+/// How many transactions one page tries to gather before stopping.
+pub const PAGE_ROWS: usize = 60;
+
+/// How far back one `getaddressdeltas` reaches, in blocks.
+///
+/// Verus aims at one-minute blocks, so this is about a week. Small enough that
+/// even a busy address answers in a bounded reply, and the window widens on its
+/// own when it comes back empty — see [`history_page`].
+const WINDOW_BLOCKS: u32 = 10_000;
+
+/// The most a window may grow to before it stops doubling. About four years at
+/// one-minute blocks, so an empty chain is crossed in a handful of requests
+/// rather than hundreds.
+const MAX_WINDOW_BLOCKS: u32 = 2_000_000;
 
 /// What one refresh brings back.
 ///
@@ -63,6 +78,11 @@ pub struct Reading {
     pub names: BTreeMap<CurrencyId, String>,
     /// `Err` here means the activity list is unknown, never empty.
     pub history: Result<Vec<HistoryEntry>, FlowError>,
+    /// The lowest block height this scan actually looked at. Anything below is
+    /// unexplored, not empty — the distinction the "Load older" button needs.
+    pub scanned_to: u32,
+    /// The scan reached the start of the chain. There is nothing older.
+    pub reached_start: bool,
     /// A failure that cost us the balance itself.
     pub failure: Option<FlowError>,
 }
@@ -92,6 +112,8 @@ pub fn read(chain: &Chain, addresses: &[String], cached: Cached) -> Reading {
         native: cached.native,
         names: cached.names,
         history: Ok(Vec::new()),
+        scanned_to: 0,
+        reached_start: false,
         failure: None,
     };
 
@@ -149,10 +171,21 @@ pub fn read(chain: &Chain, addresses: &[String], cached: Cached) -> Reading {
         Err(error) => tracing::warn!(%error, "the mempool could not be read"),
     }
 
-    // One call for every address together: the SDK counts a movement once even
-    // where the index reports it under several of them, which asking per
-    // address would not.
-    reading.history = network::history(chain, &refs, None);
+    // A bounded window rather than the whole chain. `history(.., None)` asks
+    // for every transaction an address has ever been in, and the SDK says
+    // plainly what that costs: "on a busy address is a large reply. Page with
+    // explicit ranges rather than finding the transport's size ceiling." That
+    // ceiling is 8 MB, and hitting it does not truncate the list — it fails the
+    // whole read, which on screen looks like a wallet that has lost your
+    // transactions rather than one that found too many.
+    match history_page(chain, &refs, reading.tip, PAGE_ROWS) {
+        Ok(page) => {
+            reading.history = Ok(page.entries);
+            reading.scanned_to = page.scanned_to;
+            reading.reached_start = page.reached_start;
+        }
+        Err(error) => reading.history = Err(error),
+    }
 
     // Only for currencies whose name is not already known. This is the request
     // that grows with what a wallet holds, and the cache is what keeps it from
@@ -173,6 +206,149 @@ pub fn read(chain: &Chain, addresses: &[String], cached: Cached) -> Reading {
     }
 
     reading
+}
+
+/// One page of history, scanning backwards from `before`.
+///
+/// # Why the window grows
+///
+/// A height range is the only bound `getaddressdeltas` offers — there is no
+/// "give me the last fifty". So a busy address gets a small window and a
+/// bounded reply, and a quiet one would otherwise need hundreds of empty
+/// requests to walk back two years of chain. Doubling on an empty window
+/// crosses that in a handful.
+///
+/// `before` is exclusive: pass the tip for the newest page, and the previous
+/// page's `scanned_to` for the next one.
+pub fn history_page(
+    chain: &Chain,
+    addresses: &[&str],
+    before: u32,
+    want: usize,
+) -> Result<HistoryPage, FlowError> {
+    let mut entries: Vec<HistoryEntry> = Vec::new();
+    let mut end = before;
+    let mut window = WINDOW_BLOCKS;
+    let mut requests = 0u32;
+
+    loop {
+        if end == 0 {
+            return Ok(HistoryPage {
+                entries,
+                scanned_to: 0,
+                reached_start: true,
+            });
+        }
+
+        let start = window_start(end, window);
+
+        let found = network::history(chain, addresses, Some((start, end)))?;
+        requests += 1;
+
+        let empty = found.is_empty();
+        entries.splice(0..0, found);
+
+        if start <= 1 {
+            return Ok(HistoryPage {
+                entries,
+                scanned_to: 0,
+                reached_start: true,
+            });
+        }
+        if entries.len() >= want {
+            return Ok(HistoryPage {
+                entries,
+                scanned_to: start,
+                reached_start: false,
+            });
+        }
+
+        // A window that found nothing was too narrow for how quiet this address
+        // is. One that found something and still came up short is simply a
+        // sparse stretch, and widening it risks the reply this is here to bound.
+        if empty {
+            window = window.saturating_mul(2).min(MAX_WINDOW_BLOCKS);
+        }
+        end = start - 1;
+
+        // A backstop, not a policy. Nothing here should loop this long, and if
+        // it ever does, returning what we have beats hammering a public node.
+        if requests >= 24 {
+            tracing::warn!(requests, scanned_to = end, "the history scan gave up early");
+            return Ok(HistoryPage {
+                entries,
+                scanned_to: end,
+                reached_start: false,
+            });
+        }
+    }
+}
+
+/// Everything the detail sheet can say without asking a node.
+///
+/// All of it comes from the history entry already on screen, which is why
+/// opening a transaction is instant and the one request it does make — the raw
+/// JSON — arrives afterwards.
+pub fn detail(
+    entry: &HistoryEntry,
+    names: &BTreeMap<CurrencyId, String>,
+    tip: u32,
+    now: i64,
+    explorer: Option<String>,
+) -> chainvue_protocol::TxDetailVm {
+    let by_address: BTreeMap<String, String> = names
+        .iter()
+        .map(|(id, name)| (i_address(*id), name.clone()))
+        .collect();
+
+    let listed = row(entry, now, &by_address);
+    // `row` substitutes the token line for the amount when no native value
+    // moved — so the amount is the native figure exactly when it did.
+    let amount_is_native = entry.net_native != SignedAmount::ZERO;
+
+    chainvue_protocol::TxDetailVm {
+        txid: entry.txid.to_string(),
+        height: entry.height,
+        // Derived from the tip, not asked for. A confirmation count is
+        // arithmetic on two numbers the wallet already has, and asking a node
+        // for it would be a request that can also be wrong by a block.
+        confirmations: (entry.height > 0 && tip >= entry.height).then(|| tip - entry.height + 1),
+        block_time: entry.block_time,
+        when_display: listed.when_display,
+        net_display: listed.net_display,
+        amount_is_native,
+        // Unknown until the raw transaction says so. See the field's docs for
+        // why it is not simply computed.
+        fee_display: None,
+        direction: listed.direction,
+        // Only alongside a native figure. When the amount IS the token line,
+        // listing it again below would print the same movement twice.
+        currency_lines: if amount_is_native {
+            listed.currency_lines
+        } else {
+            Vec::new()
+        },
+        explorer_url: explorer,
+        raw_json: None,
+    }
+}
+
+/// The lower bound of a window ending at `end`.
+///
+/// Never zero. `getaddressdeltas` refuses a zero bound outright — measured
+/// against api.verustest.net: *"Start and end is expected to be greater than
+/// zero"* — so a scan that walked down to 0 would fail on its last window and
+/// lose the entire page rather than finishing. There are no transactions in the
+/// genesis block anyway.
+fn window_start(end: u32, window: u32) -> u32 {
+    end.saturating_sub(window).max(1)
+}
+
+/// What one scan found, and how far down it looked.
+pub struct HistoryPage {
+    pub entries: Vec<HistoryEntry>,
+    pub scanned_to: u32,
+    pub reached_start: bool,
 }
 
 /// Sum the unconfirmed native value arriving at these addresses.
@@ -278,44 +454,56 @@ impl Reading {
         }
     }
 
-    /// Every transaction, newest first, with day headings.
-    ///
-    /// The SDK returns them oldest first, because that is the order the chain
-    /// puts them in. A person reads their own history the other way round.
+    /// Every transaction this read found, newest first, with day headings.
     pub fn rows(&self, now: i64) -> Vec<HistoryRowVm> {
         let Ok(entries) = &self.history else {
             return Vec::new();
         };
-
-        // `net_currencies` is keyed by i-address and `names` by `CurrencyId`,
-        // so the two need bridging before a row can say "mambo" instead of a
-        // fragment of an id.
-        let named: BTreeMap<String, String> = self
-            .names
-            .iter()
-            .map(|(id, name)| (i_address(*id), name.clone()))
-            .collect();
-
-        let mut rows: Vec<HistoryRowVm> = entries
-            .iter()
-            .rev()
-            .map(|entry| row(entry, now, &named))
-            .collect();
-
-        // The heading goes on the first row of each day. Done after the rows
-        // exist because it depends on comparing neighbours, which is exactly
-        // what a `for` loop over a Slint model cannot do.
-        let mut previous: Option<String> = None;
-        for row in &mut rows {
-            let day = calendar_day(row.block_time, now);
-            if previous.as_ref() != Some(&day) {
-                row.group.clone_from(&day);
-                previous = Some(day);
-            }
-        }
-
-        rows
+        rows_from(entries, &self.names, now)
     }
+}
+
+/// Turn history entries into rows, newest first, with day headings.
+///
+/// The SDK returns them oldest first, because that is the order the chain puts
+/// them in. A person reads their own history the other way round.
+///
+/// A free function because a later page has to be re-grouped **together with**
+/// everything already on screen: a day heading is a statement about the row
+/// above, and appending a page without redoing them would print "Yesterday"
+/// twice.
+pub fn rows_from(
+    entries: &[HistoryEntry],
+    names: &BTreeMap<CurrencyId, String>,
+    now: i64,
+) -> Vec<HistoryRowVm> {
+    // `net_currencies` is keyed by i-address and `names` by `CurrencyId`, so
+    // the two need bridging before a row can say "mambo" instead of a fragment
+    // of an id.
+    let by_address: BTreeMap<String, String> = names
+        .iter()
+        .map(|(id, name)| (i_address(*id), name.clone()))
+        .collect();
+
+    let mut rows: Vec<HistoryRowVm> = entries
+        .iter()
+        .rev()
+        .map(|entry| row(entry, now, &by_address))
+        .collect();
+
+    // The heading goes on the first row of each day. Done after the rows
+    // exist because it depends on comparing neighbours, which is exactly
+    // what a `for` loop over a Slint model cannot do.
+    let mut previous: Option<String> = None;
+    for row in &mut rows {
+        let day = calendar_day(row.block_time, now);
+        if previous.as_ref() != Some(&day) {
+            row.group.clone_from(&day);
+            previous = Some(day);
+        }
+    }
+
+    rows
 }
 
 /// "Today" / "Yesterday" / "12 March 2026", in the machine's own timezone.
@@ -709,6 +897,32 @@ mod tests {
             "{}",
             anonymous.net_display
         );
+    }
+
+    /// The bound that a real node rejected.
+    ///
+    /// Found by the live test, not by reasoning: the arithmetic looked right
+    /// and the daemon refused it. A scan that reaches the start of the chain
+    /// must ask for height 1, never 0, or its last window fails and takes the
+    /// whole page with it.
+    #[test]
+    fn a_window_never_reaches_down_to_height_zero() {
+        assert_eq!(window_start(100, 10), 90);
+        assert_eq!(window_start(100, 100), 1, "a window reaching 0 must clamp");
+        assert_eq!(
+            window_start(100, 1_000_000),
+            1,
+            "and so must an oversized one"
+        );
+        assert_eq!(window_start(1, 10), 1);
+        assert_eq!(window_start(0, 10), 1);
+
+        // Whatever the inputs, the bound the node sees is a legal one.
+        for end in [0u32, 1, 2, 9_999, 1_187_611, u32::MAX] {
+            for window in [1u32, WINDOW_BLOCKS, MAX_WINDOW_BLOCKS, u32::MAX] {
+                assert!(window_start(end, window) >= 1, "{end}/{window}");
+            }
+        }
     }
 
     #[test]

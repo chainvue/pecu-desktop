@@ -119,6 +119,7 @@ pub fn start(
         checking: std::collections::HashSet::new(),
         tip_polled: None,
         polling_tip: false,
+        history: HistoryScan::default(),
         store,
     };
 
@@ -165,10 +166,34 @@ struct Core {
     /// ask is in flight.
     tip_polled: Option<std::time::Instant>,
     polling_tip: bool,
+    history: HistoryScan,
+
     /// Settings, and a cache the wallet is free to throw away. `None` when the
     /// databases could not be opened — the wallet works without them, it just
     /// forgets between runs and starts every session with a blank dashboard.
     store: Option<chainvue_store::Store>,
+}
+
+/// How far the backwards scan through the chain has got.
+///
+/// Grouped rather than four fields on `Core`, because they only mean anything
+/// together: `scanned_to` says nothing without knowing whether the scan
+/// finished, and neither says anything while a page is in flight.
+#[derive(Default)]
+struct HistoryScan {
+    /// Every transaction found so far, oldest first — the order the SDK returns
+    /// them in. Kept whole because a day heading is a statement about the row
+    /// above it, so a new page has to be grouped together with what is already
+    /// on screen rather than appended to it.
+    entries: Vec<verus_sdk::network::HistoryEntry>,
+    /// The lowest block height looked at. Below this is **unexplored**, which
+    /// is not the same as empty — and that distinction is the whole reason
+    /// "Load older" can be offered honestly.
+    scanned_to: u32,
+    /// The scan reached the start of the chain. There is nothing older.
+    complete: bool,
+    /// A page is in flight.
+    loading: bool,
 }
 
 /// An answer from a job that ran off the actor.
@@ -189,6 +214,13 @@ enum Work {
         info: Box<Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>>,
         latency: std::time::Duration,
     },
+    /// The raw JSON for a transaction the detail sheet is showing.
+    RawTransaction {
+        txid: String,
+        json: Box<Option<serde_json::Value>>,
+    },
+    /// An older page of history arrived.
+    OlderHistory(Box<Result<portfolio::HistoryPage, verus_sdk::network::FlowError>>),
     /// A node answered whether an uncertain transaction confirmed.
     ///
     /// `Some(_)` means the node has it — the payment landed after all.
@@ -429,6 +461,8 @@ impl Core {
                 info,
                 latency,
             } => self.finish_tip(node, &info, latency),
+            Work::OlderHistory(page) => self.finish_older_history(*page),
+            Work::RawTransaction { txid, json } => self.finish_raw_transaction(&txid, *json),
             Work::Checked {
                 record,
                 confirmations,
@@ -456,16 +490,19 @@ impl Core {
             .and_then(|node| node.network.as_ref())
             .map_or("VRSC", chainvue_chain::Network::ticker);
 
-        let _ = self
-            .events
-            .send(Event::Portfolio(reading.portfolio(ticker)));
+        let portfolio = reading.portfolio(ticker);
+        let _ = self.events.send(Event::Portfolio(portfolio.clone()));
 
         match &reading.history {
-            Ok(_) => {
-                let _ = self.events.send(Event::History {
-                    key: String::new(),
-                    delta: chainvue_protocol::ListDelta::Replace(reading.rows(now())),
-                });
+            Ok(entries) => {
+                // A refresh restarts the scan from the tip, so what it found
+                // replaces what was there. Merging would need a de-duplication
+                // pass to gain nothing: this page covers the same ground and is
+                // newer.
+                self.history.entries.clone_from(entries);
+                self.history.scanned_to = reading.scanned_to;
+                self.history.complete = reading.reached_start;
+                self.emit_history();
             }
             Err(error) => {
                 // An unknown history is not an empty one, and the difference
@@ -473,6 +510,39 @@ impl Core {
                 self.notice("history", "Could not read this wallet's activity", error);
             }
         }
+
+        self.remember(&portfolio, reading);
+    }
+
+    /// Keep what this refresh learned, for the next cold start.
+    ///
+    /// Only a read that actually worked. Caching a failed one would mean the
+    /// next start restores a wrong balance and presents it as the last known
+    /// good figure.
+    fn remember(&self, portfolio: &chainvue_protocol::PortfolioVm, reading: &portfolio::Reading) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if reading.failure.is_some() || reading.history.is_err() {
+            return;
+        }
+
+        store.save_snapshot(
+            portfolio,
+            &portfolio::rows_from(&self.history.entries, &self.cached.names, now()),
+            now(),
+        );
+
+        if let Some(native) = reading.native {
+            store.remember_native_currency(&portfolio::i_address(native));
+        }
+        store.remember_currency_names(
+            &reading
+                .names
+                .iter()
+                .map(|(id, name)| (portfolio::i_address(*id), name.clone()))
+                .collect(),
+        );
     }
 
     /// Act on one command. `false` means stop.
@@ -491,6 +561,8 @@ impl Core {
                 }
             }
             Command::Refresh(_) => self.refresh(),
+            Command::LoadHistory { .. } => self.load_older_history(),
+            Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
 
             // ── Send ─────────────────────────────────────────────────
             Command::ValidateDraft(draft) => {
@@ -581,6 +653,183 @@ impl Core {
         true
     }
 
+    // ── One transaction, in detail ──────────────────────────────────────────
+
+    /// Open a transaction.
+    ///
+    /// Everything on the sheet except the raw JSON comes from the entry already
+    /// in memory, so it appears immediately. The one request follows and fills
+    /// in the Advanced section when it arrives.
+    fn load_tx_detail(&mut self, txid: &str) {
+        let Some(entry) = self
+            .history
+            .entries
+            .iter()
+            .find(|entry| entry.txid.to_string() == txid)
+        else {
+            return;
+        };
+
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let explorer = self
+            .nodes
+            .active()
+            .and_then(|node| node.network.as_ref())
+            .and_then(|network| network.explorer(txid));
+
+        let detail = portfolio::detail(entry, &self.cached.names, tip, now(), explorer);
+        let _ = self.events.send(Event::TxDetail(detail));
+
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let wanted = txid.to_string();
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                Work::RawTransaction {
+                    // A node that will not decode it is not an error worth
+                    // interrupting anyone for: the Advanced section simply
+                    // stays empty, and everything else on the sheet is true.
+                    json: Box::new(chain.raw_transaction(&wanted).ok()),
+                    txid: wanted,
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_raw_transaction(&mut self, txid: &str, json: Option<serde_json::Value>) {
+        let Some(json) = json else {
+            return;
+        };
+        let Some(entry) = self
+            .history
+            .entries
+            .iter()
+            .find(|entry| entry.txid.to_string() == txid)
+        else {
+            return;
+        };
+
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let explorer = self
+            .nodes
+            .active()
+            .and_then(|node| node.network.as_ref())
+            .and_then(|network| network.explorer(txid));
+
+        let mut detail = portfolio::detail(entry, &self.cached.names, tip, now(), explorer);
+
+        // The node's own count where it gives one — it knows about blocks mined
+        // since the last tip poll. Ours stands otherwise.
+        if let Some(reported) = json
+            .get("confirmations")
+            .and_then(serde_json::Value::as_u64)
+        {
+            detail.confirmations = u32::try_from(reported).ok();
+        }
+        // Only if the node volunteers it. Working it out means one lookup per
+        // input, and a fee nobody asked for is not worth that.
+        if let Some(fee) = json.get("fee").and_then(serde_json::Value::as_f64) {
+            detail.fee_display = verus_sdk::money::Amount::from_coins_str(&fee.abs().to_string())
+                .ok()
+                .map(portfolio::coins);
+        }
+
+        detail.raw_json = serde_json::to_string_pretty(&json).ok();
+        let _ = self.events.send(Event::TxDetail(detail));
+    }
+
+    // ── Paging backwards through the chain ──────────────────────────────────
+
+    /// Fetch the next page of older transactions.
+    ///
+    /// Picks up exactly where the last scan stopped. `HistoryScan::scanned_to` is
+    /// how far down the chain has been looked at, which is a different fact
+    /// from how far down a transaction was found — a gap of empty blocks must
+    /// not be mistaken for the end of the list.
+    fn load_older_history(&mut self) {
+        if self.history.loading || self.history.complete || self.history.scanned_to == 0 {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        let addresses: Vec<String> = self
+            .wallet
+            .view()
+            .keys
+            .into_iter()
+            .map(|key| key.address)
+            .collect();
+        if addresses.is_empty() {
+            return;
+        }
+
+        self.history.loading = true;
+        self.busy(TaskKind::LoadingHistory, true);
+
+        let before = self.history.scanned_to.saturating_sub(1);
+        self.blocking.dispatch(
+            move || {
+                let refs: Vec<&str> = addresses.iter().map(String::as_str).collect();
+                Work::OlderHistory(Box::new(portfolio::history_page(
+                    &chain,
+                    &refs,
+                    before,
+                    portfolio::PAGE_ROWS,
+                )))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_older_history(
+        &mut self,
+        page: Result<portfolio::HistoryPage, verus_sdk::network::FlowError>,
+    ) {
+        self.history.loading = false;
+        self.busy(TaskKind::LoadingHistory, false);
+
+        let page = match page {
+            Ok(page) => page,
+            Err(error) => {
+                // The list keeps what it has. An older page that could not be
+                // read is a page nobody has seen, not a list that shrank.
+                self.notice("load_history", "Could not read older transactions", &error);
+                return;
+            }
+        };
+
+        // Older entries go at the FRONT: the list is oldest-first, and the
+        // renderer reverses it.
+        self.history.entries.splice(0..0, page.entries);
+        self.history.scanned_to = page.scanned_to;
+        self.history.complete = page.reached_start;
+
+        self.emit_history();
+    }
+
+    /// Send the whole list, re-grouped.
+    ///
+    /// A whole replacement rather than an append, because the day headings have
+    /// to be recomputed across the join — appending a page whose first row is
+    /// another "Yesterday" would print the heading twice. The list is a few
+    /// hundred rows and carries no in-flight transitions, so there is nothing
+    /// for a delta to protect.
+    fn emit_history(&self) {
+        let rows = portfolio::rows_from(&self.history.entries, &self.cached.names, now());
+        let _ = self.events.send(Event::History {
+            key: String::new(),
+            delta: chainvue_protocol::ListDelta::Replace(rows),
+        });
+        let _ = self
+            .events
+            .send(Event::HistoryExhausted(self.history.complete));
+    }
+
     // ── What the last run left behind ───────────────────────────────────────
 
     /// Put yesterday's figures on screen before asking a node anything.
@@ -630,6 +879,9 @@ impl Core {
         portfolio::restamp(&mut history, now());
 
         tracing::info!(saved_at = snapshot.saved_at, "restored the last dashboard");
+        // Nothing has been scanned this run, so "Load older" stays offered
+        // rather than claiming the cached page is the whole history.
+        let _ = self.events.send(Event::HistoryExhausted(false));
         let _ = self.events.send(Event::Portfolio(portfolio));
         let _ = self.events.send(Event::History {
             key: String::new(),

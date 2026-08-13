@@ -40,3 +40,4 @@ zeroize = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
 tempfile = "3"
 verus-flows = { workspace = true }
+chainvue-store = { path = "../chainvue-store" }

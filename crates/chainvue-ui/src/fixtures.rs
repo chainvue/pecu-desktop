@@ -21,7 +21,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, NetworkState, NodeRow, PendingRow, ReviewOutput,
-    SeedState, SeedWord, SendState, WalletState,
+    SeedState, SeedWord, SendState, TxState, WalletState,
 };
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -72,6 +72,30 @@ pub fn settings(ui: &AppWindow) {
     wallet.set_auto_lock(5);
     wallet.set_vault_path(
         "~/Library/Application Support/com.chainvue.wallet/testnet/vault.json".into(),
+    );
+}
+
+/// A transaction opened over the activity list.
+///
+/// Shown with the raw JSON still on its way and the fee unreported — the state
+/// the sheet is actually in for the first moment, and the one where the wording
+/// has to be right about what is not known yet.
+pub fn tx_detail(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("activity".into());
+
+    let tx = ui.global::<TxState>();
+    tx.set_txid("685ffac53fc525a4cefa5ed334139aebace508cbe293a41e6edba096f22517a5".into());
+    tx.set_when("2 hours ago".into());
+    tx.set_amount("+12 345.0000 0000 mambo".into());
+    tx.set_direction("in".into());
+    // A token movement: the amount already names its currency.
+    tx.set_amount_is_native(false);
+    tx.set_confirmations("187".into());
+    tx.set_height("1 187 313".into());
+    tx.set_explorer(
+        "https://testex.verus.io/tx/685ffac53fc525a4cefa5ed334139aebace508cbe293a41e6edba096f22517a5"
+            .into(),
     );
 }
 
@@ -182,6 +206,9 @@ pub fn funded(ui: &AppWindow) {
     // which the dashboard's excerpt deliberately drops, because six rows are
     // not a day.
     wallet.set_tip_height(1_187_500);
+    // The scan has not reached the start of the chain, so "Load older" is
+    // offered — the state the Activity screen is in almost all of the time.
+    wallet.set_history_complete(false);
     wallet.set_history(ModelRc::from(Rc::new(VecModel::from(vec![
         dated("in", "+120.0000 0000", "2 hours ago", "Today", 1_187_400),
         dated("in", "+5.0000 0000", "pending", "", 0),
