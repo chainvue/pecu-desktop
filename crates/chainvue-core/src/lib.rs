@@ -2706,7 +2706,14 @@ impl Core {
                     ticket,
                     description: described.to_string(),
                     fee_display: fee,
-                    needs_confirmation,
+                    // The word travels with the request rather than being
+                    // written out again on the other side. `identity` owns what
+                    // it is; nothing else should have an opinion.
+                    confirmation: if needs_confirmation {
+                        identity::REVOKE_CONFIRMATION.to_string()
+                    } else {
+                        String::new()
+                    },
                 });
             }
             Err(reason) => {

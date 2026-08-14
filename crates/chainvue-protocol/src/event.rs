@@ -73,8 +73,14 @@ pub enum Event {
         /// What it will do, in a sentence.
         description: String,
         fee_display: String,
-        /// Whether sending it needs a word typed first. Only a revocation does.
-        needs_confirmation: bool,
+        /// The word that has to be typed before this can be sent, or empty when
+        /// none is needed. Only a revocation asks for one.
+        ///
+        /// The word itself rather than a flag, because the interface has to
+        /// print it, gate a button on it and compare against it — and with a
+        /// flag all three of those were a literal `"revoke"` written out in
+        /// the interface, three copies of a rule that lives in the core.
+        confirmation: String,
     },
     /// It was accepted by the network.
     IdentityChanged {

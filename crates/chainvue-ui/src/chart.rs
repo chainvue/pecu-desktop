@@ -201,6 +201,7 @@ fn refresh(ui: &AppWindow) {
         state.set_change(SharedString::new());
         state.set_caption(SharedString::new());
         state.set_span_from(SharedString::new());
+        state.set_span_range(SharedString::new());
         return;
     };
 
@@ -215,6 +216,7 @@ fn refresh(ui: &AppWindow) {
     // question the range buttons used to answer by implication and which
     // nothing answered once they were gone.
     state.set_span_from(axis_label(from, now_of(&state)).into());
+    state.set_span_range(span_range(&values).into());
 
     CHART.with_borrow(|chart| {
         state.set_ticker(chart.ticker.as_str().into());
@@ -357,6 +359,33 @@ fn clear_cursor(ui: &AppWindow) {
     state.set_hover(-1);
     state.set_hover_amount(SharedString::new());
     state.set_hover_when(SharedString::new());
+}
+
+/// What the top and the bottom of the plot are worth.
+///
+/// # Why a chart without this is misleading rather than merely bare
+///
+/// The line is scaled to the values it contains, not to zero — which is the
+/// right choice for a balance that never goes near zero, and it means the
+/// *shape* carries no magnitude at all. A wallet that moved by one coin and one
+/// that moved by ten thousand draw the identical staircase. Somebody reading
+/// the picture without a number is reading a picture of nothing.
+///
+/// Empty when the balance never moved: "12 482.4200 0000 – 12 482.4200 0000" is
+/// two copies of a figure already at the top of the screen, and the flat line
+/// above it is not ambiguous about anything.
+fn span_range(values: &[i64]) -> String {
+    let (Some(low), Some(high)) = (values.iter().min(), values.iter().max()) else {
+        return String::new();
+    };
+    if low == high {
+        return String::new();
+    }
+    format!(
+        "{} – {}",
+        chainvue_protocol::coins(*low),
+        chainvue_protocol::coins(*high),
+    )
 }
 
 /// Where the axis begins, at whatever precision the span justifies.

@@ -165,12 +165,12 @@ fn apply(ui: &AppWindow, event: Event) {
             ticket,
             description,
             fee_display,
-            needs_confirmation,
+            confirmation,
         } => {
             let state = ui.global::<IdentityState>();
             state.set_change_description(description.into());
             state.set_change_fee(fee_display.into());
-            state.set_change_needs_confirmation(needs_confirmation);
+            state.set_change_confirmation(confirmation.into());
             state.set_change_typed(SharedString::new());
             // Last, because a non-zero ticket is what opens the review.
             state.set_change_ticket(i32::try_from(ticket).unwrap_or(i32::MAX));
@@ -684,6 +684,11 @@ fn close_finished_key_forms(state: &WalletState<'_>, vm: &chainvue_protocol::Wal
 fn apply_network(ui: &AppWindow, vm: &chainvue_protocol::NetworkVm) {
     let state = ui.global::<NetworkState>();
     state.set_requested(vm.requested.clone().into());
+    // The chooser follows the wallet, never the other way round, so a switch
+    // the core refused puts the selection back. Only mainnet moves it: anything
+    // else — testnet, or a PBaaS chain this build has no button for — leaves it
+    // on the first option rather than claiming to be mainnet.
+    state.set_chain_index(i32::from(vm.requested == "Mainnet"));
     state.set_effective(vm.effective.clone().unwrap_or_default().into());
     state.set_tip(vm.tip.map(thousands).unwrap_or_default().into());
     state.set_syncing(vm.syncing);
@@ -725,8 +730,6 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
 
     state.set_total(balance.total_display.clone().into());
     state.set_spendable(balance.spendable_display.clone().into());
-    state.set_immature(balance.immature_display.clone().into());
-    state.set_pending(balance.pending_display.clone().into());
     state.set_stale(vm.stale);
     // The native asset row carries the chain's own name, which is what the
     // hero figure should be labelled with too.
@@ -735,20 +738,35 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
     }
     state.set_loading(false);
 
-    // The breakdown line appears only when it says something the total does
-    // not. A wallet with everything spendable stays quiet rather than printing
+    // The breakdown appears only when it says something the total does not. A
+    // wallet with everything spendable stays quiet rather than printing
     // "0.0000 0000 maturing" under every balance.
+    //
+    // **Each figure is blanked on its own, not just the group.** Only
+    // `incoming` used to be, so a wallet with money arriving and nothing
+    // maturing printed a zero anyway — the group was non-quiet and the maturing
+    // figure was drawn unconditionally. A zero beside three real numbers is not
+    // neutral: it is the wallet stating that none of your coins are immature,
+    // in the same breath and the same weight as the coins that are.
     let quiet = is_zero(&balance.immature_sats)
         && is_zero(&balance.pending_out_sats)
         && is_zero(&balance.pending_in_sats);
     state.set_has_breakdown(!quiet);
 
     // Formatted by core. This only decides whether there is anything to say.
-    state.set_incoming(if is_zero(&balance.pending_in_sats) {
-        SharedString::new()
-    } else {
-        balance.incoming_display.clone().into()
-    });
+    let shown = |zero: &str, display: &str| -> SharedString {
+        if is_zero(zero) {
+            SharedString::new()
+        } else {
+            display.into()
+        }
+    };
+    state.set_immature(shown(&balance.immature_sats, &balance.immature_display));
+    // Money that has left and not settled. Counted by `quiet` since the first
+    // version, and then never drawn — so a wallet whose only unusual state was
+    // an unconfirmed payment out showed a breakdown that did not mention it.
+    state.set_pending(shown(&balance.pending_out_sats, &balance.pending_display));
+    state.set_incoming(shown(&balance.pending_in_sats, &balance.incoming_display));
 
     let assets: Vec<AssetRow> = vm
         .assets

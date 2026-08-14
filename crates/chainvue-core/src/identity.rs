@@ -646,11 +646,12 @@ impl Prepared {
 
 /// The word somebody has to type before a revocation is sent.
 ///
-/// The same shape the mainnet spending switch uses, and for the same reason: a
-/// revocation cannot be undone without the recovery authority, and an identity
-/// that is its own recovery authority cannot be recovered at all. A button that
-/// only needs to be clicked is one that gets clicked.
-pub const REVOKE_CONFIRMATION: &str = "revoke";
+/// Defined in `chainvue-protocol` and re-exported here, because it is a term of
+/// the contract rather than a detail of this module: the core prints it in an
+/// event, the interface prompts with it and gates a button on it, and the core
+/// checks what comes back. Four readers, one of them across the boundary — so
+/// it lives in the one crate both halves are allowed to name.
+pub use chainvue_protocol::REVOKE_CONFIRMATION;
 
 /// What unlocking actually does, said plainly.
 ///

@@ -155,11 +155,18 @@ pub const CASES: &[Case] = &[
     ("dashboard", "backup-due", crate::fixtures::backup_due),
     ("dashboard", "backup-phrase", crate::fixtures::backup_phrase),
     ("dashboard", "backup-verify", crate::fixtures::backup_verify),
+    ("dashboard", "locked", crate::fixtures::locked),
+    (
+        "dashboard",
+        "locked-refused",
+        crate::fixtures::locked_refused,
+    ),
     ("dashboard", "unconfirmed", crate::fixtures::unconfirmed),
     ("dashboard", "toasts", crate::fixtures::complaining),
     ("activity", "activity", crate::fixtures::funded),
     ("activity", "tx-detail", crate::fixtures::tx_detail),
     ("send", "send-form", crate::fixtures::sending),
+    ("send", "send-too-much", crate::fixtures::sending_too_much),
     ("send", "send-review", crate::fixtures::reviewing),
     (
         "send",
@@ -170,9 +177,16 @@ pub const CASES: &[Case] = &[
     ("settings", "settings", crate::fixtures::settings),
     ("settings", "keys", crate::fixtures::keys),
     ("settings", "addresses", crate::fixtures::addresses),
+    ("settings", "general", crate::fixtures::general_settings),
     ("settings", "keys-renaming", crate::fixtures::renaming_key),
     ("nodes", "network", crate::fixtures::network),
+    ("nodes", "network-trouble", crate::fixtures::network_trouble),
     ("identities", "identities", crate::fixtures::identities),
+    (
+        "identities",
+        "claiming-a-name",
+        crate::fixtures::claiming_a_name,
+    ),
     ("identities", "registering", crate::fixtures::registering),
     (
         "identities",
@@ -188,5 +202,10 @@ pub const CASES: &[Case] = &[
         "identities",
         "identity-detail",
         crate::fixtures::identity_detail,
+    ),
+    (
+        "identities",
+        "identity-authorities",
+        crate::fixtures::identity_authorities,
     ),
 ];

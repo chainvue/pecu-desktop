@@ -88,13 +88,20 @@ type Screen = (&'static str, fn(&AppWindow));
 const SCREENS: &[Screen] = &[
     ("dashboard", chainvue_ui::fixtures::funded),
     ("send", chainvue_ui::fixtures::sending),
+    ("send", chainvue_ui::fixtures::sending_too_much),
+    ("nodes", chainvue_ui::fixtures::network_trouble),
     ("send", chainvue_ui::fixtures::reviewing),
     ("receive", chainvue_ui::fixtures::receiving),
     ("activity", chainvue_ui::fixtures::funded),
     ("settings", chainvue_ui::fixtures::settings),
+    ("settings", chainvue_ui::fixtures::keys),
+    ("settings", chainvue_ui::fixtures::addresses),
+    ("settings", chainvue_ui::fixtures::general_settings),
     ("nodes", chainvue_ui::fixtures::network),
     ("identities", chainvue_ui::fixtures::identities),
+    ("identities", chainvue_ui::fixtures::claiming_a_name),
     ("identities", chainvue_ui::fixtures::identity_detail),
+    ("identities", chainvue_ui::fixtures::identity_authorities),
     ("identities", chainvue_ui::fixtures::registering),
     ("identities", chainvue_ui::fixtures::identity_change_review),
     ("identities", chainvue_ui::fixtures::identity_revoke_review),
@@ -116,6 +123,53 @@ fn each_control(mut visit: impl FnMut(&str, &ElementHandle, AccessibleRole)) {
 
         ui.hide().expect("hide");
     }
+}
+
+/// Announcing a button is half of it. Pressing it is the other half.
+///
+/// # Why a separate test, and why it is the more important one
+///
+/// A name tells VoiceOver a control is there. Activating it goes through the
+/// **default action**, which is its own contract in Slint — and nothing in this
+/// interface declared one. Every button in the wallet was announced correctly
+/// and did nothing when a screen reader pressed it, which is a worse failure
+/// than a nameless button: the nameless one is obviously broken.
+///
+/// Asserted here by pressing the interface's own primary control on the send
+/// screen and checking the wallet was told. The named button is chosen rather
+/// than "any button" because a test that pressed whatever it found first would
+/// pass on something harmless while the important controls stayed inert.
+#[test]
+fn a_screen_reader_can_actually_press_a_button() {
+    i_slint_backend_testing::init_no_event_loop();
+
+    let ui = unlocked();
+    chainvue_ui::fixtures::sending(&ui);
+    ui.set_screen("send".into());
+    ui.show().expect("show");
+
+    let pressed = std::rc::Rc::new(std::cell::Cell::new(false));
+    {
+        let pressed = pressed.clone();
+        ui.global::<chainvue_ui::Actions>()
+            .on_lock(move || pressed.set(true));
+    }
+
+    let lock = ElementQuery::from_root(&ui)
+        .match_descendants()
+        .find_all()
+        .into_iter()
+        .find(|element| element.accessible_label().as_deref() == Some("Lock the wallet"))
+        .expect("the Lock control is on every screen of an unlocked wallet");
+
+    lock.invoke_accessible_default_action();
+    ui.hide().expect("hide");
+
+    assert!(
+        pressed.get(),
+        "activating a button the way a screen reader does had no effect — the \
+         control announces itself and cannot be operated",
+    );
 }
 
 #[test]

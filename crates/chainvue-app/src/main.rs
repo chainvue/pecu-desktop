@@ -554,6 +554,17 @@ fn wire_identity(ui: &AppWindow, dispatcher: &Dispatcher) {
                 state.set_address(slint::SharedString::new());
                 state.set_derived_key(slint::SharedString::new());
                 state.set_key_draft(slint::SharedString::new());
+                // The authority form shuts with the sheet, and empties.
+                //
+                // Here rather than on the sheet's `init`, even though `init`
+                // would cover every route in one place: every close does go
+                // through this callback, and a reset on `init` would also fire
+                // after a fixture had deliberately opened the form — which
+                // would leave the reference image photographing a shut form
+                // and nothing covering the fields.
+                state.set_changing_authorities(false);
+                state.set_new_revocation(slint::SharedString::new());
+                state.set_new_recovery(slint::SharedString::new());
             }
         });
     }
@@ -733,6 +744,13 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     {
         let dispatcher = dispatcher.clone();
         actions.on_probe_nodes(move || dispatcher.send(Command::ProbeNodes));
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_set_requested_network(move |name| {
+            dispatcher.send(Command::SetRequestedNetwork(name.to_string()));
+        });
     }
 
     {

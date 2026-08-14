@@ -48,10 +48,28 @@ export global Theme {
 
     // ── Text ────────────────────────────────────────────────────────────
     // Never pure white on dark — #F2F3F5 is the ceiling. `tertiary` is the
-    // deliberate contrast floor at roughly 4.6:1; nothing dimmer carries text.
+    // contrast floor; nothing dimmer than it carries text.
+    //
+    // # The floor is measured now, not asserted
+    //
+    // This comment used to claim "roughly 4.6:1" for `tertiary`. It was not
+    // true in either theme, and it was materially worse in light: the old
+    // `#878D97` on `#FBFBFC` measures **3.27:1**, well under the 4.5:1 that
+    // WCAG AA asks of normal text — and `tertiary` is not a rare colour here.
+    // It carries the address under every list row, the whole status bar, and
+    // most captions.
+    //
+    // Recomputed against each theme's own base, both now just over 4.6:1:
+    //
+    //   dark   #757B86 on #0B0C0E → 4.60:1
+    //   light  #6E747E on #FBFBFC → 4.63:1
+    //
+    // `disabled` is deliberately below the floor and stays there — it is the
+    // one role WCAG exempts, and raising it would make an inert control look
+    // live.
     out property <brush> text-primary:   dark ? #F2F3F5 : #101114;
     out property <brush> text-secondary: dark ? #A0A5AE : #5C626C;
-    out property <brush> text-tertiary:  dark ? #6E747E : #878D97;
+    out property <brush> text-tertiary:  dark ? #757B86 : #6E747E;
     out property <brush> text-disabled:  dark ? #4A4F58 : #AEB3BB;
     out property <brush> text-on-accent: #FFFFFF;
 
@@ -67,12 +85,22 @@ export global Theme {
     // ── Semantic ────────────────────────────────────────────────────────
     // Deliberately desaturated. #35C083 reads as information; #00FF88 reads as
     // a trading terminal, which is the thing this wallet is not.
-    out property <brush> positive:      dark ? #35C083 : #128A5A;
-    out property <brush> positive-soft: dark ? #35C0831F : #128A5A14;
-    out property <brush> negative:      dark ? #F0616D : #D63B49;
-    out property <brush> negative-soft: dark ? #F0616D1F : #D63B4914;
-    out property <brush> warning:       dark ? #E5A544 : #B8721A;
-    out property <brush> warning-soft:  dark ? #E5A5441F : #B8721A14;
+    //
+    // The dark set measures 6:1 to 9:1 and was always fine. The light set was
+    // tuned by eye against a dark-first design and all three fell short of
+    // 4.5:1 on white — warning worst at 3.7:1, which is the colour the maturing
+    // balance is printed in. Darkened until each clears it:
+    //
+    //   positive #0F7B50 → 5.17:1   negative #C9333F → 5.09:1
+    //   warning  #9F6413 → 4.77:1
+    //
+    // The `-soft` fills are backgrounds, not text, and keep their hue.
+    out property <brush> positive:      dark ? #35C083 : #0F7B50;
+    out property <brush> positive-soft: dark ? #35C0831F : #0F7B5014;
+    out property <brush> negative:      dark ? #F0616D : #C9333F;
+    out property <brush> negative-soft: dark ? #F0616D1F : #C9333F14;
+    out property <brush> warning:       dark ? #E5A544 : #9F6413;
+    out property <brush> warning-soft:  dark ? #E5A5441F : #9F641314;
 
     // ── The chart ───────────────────────────────────────────────────────
     // A `color`, not a `brush`, and that is load-bearing: `.with-alpha()` is a

@@ -101,6 +101,28 @@ export component Btn inherits Rectangle {
     accessible-role: AccessibleRole.button;
     accessible-label: root.text;
     accessible-enabled: root.enabled;
+    // What happens when a screen reader activates it.
+    //
+    // # This was missing everywhere, and it is not a detail
+    //
+    // Announcing a role and a label tells VoiceOver that a button is there and
+    // what it is called. Pressing it is a separate contract — the default
+    // action — and nothing in this interface declared one. So every button in
+    // this wallet was announced correctly and **did nothing at all** when
+    // somebody using a screen reader activated it.
+    //
+    // `tests/accessibility.rs` did not catch it because it checks that controls
+    // have names, which it says plainly. A name on a control that cannot be
+    // operated is the more complete version of the failure it was written for.
+    //
+    // Guarded on `enabled` rather than relying on the caller: an accessibility
+    // action does not pass through the touch area, so a disabled button would
+    // otherwise be pressable by exactly the route that has no other way in.
+    accessible-action-default => {
+        if (root.enabled && !root.busy) {
+            root.clicked();
+        }
+    }
 }
 
 // A row of mutually exclusive choices.
@@ -145,15 +167,68 @@ export component Segmented inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
+
+            // A focus ring, because a control that can be reached by keyboard
+            // and shows nothing when it is reached cannot be operated by
+            // keyboard in practice.
+            Rectangle {
+                border-radius: R.sm;
+                border-width: focus.has-focus ? 2px : 0px;
+                border-color: Theme.accent-ring;
+            }
+
+            // Keyboard, which this had none of.
+            //
+            // Every `Btn` in this interface carries a focus scope and answers
+            // Return and space. This did not — it was a `TouchArea` and an
+            // accessible label, which is enough for a screen reader to announce
+            // a control and not enough for anybody to press it. So the restore
+            // form's phrase/text/key picker, the content viewer's two views and
+            // (once Settings grew tabs) whole sections of the wallet were
+            // reachable with a pointer and no other way.
+            //
+            // The arrow keys move between segments as well, which is what a
+            // person expects of a row of tabs and what makes a five-option
+            // control bearable without a mouse.
+            focus := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == "\n" || event.text == " ") {
+                        root.index = i;
+                        root.changed(i);
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.LeftArrow && root.index > 0) {
+                        root.index = root.index - 1;
+                        root.changed(root.index);
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.RightArrow
+                        && root.index < root.options.length - 1) {
+                        root.index = root.index + 1;
+                        root.changed(root.index);
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
+
+            // Declared after the focus scope so a pointer press still lands
+            // here: later siblings receive input first. Same ordering as `Btn`.
             TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
+                    focus.focus();
                     root.index = i;
                     root.changed(i);
                 }
             }
+
             accessible-role: AccessibleRole.button;
             accessible-label: option;
+            accessible-action-default => {
+                root.index = i;
+                root.changed(i);
+            }
         }
     }
 }
@@ -162,15 +237,36 @@ export component Segmented inherits Rectangle {
 // Using both in both themes is what makes a UI look muddy.
 export component Card inherits Rectangle {
     in property <bool> interactive: false;
+    // A card that floats over the interface rather than sitting in it: the
+    // transaction sheet, the identity sheet, the confirmation over that, the
+    // notice stack.
+    //
+    // # Why an overlay breaks the theme's own rule
+    //
+    // "Dark leans on hairlines, light leans on shadow" is right for a card on a
+    // page — a shadow under every card in a dark theme is what makes an
+    // interface look muddy. It is wrong for a card on a scrim. A hairline
+    // against a dimmed copy of the page underneath is almost no separation at
+    // all, so a modal read as part of the thing it was covering.
+    //
+    // So an overlay climbs the surface ladder instead of relying on its edge —
+    // `bg-raised`, a stronger border — and takes a shadow in **both** themes,
+    // because this is the one place in the interface where something is
+    // genuinely in front of something else.
+    in property <bool> elevated: false;
     callback clicked();
 
-    background: Theme.bg-surface;
+    background: root.elevated ? Theme.bg-raised : Theme.bg-surface;
     border-radius: R.lg;
     border-width: 1px;
-    border-color: root.interactive && touch.has-hover ? Theme.border-default : Theme.border-subtle;
-    drop-shadow-blur: Theme.card-shadow ? 12px : 0px;
-    drop-shadow-offset-y: Theme.card-shadow ? 2px : 0px;
-    drop-shadow-color: Theme.card-shadow ? #10111412 : transparent;
+    border-color: root.elevated ? Theme.border-default
+        : root.interactive && touch.has-hover ? Theme.border-default
+        : Theme.border-subtle;
+    drop-shadow-blur: root.elevated ? 40px : Theme.card-shadow ? 12px : 0px;
+    drop-shadow-offset-y: root.elevated ? 10px : Theme.card-shadow ? 2px : 0px;
+    drop-shadow-color: root.elevated ? (Theme.dark ? #00000099 : #1011142E)
+        : Theme.card-shadow ? #10111412
+        : transparent;
 
     animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
 
@@ -205,7 +301,13 @@ export component Money inherits HorizontalLayout {
     accessible-role: AccessibleRole.text;
     accessible-label: root.amount + " " + root.currency;
     in property <length> size: Typo.num;
-    // "neutral" | "positive" | "negative"
+    // "neutral" | "positive" | "negative" | "muted"
+    //
+    // `muted` is for an amount that is on screen to make the arithmetic add up
+    // rather than to be read — transaction change, and nothing else so far. It
+    // is deliberately not a colour with meaning: green and red already say
+    // which way money moved, and a third meaning would make the palette a
+    // language nobody was taught.
     in property <string> tone: "neutral";
     in property <bool> show-currency: true;
     // Monospace keeps a column of amounts aligned and stops the balance
@@ -228,6 +330,7 @@ export component Money inherits HorizontalLayout {
         font-size: root.size;
         color: root.tone == "positive" ? Theme.positive
             : root.tone == "negative" ? Theme.negative
+            : root.tone == "muted" ? Theme.text-tertiary
             : Theme.text-primary;
         vertical-alignment: center;
     }
@@ -426,4 +529,11 @@ export component ListRow inherits Rectangle {
     accessible-role: AccessibleRole.button;
     accessible-enabled: root.interactive;
     accessible-label: root.subtitle == "" ? root.title : root.title + ", " + root.subtitle;
+    // Opening a row — a transaction, an identity, a node — from a screen
+    // reader. Same omission as `Btn`: announced as a button and inert.
+    accessible-action-default => {
+        if (root.interactive) {
+            root.clicked();
+        }
+    }
 }

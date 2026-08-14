@@ -55,3 +55,19 @@ pub const SDK_REV: &str = "b849fb959ee70885327640dc796ba59932834a72";
 /// constant as `verus_sdk::money::SATS_PER_COIN`, restated here because this
 /// crate deliberately does not depend on the SDK.
 pub const SATS_PER_COIN: i64 = 100_000_000;
+
+/// The word somebody has to type before a revocation is sent.
+///
+/// The same shape the mainnet spending switch uses, and for the same reason: a
+/// revocation cannot be undone without the recovery authority, and an identity
+/// that is its own recovery authority cannot be recovered at all. A button that
+/// only needs to be clicked is one that gets clicked.
+///
+/// Here rather than in the core because it is a term of the contract: the core
+/// sends it, the interface prompts with it and refuses to enable its button
+/// without it, and the core checks what comes back. This crate is the one both
+/// halves are allowed to name, so this is the one place it can be written once.
+///
+/// **The check still happens in the core**, comparing against this constant. A
+/// second interface that ignored the prompt entirely would still be refused.
+pub const REVOKE_CONFIRMATION: &str = "revoke";

@@ -60,6 +60,10 @@ pub fn unlocked(ui: &AppWindow) {
 /// same space.
 pub fn keys(ui: &AppWindow) {
     settings(ui);
+    // Settings is four tabs now, and each fixture has to say which one it is
+    // photographing — otherwise three of these images are the same picture of
+    // the security tab, which is what they were.
+    ui.set_settings_tab(1);
 
     let wallet = ui.global::<WalletState>();
     wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -80,6 +84,7 @@ pub fn keys(ui: &AppWindow) {
 /// the name in the title and pushes the summary to the far side.
 pub fn addresses(ui: &AppWindow) {
     settings(ui);
+    ui.set_settings_tab(2);
 
     ui.global::<SendState>()
         .set_known(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -94,6 +99,15 @@ pub fn addresses(ui: &AppWindow) {
                 summary: "1 payment · last in the last hour".into(),
             },
         ]))));
+}
+
+/// The General tab: theme, mainnet spending, and where the files are.
+///
+/// Its own image because it holds the mainnet switch — the one control in
+/// Settings that changes what this wallet is allowed to do with real money.
+pub fn general_settings(ui: &AppWindow) {
+    settings(ui);
+    ui.set_settings_tab(3);
 }
 
 /// The keys section with a rename in progress, which is where the form and the
@@ -291,6 +305,9 @@ pub fn reviewing(ui: &AppWindow) {
     send.set_total("50.0001 0000".into());
     send.set_change("12 332.4199 0000".into());
     send.set_balance_after("12 332.4199 0000".into());
+    // Which key is paying. The bridge has always set this; nothing rendered it
+    // until the review learned to say so.
+    send.set_from_address(ADDRESS.into());
     // The state worth a reference image: the warning is the reason the review
     // step exists at all, and it is the one thing on this screen somebody has
     // to read rather than glance at.
@@ -397,7 +414,10 @@ pub fn funded(ui: &AppWindow) {
     wallet.set_total("12 482.4200 0000".into());
     wallet.set_spendable("12 382.4200 0000".into());
     wallet.set_immature("100.0000 0000".into());
-    wallet.set_pending("0.0000 0000".into());
+    // Empty, not "0.0000 0000" — the bridge blanks a figure that is zero rather
+    // than passing a zero through, so a fixture that passed one would be
+    // photographing a state the wallet cannot produce.
+    wallet.set_pending("".into());
     wallet.set_incoming("5.0000 0000".into());
     wallet.set_has_breakdown(true);
 
@@ -549,6 +569,105 @@ pub fn restoring(ui: &AppWindow) {
         .set_problem("There is a typo in that phrase — one word is wrong or out of order.".into());
 }
 
+/// A wallet that exists and is locked — the screen most sessions start on.
+///
+/// It had no reference image at all, which is how a screen ends up being the
+/// one nobody has looked at. Every launch after the first one lands here.
+pub fn locked(ui: &AppWindow) {
+    unlocked(ui);
+    let wallet = ui.global::<WalletState>();
+    wallet.set_locked(true);
+    wallet.set_name("ChainVue".into());
+}
+
+/// The same screen after a wrong passphrase.
+///
+/// Its own case because the refusal is the whole point of it: a message that
+/// lands somewhere nobody looks is the same as no message.
+pub fn locked_refused(ui: &AppWindow) {
+    locked(ui);
+    ui.global::<WalletState>()
+        .set_problem("That passphrase does not open this wallet.".into());
+}
+
+/// The send form with more asked for than the wallet holds.
+///
+/// The most common way a payment fails, and the one place the amount field has
+/// something to say. Photographed because a note nobody has seen rendered is a
+/// note that can be the wrong length, the wrong colour, or absent.
+pub fn sending_too_much(ui: &AppWindow) {
+    sending(ui);
+    let send = ui.global::<SendState>();
+    send.set_to_draft(SECOND_ADDRESS.into());
+    send.set_to_valid(true);
+    send.set_to_note("Paid before · the exchange".into());
+    send.set_amount_draft("99 999.0000 0000".into());
+    send.set_amount_valid(false);
+    send.set_amount_note("More than this key can spend — 12 382.4200 0000 available.".into());
+}
+
+/// The network screen with everything that can be wrong with a node.
+///
+/// One offline, one answering for the wrong chain, one behind the tip. Only the
+/// healthy case had an image, so the three states the node list exists to
+/// distinguish were never looked at together.
+pub fn network_trouble(ui: &AppWindow) {
+    unlocked(ui);
+    ui.set_screen("nodes".into());
+
+    let net = ui.global::<NetworkState>();
+    net.set_nodes(ModelRc::from(Rc::new(VecModel::from(vec![
+        NodeRow {
+            id: 0,
+            label: "VRSCTEST (public)".into(),
+            url: "https://api.verustest.net".into(),
+            status: "degraded".into(),
+            network: "Testnet".into(),
+            tip: "1 187 102".into(),
+            latency: "612 ms".into(),
+            note: "behind the chain by 398 blocks".into(),
+            builtin: true,
+            active: true,
+        },
+        NodeRow {
+            id: 1,
+            label: "VRSC (public)".into(),
+            url: "https://api.verus.services".into(),
+            status: "degraded".into(),
+            network: "Mainnet".into(),
+            tip: "3 402 118".into(),
+            latency: "132 ms".into(),
+            note: "this node is on Mainnet".into(),
+            builtin: true,
+            active: false,
+        },
+        NodeRow {
+            id: 1000,
+            label: "my node".into(),
+            url: "https://my-node.example:27486".into(),
+            status: "offline".into(),
+            network: SharedString::new(),
+            tip: SharedString::new(),
+            latency: SharedString::new(),
+            note: "connection refused".into(),
+            builtin: false,
+            active: false,
+        },
+    ]))));
+    net.set_requested("Testnet".into());
+    net.set_effective("Testnet".into());
+    net.set_syncing(true);
+    net.set_endpoint("https://api.verustest.net".into());
+    net.set_latency("612 ms".into());
+    // The title bar's dot follows the ACTIVE node, and the bridge derives it
+    // from that node's status rather than from the row. Left unset, this image
+    // showed a calm grey dot above a node list full of trouble — a difference
+    // between the picture and the running application, which is the one thing
+    // these images exist to catch.
+    net.set_node_state("degraded".into());
+    net.set_problem("That address is not encrypted — ChainVue only talks https.".into());
+}
+
 /// A wallet whose phrase has never been written down, on the dashboard.
 pub fn backup_due(ui: &AppWindow) {
     unlocked(ui);
@@ -657,6 +776,16 @@ pub fn identities(ui: &AppWindow) {
     }]))));
 }
 
+/// The claim form, open.
+///
+/// Its own case because the form is now behind a button. Without this the
+/// three fields, the authority warning and the name rule would have no
+/// reference image at all — a screen that exists and that nothing looks at.
+pub fn claiming_a_name(ui: &AppWindow) {
+    identities(ui);
+    ui.global::<IdentityState>().set_claiming(true);
+}
+
 /// One VerusID in full, with the warning that outranks everything on it.
 ///
 /// The identity is its own recovery authority — the shape a fresh registration
@@ -716,6 +845,17 @@ pub fn identity_detail(ui: &AppWindow) {
     state.set_address("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into());
 }
 
+/// The authority form inside the sheet, open.
+///
+/// Its own case because the form is now behind a button. Closing the sheet
+/// shuts it again — see `on_close_identity` — so without this the fields, the
+/// warning about handing an authority away and the Review button have no
+/// reference image at all.
+pub fn identity_authorities(ui: &AppWindow) {
+    identity_detail(ui);
+    ui.global::<IdentityState>().set_changing_authorities(true);
+}
+
 /// A change built and signed, waiting to be sent.
 ///
 /// The last moment before something irreversible, which is why it is its own
@@ -751,7 +891,10 @@ pub fn identity_revoke_review(ui: &AppWindow) {
             .into(),
     );
     state.set_change_fee("0.0001 0000".into());
-    state.set_change_needs_confirmation(true);
+    // The word the core requires, read from the protocol rather than typed out
+    // again — a fixture that spelled it itself would keep photographing
+    // "revoke" after the rule had changed to something else.
+    state.set_change_confirmation(chainvue_protocol::REVOKE_CONFIRMATION.into());
     state.set_change_ticket(2);
 }
 

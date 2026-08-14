@@ -139,6 +139,22 @@ export global SendState {
     in-out property <string> step: "form";
     in property <bool> busy: false;
 
+    // What is in the two boxes.
+    //
+    // Held here rather than inside the form, for the reason `restoring` gives
+    // itself on the onboarding screen: a state no test can reach is a state
+    // that quietly rots. These were local element text, so **no fixture could
+    // put a recipient or an amount on the send screen** — which is why the only
+    // reference image of this form is an empty one, and why the note under the
+    // amount field had never been photographed at any length.
+    //
+    // The interface's own drafts, not the core's: nothing is sent from here
+    // until Review. The wallet already keeps `rename-draft` and `lookup-draft`
+    // the same way, and for the second half of the same reason — Rust can clear
+    // them, on success only.
+    in-out property <string> to-draft: "";
+    in-out property <string> amount-draft: "";
+
     // Verdicts from core, which owns address parsing and the fee rules.
     in property <bool> to-valid: false;
     in property <string> to-note: "";
@@ -201,6 +217,19 @@ export global IdentityState {
     in property <[IdentityRow]> rows: [];
     in property <[IdentityRow]> looked-up: [];
     in property <bool> busy: false;
+    // Whether the claim form is open.
+    //
+    // Purely the interface's business — the core is told nothing until somebody
+    // presses the button — but it lives here rather than on the screen so the
+    // form's own Cancel and the window's Escape can both reach it.
+    //
+    // Claiming a name is rare and looking one up is not, and the form is three
+    // fields and a paragraph tall. Left permanently open it pushed the lookup
+    // below the fold on the screen whose whole purpose is finding an identity.
+    in-out property <bool> claiming: false;
+    // Whether the authority form inside the detail sheet is open. Same
+    // reasoning as `claiming`, one level down.
+    in-out property <bool> changing-authorities: false;
     // The lookup field, kept here so Rust can clear it on success only.
     in-out property <string> lookup-draft: "";
     // Why a lookup found nothing. Empty when there is nothing to say.
@@ -270,8 +299,13 @@ export global IdentityState {
     in property <string> change-description: "";
     in property <string> change-fee: "";
     in property <bool> change-busy: false;
-    // Sending this one needs a word typed. Only a revocation does.
-    in property <bool> change-needs-confirmation: false;
+    // The word that has to be typed before this can be sent, empty when none
+    // is needed. Only a revocation asks for one.
+    //
+    // The word rather than a flag, so the prompt, the placeholder and the
+    // button's gate all read it from the core instead of each spelling
+    // "revoke" out again.
+    in property <string> change-confirmation: "";
     in-out property <string> change-typed: "";
 
     // The try-a-key search. The forward direction is the only one there is.
@@ -305,6 +339,13 @@ export global TxState {
 export global NetworkState {
     in property <[NodeRow]> nodes: [];
     in property <string> requested: "Testnet";
+    // The same answer as `requested`, as the index of the chain chooser.
+    //
+    // Two-way bound, so the control follows the wallet rather than the other
+    // way round: a switch the core refuses — there is a payment in flight —
+    // puts the selection back where it was, instead of leaving a chooser
+    // pointing at a chain nobody is on.
+    in-out property <int> chain-index: 0;
     // What the active node actually reported. Only this decides anything —
     // never the URL.
     in property <string> effective: "";
@@ -367,6 +408,13 @@ export global ChartState {
     // Where the axis begins, in words. There are no gridlines and no tick
     // labels, so without this the chart cannot say what period it covers.
     in property <string> span-from: "";
+    // What the bottom and the top of the plot are worth, pre-formatted.
+    //
+    // The vertical axis is scaled to the data rather than to zero, so the shape
+    // alone says nothing about magnitude — the same staircase is drawn by a
+    // wallet that moved one coin and by one that moved ten thousand. Empty when
+    // the balance never moved.
+    in property <string> span-range: "";
 
     // -1 when the pointer is not over the chart.
     in property <int> hover: -1;
@@ -468,6 +516,10 @@ export global Actions {
     callback navigate(string);
     callback refresh();
     callback probe-nodes();
+    // Which chain to open, by its consensus name — "VRSC" or "VRSCTEST", not
+    // the label beside it. Everything durable is chosen from this, so the core
+    // is what decides; this only asks.
+    callback set-requested-network(string);
 
     // ── VerusIDs ────────────────────────────────────────────────────────
     // None of these carries a secret. Reading an identity needs no key, and
@@ -581,6 +633,18 @@ component PassphraseForm inherits VerticalLayout {
     in property <string> problem;
     callback restore();
 
+    // Whether the two boxes agree, and whether to say so yet.
+    //
+    // `matched` is true while unlocking, where there is only one box. `mismatch`
+    // stays quiet until the second box has something in it — complaining at the
+    // first keystroke of a confirmation nobody has finished typing is a form
+    // shouting at somebody for not having finished.
+    // Held here rather than read off the field, because the field lives inside
+    // an `if` and Slint cannot address an element through one.
+    property <string> again;
+    property <bool> matched: root.mode != "create" || field.text == root.again;
+    property <bool> mismatch: root.mode == "create" && root.again != "" && !root.matched;
+
     spacing: Sp.s7;
 
     VerticalLayout {
@@ -623,6 +687,43 @@ component PassphraseForm inherits VerticalLayout {
         }
     }
 
+    // Typed twice, and only when a wallet is being made.
+    //
+    // # Why this is not a formality
+    //
+    // The sentence above says nobody can recover this, and that is literally
+    // true: the passphrase is the only input to the key that decrypts the
+    // vault, and there is no reset, no hint and no second copy anywhere. A
+    // single mistyped character in a masked box therefore produces a wallet
+    // that opens exactly once — for the rest of this session, because the key
+    // is already in memory — and never again.
+    //
+    // That is the worst possible failure shape: it does not announce itself at
+    // the moment of the mistake, it announces itself at the next launch, by
+    // which time somebody has generated a phrase, written it down, and put
+    // money in. The wallet was asking for a secret it could not check, and then
+    // acting on the first answer.
+    //
+    // Unlocking asks once, because there the vault itself is the check.
+    if root.mode == "create": HorizontalLayout {
+        alignment: center;
+        Field {
+            width: 360px;
+            password: true;
+            placeholder: "Type it again";
+            text <=> root.again;
+            invalid: root.mismatch;
+            accepted => { root.submit(); }
+        }
+    }
+
+    if root.mismatch: Text {
+        text: "The two do not match.";
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: center;
+    }
+
     if root.problem != "": Text {
         text: root.problem;
         font-size: Typo.caption;
@@ -637,7 +738,7 @@ component PassphraseForm inherits VerticalLayout {
                 ? "Working…"
                 : root.mode == "create" ? "Create wallet" : "Unlock";
             variant: "primary";
-            enabled: !root.busy && field.text != "";
+            enabled: !root.busy && field.text != "" && root.matched;
             clicked => { root.submit(); }
         }
     }
@@ -667,11 +768,16 @@ component PassphraseForm inherits VerticalLayout {
     function submit() {
         if (field.text == "") { return; }
         if (root.mode == "create") {
+            if (!root.matched) { return; }
             Actions.create-wallet(field.text);
         } else {
             Actions.unlock(field.text);
         }
         field.text = "";
+        // The confirmation is a copy of the same secret and gets the same
+        // treatment. Blanked whatever the mode, since a stale value here would
+        // otherwise decide `matched` for the next wallet.
+        root.again = "";
     }
 }
 
@@ -680,6 +786,9 @@ component RestoreForm inherits VerticalLayout {
     in property <bool> busy;
     in property <string> problem;
     callback cancelled();
+
+    property <bool> matched: pass.text == again.text;
+    property <bool> mismatch: again.text != "" && !root.matched;
 
     spacing: Sp.s6;
 
@@ -723,6 +832,13 @@ component RestoreForm inherits VerticalLayout {
             height: 92px;
             multiline: true;
             mono: true;
+            // An empty bordered box with the hint underneath it is a box that
+            // could be anything. The placeholder says what shape goes in.
+            placeholder: kind.index == 2
+                ? "U…"
+                : kind.index == 1
+                ? "The exact text you used"
+                : "abandon abandon abandon …";
             invalid: root.problem != "";
         }
     }
@@ -738,6 +854,22 @@ component RestoreForm inherits VerticalLayout {
                 : "12, 15, 18, 21 or 24 words, separated by spaces.";
             font-size: Typo.caption;
             color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    // Under the box it is about.
+    //
+    // This sat below the passphrase field, two controls away from the phrase it
+    // describes — so "there is a typo in that phrase" appeared to be a
+    // complaint about the passphrase somebody had just chosen.
+    if root.problem != "": HorizontalLayout {
+        alignment: center;
+        Text {
+            width: 420px;
+            text: root.problem;
+            font-size: Typo.caption;
+            color: Theme.negative;
             wrap: word-wrap;
         }
     }
@@ -758,19 +890,34 @@ component RestoreForm inherits VerticalLayout {
             pass := Field {
                 width: 420px;
                 password: true;
+                placeholder: "A passphrase you will remember";
             }
         }
-    }
-
-    if root.problem != "": HorizontalLayout {
-        alignment: center;
-        Text {
-            width: 460px;
-            text: root.problem;
-            font-size: Typo.caption;
-            color: Theme.negative;
-            horizontal-alignment: center;
-            wrap: word-wrap;
+        // The third place this wallet asked for an unrecoverable secret once
+        // and believed the answer.
+        //
+        // Restoring is the case where it stings most. Somebody arrives here
+        // holding a phrase precisely because something went wrong last time —
+        // and a typo in this box hands them a vault sealed with a string they
+        // have never seen, on top of the phrase they came to rescue.
+        HorizontalLayout {
+            alignment: center;
+            again := Field {
+                width: 420px;
+                password: true;
+                placeholder: "Type it again";
+                invalid: root.mismatch;
+                accepted => { root.submit(); }
+            }
+        }
+        if root.mismatch: HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 420px;
+                text: "The two do not match.";
+                font-size: Typo.caption;
+                color: Theme.negative;
+            }
         }
     }
 
@@ -788,15 +935,15 @@ component RestoreForm inherits VerticalLayout {
         Btn {
             text: root.busy ? "Working…" : "Restore wallet";
             variant: "primary";
-            enabled: !root.busy && material.text != "" && pass.text != "";
+            enabled: !root.busy && material.text != "" && pass.text != "" && root.matched;
             clicked => { root.submit(); }
         }
     }
 
-    // Both secrets leave in one call and both fields are blanked before it
+    // Both secrets leave in one call and every field is blanked before it
     // returns, same as every other secret-bearing path here.
     function submit() {
-        if (material.text == "" || pass.text == "") { return; }
+        if (material.text == "" || pass.text == "" || !root.matched) { return; }
         Actions.restore-wallet(
             kind.index == 2 ? "wif" : kind.index == 1 ? "text" : "phrase",
             material.text,
@@ -808,6 +955,7 @@ component RestoreForm inherits VerticalLayout {
     function clear() {
         material.text = "";
         pass.text = "";
+        again.text = "";
     }
 }
 
@@ -827,6 +975,20 @@ component PendingPayments inherits VerticalLayout {
             spacing: Sp.s5;
 
             for row in SendState.pending-rows: VerticalLayout {
+                // Whether "Stop tracking" has been pressed once.
+                //
+                // Two presses, because abandoning is not merely forgetting. The
+                // stored bytes go with the record, and those bytes are the only
+                // safe way to finish this payment — resending them cannot pay
+                // twice, and rebuilding is forbidden precisely because it can.
+                // So this discards the one recovery there is, from a ghost
+                // button, in one click, with nothing asked.
+                //
+                // A second press rather than a dialog: the weight is real but
+                // it is not a revocation, and a modal over the dashboard for
+                // every abandoned record would be its own problem.
+                property <bool> confirming: false;
+
                 spacing: Sp.s4;
 
                 HorizontalLayout {
@@ -882,11 +1044,31 @@ component PendingPayments inherits VerticalLayout {
                         clicked => { Actions.resolve-pending(row.id, "resend"); }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    Btn {
+                    if !confirming: Btn {
                         text: "Stop tracking";
                         variant: "ghost";
-                        clicked => { Actions.resolve-pending(row.id, "abandon"); }
+                        clicked => { confirming = true; }
                     }
+                    if confirming: Btn {
+                        text: "Keep it";
+                        variant: "ghost";
+                        clicked => { confirming = false; }
+                    }
+                    if confirming: Btn {
+                        text: "Discard the record";
+                        variant: "destructive";
+                        clicked => {
+                            confirming = false;
+                            Actions.resolve-pending(row.id, "abandon");
+                        }
+                    }
+                }
+
+                if confirming: Text {
+                    text: "ChainVue will stop asking about this payment and will drop the signed transaction it kept. If it never reached the network, there is then no way to send it that is guaranteed not to pay twice.";
+                    font-size: Typo.caption;
+                    color: Theme.warning;
+                    wrap: word-wrap;
                 }
             }
         }
@@ -1059,10 +1241,20 @@ component BalanceChart inherits VerticalLayout {
         // answered once they were gone.
         VerticalLayout {
             alignment: center;
+            spacing: 2px;
             Text {
                 text: ChartState.span-from == "" ? "" : ChartState.span-from + " → now";
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
+                horizontal-alignment: right;
+            }
+            // And what the plot's floor and ceiling are worth — the other axis,
+            // which had no label at all.
+            if ChartState.span-range != "": Text {
+                text: ChartState.span-range;
+                font-family: Typo.mono;
+                font-size: Typo.micro;
+                color: Theme.text-disabled;
                 horizontal-alignment: right;
             }
         }
@@ -1160,36 +1352,86 @@ component DashboardScreen inherits VerticalLayout {
             mono: false;
         }
 
+        // The parts of the total, as separate figures rather than one sentence.
+        //
+        // This was a single dot-separated run at caption size: three long
+        // monospace numbers, three different meanings, one line. Nobody parses
+        // that — and the one that decides whether a payment can be made at all,
+        // spendable, was the least prominent number on a screen whose headline
+        // is a total that includes money nobody can spend.
+        //
+        // Value above label, mono, generously spaced: the same arrangement the
+        // eye is given for any row of statistics, and each column can now be
+        // read on its own.
         if !WalletState.loading && WalletState.has-breakdown: HorizontalLayout {
-            spacing: Sp.s5;
+            spacing: Sp.s9;
             alignment: start;
 
-            Text {
-                text: WalletState.spendable + " spendable";
-                font-size: Typo.caption;
-                color: Theme.text-secondary;
-            }
-            Text {
-                text: "·";
-                font-size: Typo.caption;
-                color: Theme.text-disabled;
-            }
-            Text {
-                text: WalletState.immature + " maturing"
-                    + (WalletState.matures-in == "" ? "" : " (" + WalletState.matures-in + ")");
-                font-size: Typo.caption;
-                color: Theme.warning;
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: WalletState.spendable;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "spendable";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                }
             }
 
-            if WalletState.incoming != "": Text {
-                text: "·";
-                font-size: Typo.caption;
-                color: Theme.text-disabled;
+            if WalletState.immature != "": VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: WalletState.immature;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.warning;
+                }
+                Text {
+                    // The wait belongs with the figure it qualifies, not in a
+                    // parenthesis inside a longer sentence.
+                    text: WalletState.matures-in == ""
+                        ? "maturing"
+                        : "maturing · " + WalletState.matures-in;
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                }
             }
-            if WalletState.incoming != "": Text {
-                text: WalletState.incoming + " arriving";
-                font-size: Typo.caption;
-                color: Theme.positive;
+
+            if WalletState.incoming != "": VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: WalletState.incoming;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.positive;
+                }
+                Text {
+                    text: "arriving";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                }
+            }
+
+            // Money that has left and not settled. Never drawn until now,
+            // though it has always been one of the three states that make this
+            // row appear at all.
+            if WalletState.pending != "": VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: WalletState.pending;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.text-secondary;
+                }
+                Text {
+                    text: "leaving";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                }
             }
         }
     }
@@ -1441,6 +1683,34 @@ component NodesScreen inherits VerticalLayout {
         }
     }
 
+    // Not offered in the demo build. There is one scripted chain, and a chooser
+    // that moved a scripted wallet between two directories would be a control
+    // whose only effect is to lose the demo.
+    if !NetworkState.mock-mode: VerticalLayout {
+        spacing: Sp.s2;
+        Eyebrow { text: "CHAIN"; }
+        Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                Segmented {
+                    width: 320px;
+                    options: ["Testnet", "Mainnet"];
+                    index <=> NetworkState.chain-index;
+                    changed(i) => {
+                        Actions.set-requested-network(i == 1 ? "VRSC" : "VRSCTEST");
+                    }
+                }
+                Text {
+                    text: "Each chain is a separate wallet: its own keys, its own history, its own saved nodes. Nothing is shared between them, and changing chains locks the wallet.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
     Card {
         VerticalLayout {
             padding: Sp.s3;
@@ -1641,8 +1911,15 @@ component SendForm inherits HorizontalLayout {
                     // the prefix and the ellipsis are the whole point. The
                     // trailing `@` is not decoration — it is what a VerusID
                     // actually ends with.
-                    placeholder: "R… or name@";
-                    invalid: to.text != "" && !SendState.to-valid;
+                    //
+                    // The word "Address" is there because "R… or name@" on its
+                    // own reads as a placeholder that got clipped — a leading
+                    // ellipsis is what truncation looks like, and a field that
+                    // appears broken before it has been typed in is not a field
+                    // anybody trusts.
+                    placeholder: "Address (R…) or name@";
+                    text <=> SendState.to-draft;
+                    invalid: SendState.to-draft != "" && !SendState.to-valid;
                     edited => { root.check(); }
                 }
                 if SendState.to-note != "": Text {
@@ -1669,10 +1946,11 @@ component SendForm inherits HorizontalLayout {
                         color: Theme.text-tertiary;
                     }
                 }
-                amount := Field {
+                Field {
                     mono: true;
                     placeholder: "0.0000 0000";
-                    invalid: amount.text != "" && !SendState.amount-valid;
+                    text <=> SendState.amount-draft;
+                    invalid: SendState.amount-draft != "" && !SendState.amount-valid;
                     edited => { root.check(); }
                     accepted => { root.review(); }
                 }
@@ -1701,12 +1979,12 @@ component SendForm inherits HorizontalLayout {
     }
 
     function check() {
-        Actions.validate-draft(to.text, amount.text);
+        Actions.validate-draft(SendState.to-draft, SendState.amount-draft);
     }
 
     function review() {
         if (!SendState.ready) { return; }
-        Actions.prepare-send(to.text, amount.text);
+        Actions.prepare-send(SendState.to-draft, SendState.amount-draft);
     }
 }
 
@@ -1791,10 +2069,45 @@ component SendScreen inherits VerticalLayout {
                     }
                 }
 
+                // Which of this wallet's addresses is paying.
+                //
+                // Also computed and also unread until now. A wallet with more
+                // than one key can build a payment from any of them, the form
+                // has a key picker at the top of it, and the review — the
+                // screen whose whole job is "check this before it is
+                // irreversible" — did not say which one the transaction it
+                // signed actually spends from.
+                if SendState.from-address != "": VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: "PAID FROM"; }
+                    Text {
+                        text: SendState.from-address;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-secondary;
+                        wrap: char-wrap;
+                    }
+                }
+
                 VerticalLayout {
                     spacing: Sp.s2;
                     Eyebrow { text: "OUTPUTS"; }
 
+                    // Change is drawn quieter than the payment, and that is a
+                    // safety decision rather than a stylistic one.
+                    //
+                    // Both rows used to render identically: same size, same
+                    // colour, same weight. But only one of them is the question
+                    // being asked. Somebody checking an address under time
+                    // pressure reads the first mono line they land on, and if
+                    // the change output is above the payment — which it can be,
+                    // since the order is the transaction's, not ours — they
+                    // check the wrong one and approve.
+                    //
+                    // Change is still shown in full. Hiding it would mean the
+                    // amounts on screen no longer add up to what leaves the
+                    // wallet, and a review somebody cannot reconcile is a review
+                    // they stop reading.
                     for output in SendState.outputs: HorizontalLayout {
                         spacing: Sp.s5;
                         padding-top: Sp.s3;
@@ -1807,20 +2120,28 @@ component SendScreen inherits VerticalLayout {
                                 text: output.address == "" ? "Unknown destination" : output.address;
                                 font-family: Typo.mono;
                                 font-size: Typo.num-sm;
-                                color: output.address == "" ? Theme.negative : Theme.text-primary;
+                                color: output.address == "" ? Theme.negative
+                                    : output.is-change ? Theme.text-tertiary
+                                    : Theme.text-primary;
                                 wrap: char-wrap;
                             }
                             Text {
-                                text: output.is-change ? output.kind + " · change, back to you" : output.kind;
+                                // Not "Payment · change". Change is not a
+                                // payment to anybody; it is the part that never
+                                // left.
+                                text: output.is-change
+                                    ? "Change · back to your wallet"
+                                    : output.kind;
                                 font-size: Typo.caption;
-                                color: Theme.text-tertiary;
+                                color: output.is-change ? Theme.text-disabled : Theme.text-tertiary;
                             }
                         }
 
                         Money {
                             amount: output.amount;
                             show-currency: false;
-                            size: Typo.num;
+                            size: output.is-change ? Typo.num-sm : Typo.num;
+                            tone: output.is-change ? "muted" : "neutral";
                             y: (parent.height - self.height) / 2;
                         }
                     }
@@ -1851,6 +2172,27 @@ component SendScreen inherits VerticalLayout {
                             horizontal-stretch: 1;
                         }
                         Money { amount: SendState.total; currency: WalletState.ticker; size: Typo.num-lg; }
+                    }
+                    // What is left afterwards.
+                    //
+                    // The core has computed this since the review screen was
+                    // written — `balance_after_display`, carried through the
+                    // protocol and set on this global — and **nothing read it**.
+                    // It is the question somebody actually has after "how much
+                    // is leaving", and the wallet already knew the answer.
+                    if SendState.balance-after != "": HorizontalLayout {
+                        Text {
+                            text: "Left afterwards";
+                            font-size: Typo.caption;
+                            color: Theme.text-tertiary;
+                            horizontal-stretch: 1;
+                        }
+                        Money {
+                            amount: SendState.balance-after;
+                            currency: WalletState.ticker;
+                            size: Typo.num-sm;
+                            tone: "muted";
+                        }
                     }
                 }
 
@@ -2045,6 +2387,30 @@ component MainnetToggle inherits VerticalLayout {
 component PassphraseChange inherits VerticalLayout {
     spacing: Sp.s4;
 
+    property <bool> matched: fresh.text == again.text;
+    property <bool> mismatch: again.text != "" && !root.matched;
+
+    // A heading and a sentence, like the block above it.
+    //
+    // This sat under a divider as two bare fields with no title. Inside a card
+    // headed "Lock after", which made a passphrase change look like part of the
+    // timeout setting — two unrelated controls reading as one.
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Change passphrase";
+            font-size: Typo.body;
+            font-weight: Typo.w-medium;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: "The vault is re-encrypted with the new one. The old passphrase stops working, and nobody can recover the new one for you.";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+    }
+
     VerticalLayout {
         spacing: Sp.s3;
         Text {
@@ -2068,7 +2434,34 @@ component PassphraseChange inherits VerticalLayout {
         fresh := Field {
             password: true;
             placeholder: "A new passphrase";
+        }
+    }
+
+    // The same confirmation the setup screen now asks for, and for a worse
+    // reason.
+    //
+    // Setting up with a typo loses a wallet that is empty. Changing to one with
+    // a typo re-seals a vault that already holds money — the old passphrase is
+    // gone the moment this succeeds, and the new one is a string nobody has
+    // ever seen. The wallet keeps working for the rest of the session, because
+    // the key is already in memory, and is unopenable at the next launch.
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "New passphrase again";
+            font-size: Typo.caption;
+            color: root.mismatch ? Theme.negative : Theme.text-secondary;
+        }
+        again := Field {
+            password: true;
+            placeholder: "Type it again";
+            invalid: root.mismatch;
             accepted => { root.submit(); }
+        }
+        if root.mismatch: Text {
+            text: "The two do not match.";
+            font-size: Typo.caption;
+            color: Theme.negative;
         }
     }
 
@@ -2077,18 +2470,19 @@ component PassphraseChange inherits VerticalLayout {
         Btn {
             text: "Change passphrase";
             variant: "primary";
-            enabled: current.text != "" && fresh.text != "";
+            enabled: current.text != "" && fresh.text != "" && root.matched;
             clicked => { root.submit(); }
         }
     }
 
-    // Both secrets leave in one call and both fields are blanked before it
+    // Both secrets leave in one call and every field is blanked before it
     // returns — the same discipline as every other secret-bearing path here.
     function submit() {
-        if (current.text == "" || fresh.text == "") { return; }
+        if (current.text == "" || fresh.text == "" || !root.matched) { return; }
         Actions.change-passphrase(current.text, fresh.text);
         current.text = "";
         fresh.text = "";
+        again.text = "";
     }
 }
 
@@ -2341,9 +2735,35 @@ component KnownAddressItem inherits VerticalLayout {
     }
 }
 
+// Settings, in four parts rather than one scroll.
+//
+// # Why this is not one long page any more
+//
+// It was six sections stacked: security, keys, addresses, appearance, network,
+// about. At the window's own preferred height you saw the first and the top of
+// the second, and everything else was below the fold — so somebody looking up
+// who they had paid scrolled past a passphrase-change form to get there, every
+// time.
+//
+// The switcher also makes the page photographable. Three of the four Settings
+// reference images used to be the same picture of the top of the same page,
+// because a fixture cannot scroll a flickable, and a screen no reference image
+// covers is a screen that changes without anybody seeing it.
 component SettingsScreen inherits VerticalLayout {
+    // 0 security · 1 keys · 2 addresses · 3 general
+    in-out property <int> tab: 0;
+
     spacing: Sp.section-gap;
     property <[int]> lock-choices: [1, 5, 15, 60, 0];
+
+    HorizontalLayout {
+        alignment: start;
+        Segmented {
+            width: 460px;
+            options: ["Security", "Keys", "Addresses", "General"];
+            index <=> root.tab;
+        }
+    }
 
     // Applied here AND sent to be written down. Applying it locally rather than
     // waiting for the core to echo it back is what keeps the button feeling
@@ -2354,7 +2774,7 @@ component SettingsScreen inherits VerticalLayout {
         Actions.set-appearance(dark, reduce);
     }
 
-    Section {
+    if root.tab == 0: Section {
         title: "SECURITY";
 
         VerticalLayout {
@@ -2389,7 +2809,7 @@ component SettingsScreen inherits VerticalLayout {
         PassphraseChange {}
     }
 
-    Section {
+    if root.tab == 1: Section {
         title: "KEYS";
         body: "A ChainVue wallet holds any number of keys, and the dashboard adds up all of them. One passphrase protects the lot — adding a key does not ask for it again.";
 
@@ -2430,7 +2850,7 @@ component SettingsScreen inherits VerticalLayout {
         }
     }
 
-    Section {
+    if root.tab == 2: Section {
         title: "ADDRESSES";
         body: "Who this wallet has paid. ChainVue records a recipient once a node has accepted the payment, so it can tell you when you are paying somewhere new — the one check it can make that a checksum cannot.";
 
@@ -2445,7 +2865,7 @@ component SettingsScreen inherits VerticalLayout {
         }
     }
 
-    Section {
+    if root.tab == 3: Section {
         title: "APPEARANCE";
 
         VerticalLayout {
@@ -2508,12 +2928,12 @@ component SettingsScreen inherits VerticalLayout {
         }
     }
 
-    Section {
+    if root.tab == 3: Section {
         title: "NETWORK";
         MainnetToggle {}
     }
 
-    Section {
+    if root.tab == 3: Section {
         title: "ABOUT";
 
         VerticalLayout {
@@ -2631,8 +3051,22 @@ component ActivityRowItem inherits VerticalLayout {
         title: root.entry.direction == "in" ? "Received"
             : root.entry.direction == "out" ? "Sent"
             : "Moved";
-        subtitle: root.entry.txid-short;
-        subtitle-mono: true;
+        // When, not which transaction.
+        //
+        // This line used to carry the abbreviated txid, and it made every row
+        // in the list look like every other: sixty-four hex characters elided
+        // to eight are not something a person tells apart, so a screen of them
+        // reads as one repeated row. The time differs between rows, which is
+        // the whole job of a subtitle in a list somebody scans.
+        //
+        // The id is not lost — it is in the sheet a click away, in full and
+        // beside an explorer link, which is where somebody who wants a
+        // transaction id is actually going.
+        //
+        // The chain has nothing better to offer here. The history comes from
+        // address deltas, and a delta names no counterparty: putting "to
+        // robert@" on this line would cost a `getrawtransaction` per row.
+        subtitle: root.settled ? root.entry.when : "";
         interactive: true;
         clicked => { Actions.open-tx(root.entry.txid); }
 
@@ -2644,15 +3078,6 @@ component ActivityRowItem inherits VerticalLayout {
                 alignment: center;
                 spacing: 2px;
 
-                // A settled transaction has a time and a depth. An unsettled
-                // one has neither, and saying "pending" above "unconfirmed"
-                // was one fact printed twice.
-                if root.settled: Text {
-                    text: root.entry.when;
-                    font-size: Typo.caption;
-                    color: Theme.text-tertiary;
-                    horizontal-alignment: right;
-                }
                 if root.settled: Text {
                     // Derived, never stored: `tip - height + 1`. A new block
                     // changes one number and every row here follows.
@@ -2820,6 +3245,13 @@ component RegisterForm inherits VerticalLayout {
 
     HorizontalLayout {
         alignment: end;
+        spacing: Sp.s3;
+        Btn {
+            text: "Cancel";
+            variant: "ghost";
+            enabled: !IdentityState.reg-busy;
+            clicked => { IdentityState.claiming = false; }
+        }
         Btn {
             text: IdentityState.reg-busy ? "Working…" : "Claim this name";
             variant: "primary";
@@ -2878,6 +3310,26 @@ component RegistrationPanel inherits VerticalLayout {
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
+        }
+    }
+
+    // What the claim costs.
+    //
+    // Set by the core when the name was checked and never shown once the claim
+    // was under way — so the panel could tell somebody a fee had been spent
+    // without ever telling them how much. The third value in this interface
+    // that was computed, carried and then dropped.
+    if IdentityState.reg-fee != "": HorizontalLayout {
+        Text {
+            text: "Fee";
+            font-size: Typo.body;
+            color: Theme.text-secondary;
+            horizontal-stretch: 1;
+        }
+        Money {
+            amount: IdentityState.reg-fee;
+            currency: WalletState.ticker;
+            size: Typo.num;
         }
     }
 
@@ -2952,10 +3404,15 @@ component IdentitiesScreen inherits VerticalLayout {
                 // section has its own heading and its own count, because this
                 // sentence is a claim about your keys and would be false over
                 // anything that is not yours.
+                // Says how many and then why, rather than opening with the
+                // method. Somebody arriving here wants the count; the sentence
+                // explaining where it came from is the reassurance underneath
+                // it, not the headline.
                 text: IdentityState.rows.length == 0
-                    ? "Found by asking the chain which names your keys control"
-                    : "Found by asking the chain which names your keys control · "
-                        + IdentityState.rows.length;
+                    ? "No names your keys control"
+                    : IdentityState.rows.length == 1
+                        ? "1 name your keys control"
+                        : IdentityState.rows.length + " names your keys control";
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -2966,6 +3423,15 @@ component IdentitiesScreen inherits VerticalLayout {
             enabled: !IdentityState.busy;
             y: (parent.height - self.height) / 2;
             clicked => { Actions.refresh-identities(); }
+        }
+        // Hidden while the form is open or a claim is running, because the
+        // thing it opens is already on screen and a button that does nothing
+        // is a button somebody presses twice wondering why.
+        if !IdentityState.claiming && IdentityState.reg-step == "": Btn {
+            text: "Claim a name";
+            variant: "primary";
+            y: (parent.height - self.height) / 2;
+            clicked => { IdentityState.claiming = true; }
         }
     }
 
@@ -3029,7 +3495,11 @@ component IdentitiesScreen inherits VerticalLayout {
     // A claim in progress replaces the form: there is deliberately only ever
     // one, because each carries its own deadline and two clocks running at once
     // is one more than anybody can watch.
-    VerticalLayout {
+    //
+    // A running claim shows itself whatever the form is doing. It has a
+    // deadline measured in blocks, and a deadline nobody can see is a fee
+    // already spent.
+    if IdentityState.claiming || IdentityState.reg-step != "": VerticalLayout {
         spacing: Sp.s4;
         Eyebrow {
             text: IdentityState.reg-step == "" ? "CLAIM A NAME" : "CLAIMING A NAME";
@@ -3380,6 +3850,10 @@ component IdentityChangeReview inherits Rectangle {
     TouchArea {}
 
     Card {
+        // Above a sheet that is itself elevated, so this one needs the same
+        // treatment or the last step before something irreversible would be the
+        // flattest surface on screen.
+        elevated: true;
         width: 520px;
         height: content.preferred-height;
         x: (parent.width - self.width) / 2;
@@ -3389,11 +3863,23 @@ component IdentityChangeReview inherits Rectangle {
             padding: Sp.s8;
             spacing: Sp.s5;
 
-            Text {
-                text: "Check this change";
-                font-size: Typo.title2;
-                font-weight: Typo.w-semibold;
-                color: Theme.text-primary;
+            VerticalLayout {
+                spacing: Sp.s2;
+                Text {
+                    text: "Check this change";
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-semibold;
+                    color: Theme.text-primary;
+                }
+                // Which identity. The sheet behind this one names it, and the
+                // sheet behind this one is under a scrim — so a dialog about
+                // revoking something did not say what it was about.
+                Text {
+                    text: IdentityState.name;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-secondary;
+                }
             }
             Text {
                 text: IdentityState.change-description;
@@ -3419,7 +3905,7 @@ component IdentityChangeReview inherits Rectangle {
             // A word, for the one change nobody can undo. The same shape the
             // mainnet spending switch uses — and checked in the core, not here,
             // so a different interface cannot skip it.
-            if IdentityState.change-needs-confirmation: VerticalLayout {
+            if IdentityState.change-confirmation != "": VerticalLayout {
                 spacing: Sp.s3;
                 Rectangle {
                     background: Theme.negative-soft;
@@ -3443,13 +3929,13 @@ component IdentityChangeReview inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "Type revoke to confirm";
+                    text: "Type " + IdentityState.change-confirmation + " to confirm";
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                 }
-                typed := Field {
+                Field {
                     mono: true;
-                    placeholder: "revoke";
+                    placeholder: IdentityState.change-confirmation;
                     text <=> IdentityState.change-typed;
                 }
             }
@@ -3462,10 +3948,21 @@ component IdentityChangeReview inherits Rectangle {
                     variant: "ghost";
                     clicked => { Actions.cancel-identity-change(IdentityState.change-ticket); }
                 }
+                // Off until the word is typed.
+                //
+                // It used to be live from the moment the review opened: the
+                // affirmative, destructive-red button on the one screen in this
+                // wallet that revokes an identity, pressable with the box
+                // empty. The core refused, so nothing was lost — but a button
+                // that invites a press and then declines it teaches somebody
+                // that the confirmation is a formality, which is the opposite
+                // of what a confirmation is for.
                 Btn {
                     text: IdentityState.change-busy ? "Sending…" : "Send it";
-                    variant: IdentityState.change-needs-confirmation ? "destructive" : "primary";
-                    enabled: !IdentityState.change-busy;
+                    variant: IdentityState.change-confirmation != "" ? "destructive" : "primary";
+                    enabled: !IdentityState.change-busy
+                        && (IdentityState.change-confirmation == ""
+                            || IdentityState.change-typed == IdentityState.change-confirmation);
                     clicked => {
                         Actions.confirm-identity-change(
                             IdentityState.change-ticket,
@@ -3481,12 +3978,18 @@ component IdentityChangeReview inherits Rectangle {
 component IdentitySheet inherits Rectangle {
     background: Theme.dark ? #0B0C0EC0 : #FBFBFCC0;
 
+    // The authority form is shut and emptied by `close-identity`, which every
+    // route out of this sheet goes through — the scrim, the button and Escape.
+    // Not on `init` here: that would also fire after a fixture had opened the
+    // form on purpose, and the reference image would stop covering it.
+
     // Swallows clicks on the scrim and closes.
     TouchArea {
         clicked => { Actions.close-identity(); }
     }
 
     Card {
+        elevated: true;
         width: 640px;
         height: min(root.height - Sp.s11 * 2, content.preferred-height);
         x: (parent.width - self.width) / 2;
@@ -3638,7 +4141,23 @@ component IdentitySheet inherits Rectangle {
                 // Only offered where this wallet can actually sign. A button
                 // that builds a transaction the chain will refuse is worse than
                 // no button: it costs a fee to learn.
-                if IdentityState.can-sign: VerticalLayout {
+                // Behind a button, like the claim form on the screen behind
+                // this one and for the same reason: it is three controls and a
+                // paragraph, it is used once in the life of an identity, and
+                // left open it pushed the timelock and everything this identity
+                // has published below the bottom of a sheet somebody has to
+                // scroll.
+                if IdentityState.can-sign && !IdentityState.changing-authorities:
+                HorizontalLayout {
+                    alignment: start;
+                    Btn {
+                        text: "Change the authorities";
+                        clicked => { IdentityState.changing-authorities = true; }
+                    }
+                }
+
+                if IdentityState.can-sign && IdentityState.changing-authorities:
+                VerticalLayout {
                     spacing: Sp.s3;
                     Eyebrow { text: "POINT THE AUTHORITIES SOMEWHERE ELSE"; }
                     Text {
@@ -3680,6 +4199,20 @@ component IdentitySheet inherits Rectangle {
                     }
                     HorizontalLayout {
                         alignment: end;
+                        spacing: Sp.s3;
+                        Btn {
+                            text: "Cancel";
+                            variant: "ghost";
+                            enabled: !IdentityState.change-busy;
+                            clicked => {
+                                IdentityState.changing-authorities = false;
+                                // Cleared with the form. A half-typed i-address
+                                // left behind would reappear the next time this
+                                // opens, against whichever identity that is.
+                                IdentityState.new-revocation = "";
+                                IdentityState.new-recovery = "";
+                            }
+                        }
                         Btn {
                             text: "Review this change";
                             enabled: !IdentityState.change-busy
@@ -3829,6 +4362,7 @@ component TxSheet inherits Rectangle {
     }
 
     Card {
+        elevated: true;
         width: 600px;
         height: min(root.height - Sp.s11 * 2, content.preferred-height);
         x: (parent.width - self.width) / 2;
@@ -3943,16 +4477,34 @@ component TxSheet inherits Rectangle {
                     }
                 }
 
+                // The button that copies the id, beside the id.
+                //
+                // It used to be in the footer, two sections below — after the
+                // explorer link, which has its own Copy sitting right next to
+                // the thing it copies. So the sheet taught one arrangement and
+                // then used the other for the field above it.
                 VerticalLayout {
                     spacing: Sp.s3;
                     Eyebrow { text: "TRANSACTION ID"; }
-                    txid := TextInput {
-                        text: TxState.txid;
-                        read-only: true;
-                        font-family: Typo.mono;
-                        font-size: Typo.num-sm;
-                        color: Theme.text-primary;
-                        wrap: char-wrap;
+                    HorizontalLayout {
+                        spacing: Sp.s4;
+                        txid := TextInput {
+                            horizontal-stretch: 1;
+                            text: TxState.txid;
+                            read-only: true;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: Theme.text-primary;
+                            wrap: char-wrap;
+                        }
+                        Btn {
+                            text: "Copy id";
+                            y: 0;
+                            clicked => {
+                                txid.select-all();
+                                txid.copy();
+                            }
+                        }
                     }
                 }
 
@@ -3962,15 +4514,7 @@ component TxSheet inherits Rectangle {
                 if TxState.explorer != "": ExplorerLink {}
 
                 HorizontalLayout {
-                    spacing: Sp.s4;
-                    Btn {
-                        text: "Copy id";
-                        clicked => {
-                            txid.select-all();
-                            txid.copy();
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
+                    alignment: start;
                     Btn {
                         text: TxState.advanced ? "Hide raw transaction" : "Show raw transaction";
                         variant: "ghost";
@@ -4057,11 +4601,24 @@ component ReceiveScreen inherits VerticalLayout {
                     // address is read character by character when it is checked
                     // against something, and a proportional font makes that
                     // needlessly hard.
+                    // Set at the size of a thing that gets checked, not at the
+                    // size of a caption.
+                    //
+                    // This is what somebody reads character by character against
+                    // whatever the sender is showing them, and it was two points
+                    // smaller than the balance's currency label. It wraps to two
+                    // lines here, which is the right trade: an address that
+                    // fits on one line and cannot be read is not a saving.
+                    //
+                    // Not grouped into blocks of four, tempting as that is —
+                    // Copy works by selecting this element's own text, since
+                    // Slint gives an application no clipboard of its own, so
+                    // spaces on screen would be spaces on the clipboard.
                     address := TextInput {
                         text: WalletState.address;
                         read-only: true;
                         font-family: Typo.mono;
-                        font-size: Typo.num;
+                        font-size: Typo.num-lg;
                         color: Theme.text-primary;
                         wrap: char-wrap;
                         // Announced in four-character groups, because a screen
@@ -4091,18 +4648,35 @@ component ReceiveScreen inherits VerticalLayout {
                     }
                 }
 
-                // The single most useful sentence on this screen. Sending
-                // mainnet coins to a testnet address loses them, and the two
-                // kinds of address look identical.
-                Text {
-                    text: NetworkState.effective == ""
-                        ? "No node has confirmed which chain this is. Check before sharing it."
-                        : "Only send " + WalletState.ticker + " on " + NetworkState.effective
-                          + " here. Coins from another chain sent to this address are lost.";
-                    font-size: Typo.caption;
-                    color: NetworkState.effective == "" ? Theme.warning : Theme.text-tertiary;
-                    wrap: word-wrap;
-                    horizontal-alignment: center;
+                // The single most useful sentence on this screen, and it used to
+                // be drawn as the least: centred, grey, caption-sized, below the
+                // fold of the eye. A comment calling something the most
+                // important thing here while the styling says otherwise is the
+                // styling winning.
+                //
+                // Sending mainnet coins to a testnet address loses them, and the
+                // two kinds of address look identical. So it gets a surface,
+                // left alignment, and the chain's name in the weight of a fact.
+                Rectangle {
+                    background: NetworkState.effective == ""
+                        ? Theme.warning-soft
+                        : Theme.bg-inset;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s4;
+                        Text {
+                            text: NetworkState.effective == ""
+                                ? "No node has confirmed which chain this is — check before sharing it."
+                                : "This address is on " + NetworkState.effective
+                                  + ". Coins from any other chain sent here are lost.";
+                            font-size: Typo.caption;
+                            font-weight: Typo.w-medium;
+                            color: NetworkState.effective == ""
+                                ? Theme.warning
+                                : Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
                 }
             }
         }
@@ -4442,6 +5016,21 @@ component BackupPassphrase inherits VerticalLayout {
 component BackupPhrase inherits VerticalLayout {
     callback closed();
     callback written-down();
+
+    // Whether the words have ever been on screen in this sitting.
+    //
+    // "I've written it down" used to be enabled from the moment the screen
+    // appeared, so the whole step could be cleared with one click by somebody
+    // who never saw a single word — and the sentence on the button is a claim
+    // they would be making about themselves. The verify step behind it does
+    // catch the lie, but a primary button that invites the wrong answer is
+    // still a primary button that invites the wrong answer.
+    //
+    // Not persisted, and deliberately: coming back to this screen means being
+    // asked to look again, which is the correct answer to "have you got these
+    // written down" when the wallet cannot know.
+    property <bool> seen: false;
+
     spacing: Sp.s6;
 
     VerticalLayout {
@@ -4510,6 +5099,7 @@ component BackupPhrase inherits VerticalLayout {
                 mouse-cursor: pointer;
                 changed pressed => {
                     if (hold.pressed) {
+                        root.seen = true;
                         Actions.reveal-phrase();
                     } else {
                         Actions.hide-phrase();
@@ -4545,7 +5135,17 @@ component BackupPhrase inherits VerticalLayout {
         Btn {
             text: "I've written it down";
             variant: "primary";
+            enabled: root.seen;
             clicked => { root.written-down(); }
+        }
+    }
+
+    if !root.seen: HorizontalLayout {
+        alignment: center;
+        Text {
+            text: "Hold the button above to see the words first.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
         }
     }
 }
@@ -4691,6 +5291,14 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
 
     in-out property <string> screen: "dashboard";
+
+    // Which part of Settings is showing. See `SettingsScreen`.
+    //
+    // On the window rather than in a global, for the same reason `screen` is:
+    // it is navigation, not wallet state, and a fixture has to be able to put
+    // the window into it. Before this existed, three of the four Settings
+    // reference images were the same picture of the top of one long page.
+    in-out property <int> settings-tab: 0;
 
     // Whether the nav rail shows labels.
     //
@@ -4840,6 +5448,14 @@ export component AppWindow inherits Window {
                     Actions.close-identity();
                     return EventResult.accept;
                 }
+                // Below the sheet in this chain, because a sheet opened from
+                // this screen sits on top of the form and Escape should shut
+                // what is in front. Not offered while a claim is running: the
+                // panel is not a form to dismiss, it is a deadline.
+                if (IdentityState.claiming && IdentityState.reg-step == "") {
+                    IdentityState.claiming = false;
+                    return EventResult.accept;
+                }
                 if (SendState.step != "form") {
                     SendState.step = "form";
                     return EventResult.accept;
@@ -4916,7 +5532,9 @@ export component AppWindow inherits Window {
                             if root.screen == "send": SendScreen {}
                             if root.screen == "identities": IdentitiesScreen {}
                             if root.screen == "receive": ReceiveScreen {}
-                            if root.screen == "settings": SettingsScreen {}
+                            if root.screen == "settings": SettingsScreen {
+                                tab <=> root.settings-tab;
+                            }
                             if root.screen == "nodes": NodesScreen {}
                             if root.screen != "dashboard" && root.screen != "nodes"
                                 && root.screen != "receive" && root.screen != "send"
@@ -4934,6 +5552,7 @@ export component AppWindow inherits Window {
                     latency: NetworkState.latency;
                     endpoint: NetworkState.endpoint;
                     sdk-rev: AppInfo.sdk-rev;
+                    syncing: NetworkState.syncing;
                 }
             }
         }

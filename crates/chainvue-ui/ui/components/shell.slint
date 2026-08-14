@@ -171,13 +171,41 @@ export component TitleBar inherits Rectangle {
                 vertical-alignment: center;
             }
 
+            // The title bar's three controls are hand-rolled rather than `Btn`,
+            // because they are chrome and want a quieter shape. That is fine
+            // for the drawing and was not fine for anything else: they had a
+            // touch area and an accessible label and nothing else, so Refresh,
+            // Lock and the theme toggle — the controls on **every** screen of
+            // this wallet — could not be reached by Tab and did nothing when a
+            // screen reader activated them.
+            refreshfocus := FocusScope {
+                enabled: !root.busy;
+                key-pressed(event) => {
+                    if (event.text == "\n" || event.text == " ") {
+                        root.refresh();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
             refreshtouch := TouchArea {
                 enabled: !root.busy;
                 mouse-cursor: root.busy ? MouseCursor.default : MouseCursor.pointer;
                 clicked => { root.refresh(); }
             }
+            Rectangle {
+                border-radius: R.sm;
+                border-width: refreshfocus.has-focus ? 2px : 0px;
+                border-color: Theme.accent-ring;
+            }
             accessible-role: button;
             accessible-label: "Refresh balances";
+            accessible-enabled: !root.busy;
+            accessible-action-default => {
+                if (!root.busy) {
+                    root.refresh();
+                }
+            }
         }
 
         // Locking has to be reachable in one click from anywhere, not buried in
@@ -204,12 +232,27 @@ export component TitleBar inherits Rectangle {
                 vertical-alignment: center;
             }
 
+            lockfocus := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == "\n" || event.text == " ") {
+                        root.lock();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
             locktouch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.lock(); }
             }
+            Rectangle {
+                border-radius: R.sm;
+                border-width: lockfocus.has-focus ? 2px : 0px;
+                border-color: Theme.accent-ring;
+            }
             accessible-role: button;
             accessible-label: "Lock the wallet";
+            accessible-action-default => { root.lock(); }
         }
 
         Rectangle {
@@ -230,12 +273,27 @@ export component TitleBar inherits Rectangle {
                 color: themetouch.has-hover ? Theme.text-primary : Theme.text-secondary;
                 vertical-alignment: center;
             }
+            themefocus := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == "\n" || event.text == " ") {
+                        root.toggle-theme();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
             themetouch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.toggle-theme(); }
             }
+            Rectangle {
+                border-radius: R.sm;
+                border-width: themefocus.has-focus ? 2px : 0px;
+                border-color: Theme.accent-ring;
+            }
             accessible-role: button;
             accessible-label: "Toggle light and dark theme";
+            accessible-action-default => { root.toggle-theme(); }
         }
     }
 }
@@ -248,6 +306,16 @@ export component StatusBar inherits Rectangle {
     in property <string> latency;
     in property <string> endpoint;
     in property <string> sdk-rev;
+    // The node answers, but from behind the chain.
+    //
+    // The wallet has computed this since the node manager was written, carried
+    // it through the protocol and set it on a global — and then **nothing read
+    // it**. The one place it appeared was a note on a row of the network
+    // screen, which is not where somebody looking at a balance is.
+    //
+    // It belongs beside the block height, because the block height is the thing
+    // that is stale, and every figure on screen was read against it.
+    in property <bool> syncing;
 
     // 32px rather than 28: at 28 the 11px text sits hard against the window
     // edge with no breathing room. Only visible in a screenshot.
@@ -268,7 +336,16 @@ export component StatusBar inherits Rectangle {
             text: root.tip == "" ? "no block height" : root.tip + " blocks";
             font-family: Typo.mono;
             font-size: Typo.micro;
-            color: Theme.text-tertiary;
+            color: root.syncing ? Theme.warning : Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        // In words as well as in colour, which is the rule everywhere else in
+        // this interface: a reader without colour vision gets the same warning.
+        if root.syncing: Text {
+            text: "node is behind the chain";
+            font-size: Typo.micro;
+            color: Theme.warning;
             vertical-alignment: center;
         }
 
