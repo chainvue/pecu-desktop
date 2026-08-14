@@ -181,7 +181,7 @@ async fn the_actor_reads_a_dashboard_from_the_scripted_chain() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 
@@ -244,7 +244,7 @@ async fn a_verusid_can_be_paid_by_name_and_a_revoked_one_cannot() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 
@@ -335,7 +335,7 @@ async fn a_looked_up_identity_is_never_counted_as_one_of_yours() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 
@@ -429,7 +429,7 @@ async fn refreshing_the_watch_list_opens_no_sheet() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 
@@ -494,7 +494,7 @@ async fn refreshing_the_watch_list_opens_no_sheet() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_name_claim_outlives_the_wallet_that_started_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let vault = dir.path().join("vault.json");
+    let home = dir.path().to_path_buf();
 
     let (dispatcher, mut events) = chainvue_core::start(
         &tokio::runtime::Handle::current(),
@@ -506,7 +506,7 @@ async fn a_name_claim_outlives_the_wallet_that_started_it() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: vault.clone(),
+            home: home.clone(),
         },
     );
 
@@ -546,7 +546,12 @@ async fn a_name_claim_outlives_the_wallet_that_started_it() {
 
     // On disk, and with the salt in it. This is the assertion the module exists
     // for: it happened before any broadcast was attempted.
-    let path = dir.path().join("registration.json");
+    //
+    // Where on disk is the layout's decision, so it is asked for: a hardcoded
+    // path would keep passing while reading a file nothing writes to.
+    let path =
+        chainvue_core::paths::Paths::new(home.clone(), &chainvue_chain::Network::Testnet, true)
+            .registration();
     let text = std::fs::read_to_string(&path).expect("the claim was written down");
     assert!(text.contains("salt"), "the file carries no salt: {text}");
 
@@ -565,7 +570,7 @@ async fn a_name_claim_outlives_the_wallet_that_started_it() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: vault,
+            home,
         },
     );
 
@@ -623,7 +628,7 @@ async fn arriving_at_the_screen_re_reads_a_list_that_is_already_full() {
             )],
             network: chainvue_chain::Network::Testnet,
             mock: true,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 

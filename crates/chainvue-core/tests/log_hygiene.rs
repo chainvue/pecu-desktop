@@ -125,7 +125,7 @@ async fn no_secret_reaches_the_log() {
             nodes: vec![Node::builtin(0, "one", "https://example.invalid")],
             network: Network::Testnet,
             mock: false,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         },
     );
 

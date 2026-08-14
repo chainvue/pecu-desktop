@@ -18,6 +18,7 @@
 mod bridge;
 
 use chainvue_chain::{Network, Node};
+use chainvue_core::paths::Paths;
 use chainvue_core::{Config, Dispatcher};
 use chainvue_protocol::{
     Command, ImportMaterial, PendingAction, RefreshScope, ScreenId, Secret, SendDraft,
@@ -48,14 +49,16 @@ const BUILTIN_NODES: &[(&str, &str)] = &[
 const BUILTIN_NODES: &[(&str, &str)] = &[("Scripted chain", "mock://scripted")];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let home = home_dir();
+
     // Held for the life of the process: the file writer is non-blocking, and
     // dropping the guard loses whatever had not been flushed.
-    let _logging = init_tracing(
-        &vault_path()
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default(),
-    );
+    //
+    // At the home directory rather than inside a chain's, because the chain can
+    // change while the process runs and tracing is installed exactly once. A log
+    // that stopped following the wallet halfway through a session would be worse
+    // than one covering both chains.
+    let _logging = init_tracing(&home);
 
     // Built by hand rather than via `#[tokio::main]`, so the main thread stays
     // free for Slint. Held for the life of the process: dropping it would abort
@@ -77,13 +80,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(index, (label, url))| Node::builtin(u32::try_from(index).unwrap_or(0), label, url))
         .collect();
 
+    // The chain this home was last used for. Testnet when there is no answer —
+    // never launched, or a file this build does not recognise — because putting
+    // a half-finished wallet on mainnet would be a choice made for the user
+    // rather than by them.
+    let network = Paths::remembered(&home).unwrap_or(Network::Testnet);
+    let paths = Paths::new(home.clone(), &network, cfg!(feature = "mock"));
+
     let (dispatcher, events) = chainvue_core::start(
         runtime.handle(),
         Config {
             nodes,
-            network: Network::Testnet,
+            network,
             mock: cfg!(feature = "mock"),
-            vault_path: vault_path(),
+            home,
         },
     );
 
@@ -94,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_mock_mode(cfg!(feature = "mock"));
 
     ui.global::<WalletState>()
-        .set_vault_path(vault_path().display().to_string().into());
+        .set_vault_path(paths.vault().display().to_string().into());
     ui.global::<AppInfo>()
         .set_log_path(log_dir().display().to_string().into());
 
@@ -125,11 +135,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Where the wallet file lives.
+/// The application home, holding one directory per chain.
 ///
-/// Per-network directories keep testnet data from ever rendering as mainnet.
-fn vault_path() -> std::path::PathBuf {
-    let base = std::env::var_os("CHAINVUE_HOME")
+/// Which chain's directory is opened inside it is [`Paths`]' decision, and the
+/// choice is remembered at the top of this one — see
+/// [`chainvue_core::paths`] for why that is the one thing not kept per chain.
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("CHAINVUE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| {
@@ -137,25 +149,7 @@ fn vault_path() -> std::path::PathBuf {
                     .join("Library/Application Support/com.chainvue.wallet")
             })
         })
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-    // The demo build gets its own directory, and that is not tidiness.
-    //
-    // Everything under here is written to: the vault, the settings, the cached
-    // dashboard, the address book, and the ledger of transactions whose fate is
-    // unknown. A demo run sharing that directory would put scripted figures and
-    // a `mock…` transaction into the same files a real wallet reads back on its
-    // next launch — and a wallet that cannot say whether a row on its screen
-    // came from a chain or from a fixture is worse than one with no demo mode.
-    let dir = if cfg!(feature = "mock") {
-        base.join("mock")
-    } else {
-        base.join("testnet")
-    };
-    if let Err(error) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(%error, path = %dir.display(), "could not create the wallet directory");
-    }
-    dir.join("vault.json")
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Turn UI callbacks into commands.
@@ -895,10 +889,7 @@ fn writable_log_directory(base: &std::path::Path) -> Option<std::path::PathBuf> 
 
 /// Where the log files are, for the screen that has to tell somebody.
 fn log_dir() -> std::path::PathBuf {
-    vault_path()
-        .parent()
-        .map(|dir| dir.join("logs"))
-        .unwrap_or_default()
+    home_dir().join("logs")
 }
 
 #[cfg(test)]

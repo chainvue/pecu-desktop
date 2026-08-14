@@ -34,6 +34,7 @@
 //! `spawn_blocking` it is.
 
 pub mod identity;
+pub mod paths;
 pub mod pending;
 pub mod portfolio;
 pub mod registration;
@@ -68,11 +69,14 @@ impl Dispatcher {
 /// How the core was configured at startup.
 pub struct Config {
     pub nodes: Vec<Node>,
+    /// The chain to open. Every durable file is chosen from this — see
+    /// [`paths::Paths`] — so it is not merely what the network panel displays.
     pub network: Network,
     pub mock: bool,
-    /// Where the wallet file lives. Opened if present; not created until the
-    /// user asks for a wallet.
-    pub vault_path: std::path::PathBuf,
+    /// The application home, holding one directory per chain. The wallet file
+    /// and everything beside it are derived from this and `network`, rather
+    /// than passed in, so switching chains cannot leave one file behind.
+    pub home: std::path::PathBuf,
 }
 
 /// Start the core on `runtime`, returning the handle to talk to it and the
@@ -84,31 +88,18 @@ pub fn start(
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-    // Beside the wallet, so a backup of the wallet directory carries the
-    // unresolved transactions with it.
-    let pending_path = config.vault_path.with_file_name("pending-broadcast.json");
-    // Beside it, for the same reason: both hold something whose loss costs
-    // money and which nothing can reconstruct.
-    let reservation_path = config.vault_path.with_file_name("registration.json");
+    let paths = paths::Paths::new(config.home, &config.network, config.mock);
 
     // Beside the vault, in the per-network directory. Failing to open it is not
     // failing to start: everything in there is either a preference or something
     // a node can be asked for again.
-    let store = config
-        .vault_path
-        .parent()
-        .map(chainvue_store::Store::open)
-        .transpose()
-        .unwrap_or_else(|error| {
-            tracing::error!(%error, "the wallet database could not be opened");
-            None
-        });
+    let store = open_store(&paths);
 
     let (work_tx, work_rx) = mpsc::unbounded_channel();
 
     let core = Core {
-        wallet: Wallet::open_or_absent(config.vault_path.clone()),
-        nodes: NodeManager::new(config.nodes, config.network),
+        wallet: Wallet::open_or_absent(paths.vault()),
+        nodes: NodeManager::new(config.nodes.clone(), config.network),
         blocking: Blocking::new(runtime.clone(), 8),
         events: event_tx,
         mock: config.mock,
@@ -122,7 +113,7 @@ pub fn start(
         native_balance: 0,
         prepared: std::collections::HashMap::new(),
         tickets: 0,
-        pending: pending::Ledger::open(pending_path),
+        pending: pending::Ledger::open(paths.pending()),
         last_checked: std::collections::HashMap::new(),
         checking: std::collections::HashSet::new(),
         polling: Polling::default(),
@@ -134,7 +125,7 @@ pub fn start(
         last_draft: chainvue_protocol::SendDraft::default(),
         identities: std::collections::BTreeMap::new(),
         looked_up: Vec::new(),
-        reservation: registration::Reservation::open(reservation_path),
+        reservation: registration::Reservation::open(paths.registration()),
         identity_changes: std::collections::HashMap::new(),
         identity_confirms: std::collections::HashSet::new(),
         ready: None,
@@ -142,10 +133,27 @@ pub fn start(
         open_content_keys: std::collections::BTreeSet::new(),
         vdxf: None,
         store,
+        paths,
+        builtin: config.nodes,
     };
 
     runtime.spawn(core.run(command_rx, work_rx));
     (Dispatcher(command_tx), event_rx)
+}
+
+/// Open the wallet database for one chain, or carry on without one.
+///
+/// Split out because switching chains has to do exactly this again, and a
+/// second copy of the "log it and continue" decision is a second place for the
+/// two to disagree about whether a missing database is fatal. It is not.
+fn open_store(paths: &paths::Paths) -> Option<chainvue_store::Store> {
+    match chainvue_store::Store::open(paths.dir()) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            tracing::error!(%error, "the wallet database could not be opened");
+            None
+        }
+    }
 }
 
 struct Core {
@@ -263,6 +271,17 @@ struct Core {
     /// databases could not be opened — the wallet works without them, it just
     /// forgets between runs and starts every session with a blank dashboard.
     store: Option<chainvue_store::Store>,
+
+    /// Where this chain's files are. Replaced wholesale by a switch, which is
+    /// what makes the switch one decision rather than five path edits.
+    paths: paths::Paths,
+    /// The endpoints this build ships with, kept so a switch can put the list
+    /// back to them before the saved ones for the new chain are added.
+    ///
+    /// Without this the node list would accumulate: switch to mainnet and the
+    /// testnet user's saved endpoints stay, offering a wallet on VRSC a list of
+    /// nodes it will then refuse to read from.
+    builtin: Vec<Node>,
 }
 
 /// `None` for an empty field, so a blank box means "leave it at the default"
@@ -1179,13 +1198,19 @@ impl Core {
                 on,
                 typed_confirmation,
             } => self.set_mainnet_spend(on, &typed_confirmation),
+            Command::SetRequestedNetwork(name) => self.switch_network(&name),
             Command::ResolvePending { id, action } => self.resolve_pending(id, action),
             Command::ScreenEntered(screen) => self.enter_screen(screen),
             Command::UserActivity => self.wallet.touch(),
             Command::Shutdown => return false,
-            other => {
-                tracing::debug!(?other, "command not handled yet");
-            }
+            // Nothing to do, and named rather than swept up by a wildcard.
+            //
+            // Screen-scoped polling starts on the way in and stops by not being
+            // asked for again, so leaving costs nothing. The arm exists so this
+            // match stays exhaustive: with a wildcard here, the next command
+            // added to the protocol would compile into silence — which is how
+            // `SetRequestedNetwork` sat unhandled for two phases.
+            Command::ScreenLeft(_) => {}
         }
         true
     }
@@ -1815,6 +1840,170 @@ impl Core {
     /// not active and the poller would never reach it.
     fn probe_one(&mut self, id: u32, url: &str) {
         self.dispatch_probe(id, url, false);
+    }
+
+    // ── Changing chains ─────────────────────────────────────────────────────
+
+    /// Open a different chain.
+    ///
+    /// # This is not a setting
+    ///
+    /// Everything durable belongs to one chain — the vault, both databases, the
+    /// ledger of unresolved payments, the salt for a name being claimed — so
+    /// this closes one wallet and opens another. Treating it as a preference
+    /// that only changes what the network panel says would leave every figure on
+    /// screen belonging to the chain somebody just left.
+    ///
+    /// # Why it locks
+    ///
+    /// A decryption key unlocked for one vault is meaningless to another, and
+    /// carrying an unlocked session across the switch would mean either holding
+    /// a key for a file that is no longer open or silently unlocking a different
+    /// wallet with a passphrase that was typed for this one. Neither is
+    /// something to do quietly, so the wallet locks and says so.
+    ///
+    /// # Why the ticket counter is left alone
+    ///
+    /// Every other piece of read state is thrown away, because it describes a
+    /// chain that is no longer open. `tickets` describes nothing about a chain:
+    /// it is a counter the interface holds references into, and resetting it
+    /// would let a stale Confirm from before the switch name a payment prepared
+    /// after it.
+    fn switch_network(&mut self, name: &str) {
+        let network = Network::from_chain_name(name);
+
+        if self.nodes.requested() == Some(&network) {
+            return;
+        }
+
+        // Not while a payment is on its way to a node. The broadcast is already
+        // out of this actor's hands, and its answer lands in a ledger that is
+        // about to be closed — so the one record of a transaction that may
+        // already exist would be written to a file nobody reads again.
+        if self.broadcasting {
+            self.notice_warning(
+                "network_switch_busy",
+                "A payment is on its way",
+                "Wait for it to finish before changing chains.",
+            );
+            return;
+        }
+
+        tracing::info!(to = %network, "changing chains");
+        let label = network.label().to_string();
+
+        self.wallet.lock();
+        let _ = self.events.send(Event::Locked {
+            reason: LockReason::Manual,
+        });
+
+        // Preferences that are about the application rather than about a chain.
+        //
+        // They live in a per-chain database because that is the only one there
+        // is, which means a switch would otherwise hand somebody a wallet in
+        // the wrong theme that locks on a different timer. Carried across so
+        // the setting follows the person; a chain that already has its own
+        // answer keeps it.
+        let carried: Vec<(&str, String)> = self
+            .store
+            .as_ref()
+            .map(|store| {
+                ["theme", "reduce_motion", "auto_lock_minutes"]
+                    .into_iter()
+                    .filter_map(|key| Some((key, store.setting(key)?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // The files, first. Everything below is either derived from these or
+        // thrown away because it came from the chain being closed.
+        self.paths = paths::Paths::new(self.paths.home().to_path_buf(), &network, self.mock);
+        paths::Paths::remember(self.paths.home(), &network);
+
+        self.wallet = Wallet::open_or_absent(self.paths.vault());
+        self.store = open_store(&self.paths);
+
+        if let Some(store) = &self.store {
+            for (key, value) in carried {
+                if store.setting(key).is_none() {
+                    store.set_setting(key, &value);
+                }
+            }
+        }
+        self.pending = pending::Ledger::open(self.paths.pending());
+        self.reservation = registration::Reservation::open(self.paths.registration());
+
+        // Back to the shipped endpoints. `restore` adds this chain's saved ones
+        // below; without the reset the previous chain's would stay, and a wallet
+        // on VRSC would be offered a list of nodes it then refuses to read from.
+        self.nodes = NodeManager::new(self.builtin.clone(), network);
+
+        // Everything the old chain answered. A figure kept here is a figure
+        // about somebody else's money.
+        self.chain = None;
+        #[cfg(feature = "mock")]
+        {
+            self.mock_for = Vec::new();
+        }
+        self.cached = portfolio::Cached::default();
+        self.refreshing = false;
+        self.spendable = verus_sdk::money::Amount::ZERO;
+        self.native_balance = 0;
+        self.prepared.clear();
+        self.identity_changes.clear();
+        self.identity_confirms.clear();
+        self.ready = None;
+        self.last_checked.clear();
+        self.checking.clear();
+        self.polling = Polling::default();
+        self.history = HistoryScan::default();
+        self.known.clear();
+        self.identity = None;
+        self.resolving = None;
+        self.last_draft = chainvue_protocol::SendDraft::default();
+        self.identities.clear();
+        self.looked_up.clear();
+        self.open_identity.clear();
+        self.open_content_keys.clear();
+        // Derived by hashing the chain's name, so a table built for VRSCTEST
+        // matches nothing on VRSC — and a table that matches nothing looks
+        // exactly like an identity that published nothing recognisable.
+        self.vdxf = None;
+
+        // Blank the dashboard before restoring, because `restore` says nothing
+        // at all when the new chain has no saved snapshot — which is precisely
+        // the case where the previous chain's figures would stay on screen.
+        let _ = self
+            .events
+            .send(Event::Portfolio(chainvue_protocol::PortfolioVm::default()));
+        let _ = self.events.send(Event::History {
+            key: String::new(),
+            delta: chainvue_protocol::ListDelta::Replace(Vec::new()),
+        });
+        let _ = self.events.send(Event::HistoryExhausted(false));
+
+        self.restore();
+        self.emit_network();
+        self.emit_wallet();
+        self.emit_identities();
+        self.emit_registration(None);
+        self.emit_pending();
+        self.emit_address_book();
+
+        self.notice_info(
+            "network_switched",
+            &format!("Now on {label}. The wallet is locked."),
+        );
+
+        // Ask the new chain's active node what it is, rather than waiting up to
+        // fifteen seconds for the poller. Until something answers, `effective`
+        // is unknown — and an unknown chain is what the read guard and the
+        // spend permit both refuse on, so the wallet would sit there declining
+        // to do anything with no visible reason.
+        if let Some(node) = self.nodes.active() {
+            let (id, url) = (node.id, node.url.clone());
+            self.probe_one(id, &url);
+        }
     }
 
     /// Name an address, or clear its name.
@@ -4100,6 +4289,16 @@ mod tests {
         vec![Node::builtin(0, "one", "https://example.invalid")]
     }
 
+    /// Where the core keeps testnet's files under a temporary home.
+    ///
+    /// Asked for rather than spelled out: a test that hardcoded the directory
+    /// would keep passing while reading a database nothing writes to.
+    fn chain_dir(home: &tempfile::TempDir) -> std::path::PathBuf {
+        paths::Paths::new(home.path().to_path_buf(), &Network::Testnet, false)
+            .dir()
+            .to_path_buf()
+    }
+
     /// The core reports its starting state without being asked, so the UI has
     /// something to render before any command is sent.
     #[tokio::test]
@@ -4111,7 +4310,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: std::path::PathBuf::from("/nonexistent/vault.json"),
+                home: std::path::PathBuf::from("/nonexistent"),
             },
         );
 
@@ -4162,7 +4361,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
 
@@ -4216,7 +4415,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
 
@@ -4295,7 +4494,7 @@ mod tests {
     #[tokio::test]
     async fn a_restore_creates_the_wallet_but_a_refusal_does_not() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("vault.json");
+        let path = chain_dir(&dir).join("vault.json");
         let handle = tokio::runtime::Handle::current();
 
         let (dispatcher, mut events) = start(
@@ -4304,7 +4503,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: path.clone(),
+                home: dir.path().to_path_buf(),
             },
         );
 
@@ -4372,9 +4571,10 @@ mod tests {
     async fn a_cold_start_shows_the_last_known_dashboard_marked_stale() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        // What a previous run would have left behind.
+        // What a previous run would have left behind — in this chain's own
+        // directory, which is asked for rather than spelled out.
         {
-            let store = chainvue_store::Store::open(dir.path()).expect("store");
+            let store = chainvue_store::Store::open(&chain_dir(&dir)).expect("store");
             let mut portfolio = chainvue_protocol::PortfolioVm::default();
             portfolio.balance.total_display = "48.8999 0000".to_string();
             // Written as current, because it WAS current when it was written.
@@ -4399,7 +4599,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
 
@@ -4568,7 +4768,7 @@ mod tests {
             nodes: testnet_nodes(),
             network: Network::Testnet,
             mock: false,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         };
 
         let (dispatcher, mut events) = start(&handle, config());
@@ -4813,7 +5013,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         backed_up_wallet(&dispatcher, &mut events).await;
@@ -4882,7 +5082,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         dispatcher.send(Command::Unlock {
@@ -4907,7 +5107,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         backed_up_wallet(&dispatcher, &mut events).await;
@@ -4968,7 +5168,7 @@ mod tests {
             nodes: testnet_nodes(),
             network: Network::Testnet,
             mock: false,
-            vault_path: dir.path().join("vault.json"),
+            home: dir.path().to_path_buf(),
         };
 
         {
@@ -5025,7 +5225,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         let _ = next_network(&mut events).await;
@@ -5046,7 +5246,7 @@ mod tests {
         assert!(notice.title.contains("not encrypted"), "{}", notice.title);
 
         // And nothing was written down, so a restart does not resurrect it.
-        let store = chainvue_store::Store::open(dir.path()).expect("store");
+        let store = chainvue_store::Store::open(&chain_dir(&dir)).expect("store");
         assert!(store.nodes().is_empty(), "a refused node was saved anyway");
     }
 
@@ -5063,7 +5263,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         let _ = next_network(&mut events).await;
@@ -5098,7 +5298,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: dir.path().join("vault.json"),
+                home: dir.path().to_path_buf(),
             },
         );
         let _ = next_network(&mut events).await;
@@ -5124,7 +5324,7 @@ mod tests {
         assert_eq!(vm.active_node, Some(0), "the wallet was left with no node");
 
         // Gone from the file too, so it does not come back at the next start.
-        let store = chainvue_store::Store::open(dir.path()).expect("store");
+        let store = chainvue_store::Store::open(&chain_dir(&dir)).expect("store");
         assert!(store.nodes().is_empty());
     }
 
@@ -5139,7 +5339,7 @@ mod tests {
                 nodes: testnet_nodes(),
                 network: Network::Testnet,
                 mock: false,
-                vault_path: std::path::PathBuf::from("/nonexistent/vault.json"),
+                home: std::path::PathBuf::from("/nonexistent"),
             },
         );
         let _ = next_network(&mut events).await;
@@ -5151,6 +5351,237 @@ mod tests {
 
         let vm = next_network(&mut events).await;
         assert_eq!(vm.nodes.len(), 1, "a built-in node was removed");
+    }
+
+    /// Wait for the next `Event::Wallet`, ignoring anything else.
+    async fn next_wallet(
+        events: &mut mpsc::UnboundedReceiver<Event>,
+    ) -> chainvue_protocol::WalletVm {
+        loop {
+            match events.recv().await {
+                Some(Event::Wallet(vm)) => return vm,
+                Some(_) => {}
+                None => panic!("the core stopped before sending a wallet event"),
+            }
+        }
+    }
+
+    // ── Changing chains ─────────────────────────────────────────────────────
+
+    /// The property the per-chain directory exists for.
+    ///
+    /// A wallet made on one chain is not there on the other. If this ever
+    /// fails, testnet keys are being opened against mainnet — where the same
+    /// addresses hold real money and a balance of zero is a lie about it.
+    #[tokio::test]
+    async fn a_wallet_made_on_one_chain_is_not_on_the_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        dispatcher.send(Command::CreateWallet {
+            name: "testnet-wallet".to_string(),
+            passphrase: chainvue_protocol::Secret::from("correct-horse-battery-staple-9931"),
+        });
+        loop {
+            let vm = next_wallet(&mut events).await;
+            if vm.exists && !vm.locked {
+                break;
+            }
+        }
+
+        dispatcher.send(Command::SetRequestedNetwork("VRSC".to_string()));
+
+        // Two things at once, and both matter: there is no wallet over here,
+        // and the session that was open did not come along.
+        let vm = loop {
+            let vm = next_wallet(&mut events).await;
+            if !vm.exists {
+                break vm;
+            }
+        };
+        assert!(vm.locked, "an unlocked session followed the switch");
+        assert!(vm.keys.is_empty(), "the other chain's keys followed");
+
+        // And the file itself is still where it was, untouched by the move.
+        let testnet = paths::Paths::new(dir.path().to_path_buf(), &Network::Testnet, false);
+        let mainnet = paths::Paths::new(dir.path().to_path_buf(), &Network::Mainnet, false);
+        assert!(testnet.vault().exists(), "the testnet wallet was moved");
+        assert!(!mainnet.vault().exists(), "a mainnet wallet was created");
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// Switching back finds the wallet again — the first one was not destroyed,
+    /// merely closed.
+    #[tokio::test]
+    async fn switching_back_finds_the_wallet_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        dispatcher.send(Command::CreateWallet {
+            name: "testnet-wallet".to_string(),
+            passphrase: chainvue_protocol::Secret::from("correct-horse-battery-staple-9931"),
+        });
+        loop {
+            if next_wallet(&mut events).await.exists {
+                break;
+            }
+        }
+
+        dispatcher.send(Command::SetRequestedNetwork("VRSC".to_string()));
+        dispatcher.send(Command::SetRequestedNetwork("VRSCTEST".to_string()));
+
+        let vm = loop {
+            let vm = next_wallet(&mut events).await;
+            if vm.exists {
+                break vm;
+            }
+        };
+        assert_eq!(vm.name, "testnet-wallet");
+        assert!(vm.locked, "the wallet came back unlocked");
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// A saved endpoint belongs to the chain it was saved on.
+    ///
+    /// Without the reset, the list accumulates: a node added for testnet stays
+    /// when the wallet moves to mainnet, offering an endpoint the read guard
+    /// will then refuse — which reads as a broken wallet rather than as a node
+    /// on the wrong chain.
+    #[tokio::test]
+    async fn saved_nodes_do_not_follow_the_wallet_to_another_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        dispatcher.send(Command::AddNode {
+            url: "https://saved-for-testnet.invalid".to_string(),
+            label: "mine".to_string(),
+        });
+        loop {
+            if next_network(&mut events).await.nodes.len() == 2 {
+                break;
+            }
+        }
+
+        dispatcher.send(Command::SetRequestedNetwork("VRSC".to_string()));
+
+        let vm = loop {
+            let vm = next_network(&mut events).await;
+            if vm.requested == "Mainnet" {
+                break vm;
+            }
+        };
+        assert_eq!(vm.nodes.len(), 1, "a saved node followed the switch");
+        assert!(
+            !vm.nodes.iter().any(|n| n.url.contains("saved-for-testnet")),
+            "the endpoint saved for the other chain is still listed",
+        );
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// The chain in use is remembered, so the next launch opens the same one.
+    ///
+    /// Written at the home directory rather than in a per-chain database, since
+    /// finding that database means already knowing the answer.
+    #[tokio::test]
+    async fn the_chain_in_use_survives_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+        let _ = next_network(&mut events).await;
+
+        dispatcher.send(Command::SetRequestedNetwork("VRSC".to_string()));
+        loop {
+            if next_network(&mut events).await.requested == "Mainnet" {
+                break;
+            }
+        }
+        dispatcher.send(Command::Shutdown);
+
+        assert_eq!(
+            paths::Paths::remembered(dir.path()),
+            Some(Network::Mainnet),
+            "the chain in use was not written down",
+        );
+    }
+
+    /// Asking for the chain already open is not a reason to lock the wallet.
+    #[tokio::test]
+    async fn asking_for_the_chain_already_open_does_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        dispatcher.send(Command::CreateWallet {
+            name: "testnet-wallet".to_string(),
+            passphrase: chainvue_protocol::Secret::from("correct-horse-battery-staple-9931"),
+        });
+        loop {
+            let vm = next_wallet(&mut events).await;
+            if vm.exists && !vm.locked {
+                break;
+            }
+        }
+
+        dispatcher.send(Command::SetRequestedNetwork("VRSCTEST".to_string()));
+        // Nothing to wait for if it did nothing, so ask a question whose answer
+        // has to come afterwards — commands are handled in order.
+        dispatcher.send(Command::SetActiveKey("nonexistent".to_string()));
+        dispatcher.send(Command::Lock);
+
+        let vm = next_wallet(&mut events).await;
+        assert!(
+            !vm.keys.is_empty(),
+            "a no-op switch closed the wallet that was open",
+        );
+
+        dispatcher.send(Command::Shutdown);
     }
 
     #[tokio::test]
@@ -5165,7 +5596,7 @@ mod tests {
                 ],
                 network: Network::Testnet,
                 mock: false,
-                vault_path: std::path::PathBuf::from("/nonexistent/vault.json"),
+                home: std::path::PathBuf::from("/nonexistent"),
             },
         );
 

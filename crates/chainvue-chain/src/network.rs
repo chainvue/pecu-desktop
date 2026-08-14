@@ -34,7 +34,6 @@ impl Network {
         }
     }
 
-    /// Whether this is the chain where mistakes cost real money.
     /// The chain's name as the daemon spells it — the inverse of
     /// [`Network::from_chain_name`].
     ///
@@ -49,6 +48,46 @@ impl Network {
         }
     }
 
+    /// The directory this chain's files live in, under the application home.
+    ///
+    /// **Not derived from [`Network::chain_name`].** These two names are pinned
+    /// to different things: the chain name is consensus, and changing it would
+    /// break VDXF derivation, while this one is a path somebody's wallet is
+    /// already sitting in. `testnet/` is what shipped, so `testnet/` is what
+    /// this returns — deriving it from "VRSCTEST" would rename the directory
+    /// out from under every existing installation and present them with an
+    /// empty wallet.
+    ///
+    /// Lowercased and stripped for [`Network::Other`], because a PBaaS chain
+    /// name is not otherwise guaranteed to be a usable path segment.
+    pub fn dir_name(&self) -> String {
+        match self {
+            Self::Mainnet => "mainnet".to_string(),
+            Self::Testnet => "testnet".to_string(),
+            Self::Other(name) => {
+                let cleaned: String = name
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() {
+                            c.to_ascii_lowercase()
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect();
+                // A name that cleans down to nothing would collide with the
+                // home directory itself and put a PBaaS wallet where the
+                // network choice is kept.
+                if cleaned.trim_matches('-').is_empty() {
+                    "chain".to_string()
+                } else {
+                    cleaned
+                }
+            }
+        }
+    }
+
+    /// Whether this is the chain where mistakes cost real money.
     pub fn is_mainnet(&self) -> bool {
         matches!(self, Self::Mainnet)
     }
@@ -136,6 +175,35 @@ mod tests {
         // A guessed hostname sends someone to a page that does not exist, or
         // to somebody else's chain.
         assert_eq!(Network::Other("SOMEPBAAS".to_string()).explorer(txid), None);
+    }
+
+    /// The two shipped directories are the ones that already exist on disk.
+    ///
+    /// If this ever starts deriving the path from the chain name, an existing
+    /// wallet moves from `testnet/` to `vrsctest/` and its owner is shown an
+    /// empty wallet with their money apparently gone.
+    #[test]
+    fn the_directory_names_are_the_ones_already_on_disk() {
+        assert_eq!(Network::Mainnet.dir_name(), "mainnet");
+        assert_eq!(Network::Testnet.dir_name(), "testnet");
+    }
+
+    /// A chain name is not guaranteed to be a usable path segment, and one that
+    /// escaped would write outside the directory it was given.
+    #[test]
+    fn an_unknown_chain_name_cannot_escape_its_directory() {
+        for (name, expected) in [
+            ("SOMEPBAAS", "somepbaas"),
+            ("../../etc", "------etc"),
+            ("a/b", "a-b"),
+            ("...", "chain"),
+            ("", "chain"),
+        ] {
+            let dir = Network::Other(name.to_string()).dir_name();
+            assert_eq!(dir, expected, "`{name}`");
+            assert!(!dir.contains('/'), "`{name}` produced a path separator");
+            assert!(!dir.contains('.'), "`{name}` kept a dot");
+        }
     }
 
     /// The property that matters most: nothing about a hostname can make a

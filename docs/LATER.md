@@ -37,39 +37,34 @@ cross-chain transfer — all three `TransferDestination` constructors hard-code
 
 ---
 
-## 1. Choosing a chain — VRSC and VRSCTEST
+## 1. Choosing a chain — what is left of it
 
-**Status:** the protocol has the command; nothing handles it.
+**Status:** built. `Command::SetRequestedNetwork` is handled, `Paths` owns the
+layout, the choice survives a restart, and the Network screen has the chooser.
+Switching relocks the wallet, reopens the vault, both databases, the pending
+ledger and the reservation, resets the node list, clears every cached figure and
+probes the new chain's active node.
 
-`Command::SetRequestedNetwork` exists in `chainvue-protocol` and reaches the
-actor's match arm as dead weight. `crates/chainvue-app/src/main.rs` hard-codes
-`network: Network::Testnet`, and every path below it — vault, store, log
-directory — is built from that one constant.
+Three things it does **not** do:
 
-The eventual goal is every mainnet PBaaS chain. **Not now.** The immediate scope
-is exactly two: VRSC and VRSCTEST.
+1. **The shipped node list is not per chain.** Both public endpoints ship on
+   both chains, so a wallet on VRSC still lists `api.verustest.net` and marks
+   it `WrongNetwork` once it answers. Correct, and untidy. Making
+   `BUILTIN_NODES` a function of the network means moving the table out of
+   `chainvue-app` — it is chain knowledge, not shell knowledge — and deciding
+   what the demo build's one scripted entry does with it.
+2. **Theme, reduce-motion and the auto-lock timer are per chain.** They are
+   application preferences living in a per-chain database because that is the
+   only database there is. A switch copies them across when the new chain has no
+   answer of its own, which makes the common case behave — but two chains can
+   still drift apart, and the honest fix is a settings store at the home level.
+3. **PBaaS chains have no way in.** `Network::Other` is carried everywhere and
+   `dir_name()` already sanitises one into a directory, but nothing offers a
+   chooser beyond the two buttons. That is the same question as item 1: where
+   the list of known chains comes from.
 
-What it actually costs, in order:
-
-1. **Per-network directories.** `~/Library/Application Support/com.chainvue.wallet/{mainnet,testnet}/` already
-   exists as a shape — `testnet/` is real, `mainnet/` has never been written.
-   The vault, `wallet.sqlite` and `cache.sqlite` all move under it. This is the
-   whole reason testnet figures can never render as mainnet, and it is why the
-   directory is in the path rather than a column in the database.
-2. **Reopening them.** Switching networks means closing a vault, closing two
-   SQLite connections, and re-running `restore()` against different files. The
-   actor owns all three by value, so this is a method on the actor rather than
-   anything reentrant — but it must relock the wallet, because a DEK unlocked
-   for one vault has no meaning for another.
-3. **The node list follows the network.** `NodeManager` holds nodes for one
-   chain. Switching has to swap the shipped defaults and reload the user's saved
-   nodes for that network, or the wallet lands on a node it will then refuse to
-   read from — see `reading_the_wrong_chain()`, which is already in place and
-   would correctly block it.
-
-The read guard and the spend permit both already compare `requested` against
-`effective`, so the safety half of this is done. What is missing is only the
-plumbing that makes `requested` a variable.
+The read guard and the spend permit compared `requested` against `effective`
+long before any of this, so the safety half was never the missing part.
 
 ---
 
