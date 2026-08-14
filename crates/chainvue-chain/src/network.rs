@@ -35,6 +35,20 @@ impl Network {
     }
 
     /// Whether this is the chain where mistakes cost real money.
+    /// The chain's name as the daemon spells it — the inverse of
+    /// [`Network::from_chain_name`].
+    ///
+    /// Not [`Network::label`], which is for people: VDXF key derivation hashes
+    /// this string, so "Testnet" and "VRSCTEST" derive different keys and only
+    /// one of them matches anything on chain.
+    pub fn chain_name(&self) -> &str {
+        match self {
+            Self::Mainnet => "VRSC",
+            Self::Testnet => "VRSCTEST",
+            Self::Other(name) => name,
+        }
+    }
+
     pub fn is_mainnet(&self) -> bool {
         matches!(self, Self::Mainnet)
     }

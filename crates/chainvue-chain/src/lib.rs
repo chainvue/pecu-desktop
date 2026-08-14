@@ -32,8 +32,8 @@ pub use permit::{SpendPermit, SpendRefused};
 use verus_sdk::money::Amount;
 use verus_sdk::network::{
     AddressBalance, AddressDelta, AddressUtxo, Broadcaster, ChainInfo, ChainReader,
-    ConversionEstimate, CurrencyConverter, CurrencyPolicy, CurrencySummary, IdentityContent,
-    IdentityRecord, MempoolDelta, OfferListing, RpcError,
+    ConversionEstimate, CurrencyConverter, CurrencyPolicy, CurrencySummary, IdentityAtAddress,
+    IdentityContent, IdentityRecord, MempoolDelta, OfferListing, RpcError,
 };
 
 /// A chain to read from: a real node, or a scripted one.
@@ -49,6 +49,29 @@ impl Chain {
     /// A client for a real endpoint.
     pub fn live(url: &str) -> Result<Self, RpcError> {
         Ok(Self::Live(connect(url, node::REQUEST_TIMEOUT)?))
+    }
+
+    /// The scripted chain, answering for the addresses this wallet holds.
+    ///
+    /// # Errors
+    ///
+    /// If the first address is not one the demo script can pay.
+    #[cfg(feature = "mock")]
+    pub fn mock(addresses: &[String]) -> Result<Self, RpcError> {
+        Ok(Self::Mock(chainvue_mock::MockChain::demo(addresses)?))
+    }
+
+    /// Ask this chain what it is, and how long it took to answer.
+    ///
+    /// The companion to [`probe`], which takes a URL and therefore only ever
+    /// speaks to a real node. Health and the chain tip are the same question —
+    /// one `chain_info()` yields the network, the height, the sync state and the
+    /// version — and the scripted chain has to answer it too, or mock mode shows
+    /// an offline node beside a populated dashboard.
+    pub fn probe(&self) -> (Result<ChainInfo, RpcError>, std::time::Duration) {
+        let started = std::time::Instant::now();
+        let result = self.chain_info();
+        (result, started.elapsed())
     }
 
     /// Whether this is the scripted chain — so the UI can say so, loudly and
@@ -134,6 +157,7 @@ delegate! {
     currency_converters(currencies: &[&str]) -> Vec<CurrencyConverter>;
     estimate_fee(blocks: u32) -> Option<Amount>;
     identity(name_or_id: &str) -> IdentityRecord;
+    identities_with_address(address: &str) -> Vec<IdentityAtAddress>;
     identity_at(name_or_id: &str, height: u32) -> IdentityRecord;
     identity_content(name_or_id: &str) -> IdentityContent;
     identity_registration(name_or_id: &str) -> String;
