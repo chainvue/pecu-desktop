@@ -83,6 +83,19 @@ pub struct StoredNode {
     pub url: String,
 }
 
+/// A VerusID somebody is keeping an eye on but does not control.
+///
+/// Name and address only. Everything else about an identity is a chain fact
+/// that would be a lie by the time it was read back off disk — a row claiming
+/// "Active" for something revoked last week is worse than one that says
+/// nothing. The rest is re-read on refresh.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WatchedIdentity {
+    pub address: String,
+    /// As it read when last looked up. Cosmetic: the address is the identity.
+    pub name: String,
+}
+
 /// An address this wallet has paid, or been told the name of.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KnownAddress {
@@ -275,6 +288,95 @@ impl Store {
             .execute("DELETE FROM address_book WHERE address = ?1", [address])
         {
             tracing::warn!(%error, "an address could not be forgotten");
+        }
+    }
+
+    // ── What a VerusID name meant last time ─────────────────────────────────
+
+    /// The i-address this name resolved to when it was last looked up.
+    ///
+    /// `None` for a name never seen. That is not the same as "unchanged" and
+    /// callers must not treat it as agreement — a first sighting is exactly the
+    /// case there is nothing to compare against.
+    pub fn identity_address(&self, name: &str) -> Option<String> {
+        self.wallet
+            .query_row(
+                "SELECT address FROM identity_name WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
+    /// Record what a name resolved to.
+    ///
+    /// Overwrites, deliberately. Once the wallet has *shown* somebody that a
+    /// name now points somewhere new, holding on to the old value would make
+    /// the same warning fire forever — including after they accepted it, which
+    /// trains people to click past exactly the alert that matters.
+    pub fn remember_identity(&self, name: &str, address: &str, at: i64) {
+        if let Err(error) = self.wallet.execute(
+            "INSERT INTO identity_name (name, address, seen_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (name) DO UPDATE SET
+                 address = excluded.address,
+                 seen_at = excluded.seen_at",
+            rusqlite::params![name, address, at],
+        ) {
+            tracing::warn!(%error, "a VerusID's address could not be recorded");
+        }
+    }
+
+    // ── VerusIDs somebody is keeping an eye on ──────────────────────────────
+
+    /// The identities being watched, newest first.
+    ///
+    /// Name and address only. Everything else about an identity is a chain fact
+    /// that would be a lie by the time it was read back.
+    pub fn watched_identities(&self) -> Vec<WatchedIdentity> {
+        let Ok(mut statement) = self
+            .wallet
+            .prepare("SELECT address, name FROM watched_identity ORDER BY seen_at DESC, address")
+        else {
+            return Vec::new();
+        };
+        let Ok(rows) = statement.query_map([], |row| {
+            Ok(WatchedIdentity {
+                address: row.get(0)?,
+                name: row.get(1)?,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    /// Start watching one, or bump it to the top.
+    pub fn watch_identity(&self, address: &str, name: &str, at: i64) {
+        if let Err(error) = self.wallet.execute(
+            "INSERT INTO watched_identity (address, name, seen_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (address) DO UPDATE SET
+                 name    = excluded.name,
+                 seen_at = excluded.seen_at",
+            rusqlite::params![address, name, at],
+        ) {
+            tracing::warn!(%error, "a VerusID could not be added to the watch list");
+        }
+    }
+
+    /// Stop watching one.
+    pub fn unwatch_identity(&self, address: &str) {
+        if let Err(error) = self
+            .wallet
+            .execute("DELETE FROM watched_identity WHERE address = ?1", [address])
+        {
+            tracing::warn!(%error, "a VerusID could not be removed from the watch list");
+        }
+    }
+
+    /// Stop watching all of them.
+    pub fn unwatch_all_identities(&self) {
+        if let Err(error) = self.wallet.execute("DELETE FROM watched_identity", []) {
+            tracing::warn!(%error, "the VerusID watch list could not be cleared");
         }
     }
 
@@ -674,6 +776,75 @@ mod tests {
         let reopened = store(&dir);
         assert_eq!(reopened.setting("theme").as_deref(), Some("dark"));
         assert_eq!(reopened.native_currency(), None);
+    }
+
+    /// What a VerusID name meant survives a restart, and a change is visible.
+    ///
+    /// This is the whole value of the table. Nobody can check an i-address by
+    /// eye, so the only thing that makes paying `someone@` safer than trusting
+    /// one reply from one node is noticing that the reply is not the one from
+    /// last time — and noticing needs the last time to still be on disk.
+    #[test]
+    fn a_verusid_that_moves_is_visible_across_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        {
+            let store = store(&dir);
+            assert_eq!(
+                store.identity_address("someone@"),
+                None,
+                "a name never seen must not read as agreement",
+            );
+            store.remember_identity("someone@", "iOLD", 1_700_000_000);
+        }
+
+        let reopened = store(&dir);
+        assert_eq!(
+            reopened.identity_address("someone@").as_deref(),
+            Some("iOLD"),
+        );
+
+        // It moved. Recording the new value must replace the old one — keeping
+        // both would fire the same warning forever, including after somebody
+        // accepted it, which is how people learn to click past the one alert
+        // that matters.
+        reopened.remember_identity("someone@", "iNEW", 1_700_000_100);
+        assert_eq!(
+            reopened.identity_address("someone@").as_deref(),
+            Some("iNEW"),
+        );
+    }
+
+    /// A watched identity survives a restart, and can be dropped one at a time.
+    ///
+    /// It used to live in memory only, so somebody who had just looked up the
+    /// identity they were about to pay had to look it up again after a restart.
+    #[test]
+    fn a_watched_identity_outlives_the_session_that_found_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        {
+            let store = store(&dir);
+            store.watch_identity("iONE", "one.VRSCTEST@", 1_700_000_000);
+            store.watch_identity("iTWO", "two.VRSCTEST@", 1_700_000_100);
+        }
+
+        let reopened = store(&dir);
+        let watched = reopened.watched_identities();
+        assert_eq!(watched.len(), 2);
+        // Newest first, so the one just looked at is the one at hand.
+        assert_eq!(watched[0].address, "iTWO");
+        assert_eq!(watched[0].name, "two.VRSCTEST@");
+
+        // One at a time, because a list that can only be emptied wholesale
+        // makes keeping one entry cost keeping every entry.
+        reopened.unwatch_identity("iTWO");
+        let watched = reopened.watched_identities();
+        assert_eq!(watched.len(), 1);
+        assert_eq!(watched[0].address, "iONE");
+
+        reopened.unwatch_all_identities();
+        assert!(reopened.watched_identities().is_empty());
     }
 
     #[test]

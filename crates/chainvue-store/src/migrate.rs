@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bumped when a durable table changes shape.
-const WALLET_VERSION: i64 = 3;
+const WALLET_VERSION: i64 = 5;
 
 /// Bumped when a cached table changes shape. Cheap to raise: an unrecognised
 /// cache is deleted, not migrated.
@@ -88,6 +88,50 @@ pub fn wallet(connection: &Connection, path: &Path) -> Result<(), StoreError> {
                  label    TEXT NOT NULL DEFAULT '',
                  paid_at  INTEGER,
                  payments INTEGER NOT NULL DEFAULT 0
+             );",
+        )?;
+    }
+
+    if found < 4 {
+        connection.execute_batch(
+            // Which i-address a VerusID name resolved to, and when.
+            //
+            // Durable, and this is the one table here that is a security
+            // control rather than a convenience. A name is not an address: it
+            // is a question asked of a node, and the answer is whatever that
+            // node says. Nobody can check an i-address by eye any better than
+            // they can check a name, so the only thing that makes paying
+            // `someone@` safer than trusting one reply is **noticing when the
+            // reply changes**.
+            //
+            // Keyed by name, because the question being asked is "did this name
+            // mean something else last time".
+            "CREATE TABLE IF NOT EXISTS identity_name (
+                 name    TEXT PRIMARY KEY,
+                 address TEXT NOT NULL,
+                 seen_at INTEGER NOT NULL
+             );",
+        )?;
+    }
+
+    if found < 5 {
+        connection.execute_batch(
+            // VerusIDs somebody looked up that are not their own.
+            //
+            // Durable, because looking one up is a decision and nothing can
+            // reconstruct it — the same reason `node` and `address_book` are
+            // durable. An earlier version kept these in memory only, and they
+            // vanished on restart; somebody who had just looked up the identity
+            // they were about to pay had to look it up again.
+            //
+            // Only the name and the address, deliberately. Status and timelock
+            // are chain facts that go stale on disk, and a row claiming
+            // "Active" for something revoked last week would be worse than one
+            // that says nothing. They are re-read on refresh.
+            "CREATE TABLE IF NOT EXISTS watched_identity (
+                 address TEXT PRIMARY KEY,
+                 name    TEXT NOT NULL DEFAULT '',
+                 seen_at INTEGER NOT NULL
              );",
         )?;
     }
