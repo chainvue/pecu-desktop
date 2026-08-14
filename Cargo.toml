@@ -23,17 +23,17 @@ publish = false
 # the SDK sets rust-version = 1.95 against a machine that has exactly 1.95.0, so
 # an upstream MSRV bump must be a deliberate act here rather than a build that
 # breaks on a Tuesday. `SDK_REV` in chainvue-protocol surfaces this in About.
-verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", features = ["network"] }
+verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "8f015206aad84672aac3c6fb07c80b651708743e", features = ["network"] }
 # Taken directly (not through the facade) by chainvue-mock, which needs
 # `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
 # dependency graph at all. See chainvue-mock/Cargo.toml.
-verus-rpc = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", default-features = false }
+verus-rpc = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "8f015206aad84672aac3c6fb07c80b651708743e", default-features = false }
 # Dev-dependency only, for `testing::ScriptedReader` — which lets a send be
 # built and signed against a scripted chain, with the broadcasts it received
 # available to assert on. The facade does not forward the `testing` feature, so
 # this is taken directly, and pinned to the SAME revision: a different one would
 # be testing a different SDK than the one that ships.
-verus-flows = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "b849fb959ee70885327640dc796ba59932834a72", features = ["testing"] }
+verus-flows = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "8f015206aad84672aac3c6fb07c80b651708743e", features = ["testing"] }
 
 # ── Shared across member crates so versions cannot drift apart. ──
 serde = { version = "1", features = ["derive"] }
