@@ -111,6 +111,57 @@ export struct ToastRow {
     count: int,
 }
 
+// One VerusID in the list.
+export struct IdentityRow {
+    // `name.parent@` where the parent is known, otherwise the bare name.
+    name: string,
+    // The i-address. The one thing about an identity that never changes, and
+    // the identifier to prefer for anything destructive.
+    address: string,
+    // "Active" | "Locked" | "Unlocking" | "Revoked" — four, not two. A wallet
+    // that renders only active-or-revoked cannot say the two things that
+    // actually stop somebody: that the funds are held, and that the clock
+    // releasing them is already running.
+    status: string,
+    // The pill colour, in the same vocabulary the node list uses.
+    tone: string,
+    // What the status means, in a sentence. Empty for the ordinary case.
+    note: string,
+    // Whether this wallet holds keys for it. A fact about the wallet, not about
+    // the identity — and what decides which actions are offered.
+    mine: bool,
+}
+
+// One published value in an identity's content map.
+//
+// Flattened: one row per value, and the key fields are filled only on the first
+// row of each key. Same shape as `ActivityRow.group`, and for the same reason —
+// grouping needs to see the row before this one, which a `for` over a model
+// cannot do. Core does it, once.
+export struct ContentEntry {
+    // The VDXF key as the i-address the map is keyed by. Empty on continuation
+    // rows.
+    key: string,
+    // The URI this key hashes from, when the wallet knows one that does.
+    //
+    // Empty is PERMANENT, not pending. A VDXF key is a one-way hash of a name:
+    // for a key somebody else published, the name cannot be recovered, and
+    // without it there is nothing to say how the value is encoded.
+    name: string,
+    // True on the first row of a key, so the heading is drawn once.
+    first: bool,
+    // The bytes as text, when reading them that way is defensible. Empty
+    // otherwise — and then `hex` is what to show.
+    text: string,
+    hex: string,
+    // "12 bytes", for values that are not text.
+    size: string,
+    // The daemon's own rendering, when it recognised the key. It cannot be
+    // turned back into bytes, so it stands beside them rather than replacing
+    // them.
+    structured: string,
+}
+
 export struct AssetRow {
     name: string,
     amount: string,

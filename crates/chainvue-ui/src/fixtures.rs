@@ -20,8 +20,9 @@ use std::rc::Rc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::{
-    ActivityRow, AppInfo, AppWindow, AssetRow, KeyRow, KnownAddressRow, NetworkState, NodeRow,
-    PendingRow, ReviewOutput, SeedState, SeedWord, SendState, TxState, WalletState,
+    ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, IdentityRow, IdentityState, KeyRow,
+    KnownAddressRow, NetworkState, NodeRow, PendingRow, ReviewOutput, SeedState, SeedWord,
+    SendState, TxState, WalletState,
 };
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -315,6 +316,39 @@ pub fn reviewing(ui: &AppWindow) {
     ]))));
 }
 
+/// The same review, for a payment addressed to a VerusID by name.
+///
+/// Worth its own reference image because it is the one case where the address
+/// on screen is not the thing anybody typed. A name is a question put to a node;
+/// the outputs are the answer. Showing only one of the two is either asking
+/// somebody to check an i-address they have never seen, or asking them to trust
+/// a lookup nobody told them happened.
+pub fn reviewing_identity(ui: &AppWindow) {
+    reviewing(ui);
+
+    let send = ui.global::<SendState>();
+    send.set_recipient_name("chainvue.VRSCTEST@".into());
+    // Paid before, so the screen is not carrying two warnings at once and the
+    // identity block is what the image is actually about.
+    send.set_first_time_recipient(false);
+
+    send.set_outputs(ModelRc::from(Rc::new(VecModel::from(vec![
+        ReviewOutput {
+            // A real i-address from `api.verustest.net`, so it parses.
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            kind: "VerusID".into(),
+            amount: "50.0000 0000".into(),
+            is_change: false,
+        },
+        ReviewOutput {
+            address: "RWmjzbd4Sy6zK4H4rjHXrpaWTrsJYRr6Nn".into(),
+            kind: "Payment".into(),
+            amount: "12 332.4199 0000".into(),
+            is_change: true,
+        },
+    ]))));
+}
+
 /// The receive screen, with a real QR for a real address.
 ///
 /// The address is from the SDK's own fixtures — a valid transparent address
@@ -564,6 +598,183 @@ fn masked(count: i32) -> Vec<SeedWord> {
 /// column, the latency, and the Remove button that only a user-added endpoint
 /// gets. All three are laid out here at once, because a row that looks right
 /// alone can still collide with the one beside it.
+/// The VerusIDs list, showing all four states at once.
+///
+/// Four, because the two a two-state wallet cannot express are exactly the two
+/// worth a reference image: a lock with no countdown, and a countdown running.
+/// The i-addresses are real ones from VRSCTEST, so they parse.
+pub fn identities(ui: &AppWindow) {
+    unlocked(ui);
+    ui.set_screen("identities".into());
+    // These are testnet identities; the ticker has to say so, or the detail
+    // sheet prices what one holds in the wrong currency.
+    ui.global::<WalletState>().set_ticker("VRSCTEST".into());
+
+    let rows = vec![
+        IdentityRow {
+            name: "robert.VRSCTEST@".into(),
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            status: "Active".into(),
+            tone: "online".into(),
+            note: "".into(),
+            mine: true,
+        },
+        IdentityRow {
+            name: "vault.VRSCTEST@".into(),
+            address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+            status: "Locked".into(),
+            tone: "degraded".into(),
+            note: "Funds held. Unlocking starts a 100-block wait.".into(),
+            mine: true,
+        },
+        IdentityRow {
+            name: "moving.VRSCTEST@".into(),
+            address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+            status: "Unlocking".into(),
+            tone: "degraded".into(),
+            note: "Unlocks at block 1 188 900".into(),
+            mine: true,
+        },
+    ];
+
+    let state = ui.global::<IdentityState>();
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+
+    // Somebody else's, looked up — in its own section, under a heading that
+    // says whose it is not.
+    //
+    // This is the state a real session found: an identity that is not yours
+    // used to sit in the list above, under a sentence claiming it was found by
+    // asking which names your keys control, and stayed there until the wallet
+    // was restarted.
+    state.set_looked_up(ModelRc::from(Rc::new(VecModel::from(vec![IdentityRow {
+        name: "stranger.VRSCTEST@".into(),
+        address: "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr".into(),
+        status: "Revoked".into(),
+        tone: "offline".into(),
+        note: "Only its recovery authority can bring it back.".into(),
+        mine: false,
+    }]))));
+}
+
+/// One VerusID in full, with the warning that outranks everything on it.
+///
+/// The identity is its own recovery authority — the shape a fresh registration
+/// lands on by default — so the sheet has to say it cannot be revoked. That is
+/// the state this image exists for.
+pub fn identity_detail(ui: &AppWindow) {
+    identities(ui);
+
+    let state = ui.global::<IdentityState>();
+    state.set_name("robert.VRSCTEST@".into());
+    state.set_status("Locked".into());
+    state.set_tone("degraded".into());
+    state.set_balance("48.5000 0000".into());
+    state.set_signatures_required("1 of 1".into());
+    state.set_control_note("This wallet holds 1 of the 1 signatures needed.".into());
+    state.set_revocation_authority("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
+    state.set_recovery_authority("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into());
+    state.set_cannot_be_revoked(true);
+    state.set_timelock_note(
+        "Locked. The funds cannot be spent, and nothing is counting down yet — unlocking \
+         publishes a height 100 blocks out and the wait starts then."
+            .into(),
+    );
+
+    state.set_primary_addresses(ModelRc::from(Rc::new(VecModel::from(vec![
+        slint::SharedString::from("RK9izAySZHQAaCEkRmVV4Xtu73uV5sqsZy"),
+    ]))));
+
+    // One key this wallet can name, one it cannot — which is the permanent
+    // case, not a pending one.
+    state.set_content(ModelRc::from(Rc::new(VecModel::from(vec![
+        ContentEntry {
+            key: "iJ1BsyA9mx5RVk3ePK2WDgFcFCcfsXkBbA".into(),
+            name: "vrsc::identity.profile".into(),
+            first: true,
+            text: "first value, must survive".into(),
+            hex: "66697273742076616c75652c206d7573742073757276697665".into(),
+            size: "25 bytes".into(),
+            structured: "".into(),
+        },
+        ContentEntry {
+            key: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+            name: "".into(),
+            first: true,
+            text: "".into(),
+            hex: "018787a1035a9bd4179a3e0538ba9f90be7f231b69b0b588bac7b83800".into(),
+            size: "29 bytes".into(),
+            structured: "".into(),
+        },
+    ]))));
+
+    // This wallet holds the key, so the controls that change it are offered.
+    // A fact, not something read out of the sentence above it.
+    state.set_can_sign(true);
+
+    // Last, because this is what opens the sheet.
+    state.set_address("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into());
+}
+
+/// A change built and signed, waiting to be sent.
+///
+/// The last moment before something irreversible, which is why it is its own
+/// layer rather than one heading among eight — and why the sentence on it has
+/// to say what handing an authority away costs.
+pub fn identity_change_review(ui: &AppWindow) {
+    identity_detail(ui);
+
+    let state = ui.global::<IdentityState>();
+    state.set_change_description(
+        "Points recovery to iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq — after this, only they can \
+         take that action, and this wallet cannot take it back."
+            .into(),
+    );
+    state.set_change_fee("0.0001 0000".into());
+    // Last, because a non-zero ticket is what opens the review.
+    state.set_change_ticket(1);
+}
+
+/// The revocation review — the one change nobody can undo from here.
+///
+/// Worth its own reference image because it is the only place in this
+/// application, besides the mainnet switch, where a word has to be typed. If
+/// that ever renders as an ordinary confirmation, the picture says so.
+pub fn identity_revoke_review(ui: &AppWindow) {
+    identity_detail(ui);
+
+    let state = ui.global::<IdentityState>();
+    state.set_change_description(
+        "Revokes the identity. It can no longer be updated or spent from by its own keys, \
+         and only its recovery authority can bring it back — so if that authority is the \
+         identity itself, nothing can."
+            .into(),
+    );
+    state.set_change_fee("0.0001 0000".into());
+    state.set_change_needs_confirmation(true);
+    state.set_change_ticket(2);
+}
+
+/// A name claim waiting for its commitment to confirm.
+///
+/// The state the whole panel exists for: two transactions with a deadline
+/// between them, and a window of about twenty blocks that cannot be extended.
+/// A progress spinner without that fact on it hides the only thing somebody
+/// could act on.
+pub fn registering(ui: &AppWindow) {
+    identities(ui);
+
+    let state = ui.global::<IdentityState>();
+    state.set_reg_step("waiting".into());
+    state.set_reg_name("chainvue".into());
+    state.set_reg_note(
+        "The claim is on the chain with 0 confirmations. One is enough to register.".into(),
+    );
+    state.set_reg_deadline("Must confirm before block 1 188 674 — about 18 minutes".into());
+    state.set_reg_fee("100.0000 0000".into());
+    state.set_reg_cannot_be_revoked(true);
+}
+
 pub fn network(ui: &AppWindow) {
     unlocked(ui);
 
