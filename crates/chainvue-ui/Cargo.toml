@@ -72,6 +72,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # PNG encoding for the offscreen renders. Dev-only: the wallet itself ships no
 # image codec.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Slint's own element-inspection backend, dev-only. It is the only way to read
+# back what this interface actually exposes to an assistive technology — the
+# `accessible-role`, `accessible-label` and `accessible-value` the compiler
+# attached to each live element, rather than what the `.slint` source appears
+# to say.
+#
+# Justified rather than convenient: the alternative is a person with a screen
+# reader, and a person cannot run in CI. This checks the mechanical half —
+# that nothing interactive is nameless — which is where the failures are.
+# Whether it makes sense *heard* still needs ears; see `tests/accessibility.rs`.
+i-slint-backend-testing = "1.17"
 
 [build-dependencies]
 # `slint-build` rather than the `slint!` macro: every struct declared in
