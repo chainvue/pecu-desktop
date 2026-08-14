@@ -224,6 +224,123 @@ pub struct PortfolioVm {
     pub tokens_unknown: bool,
 }
 
+/// A registration in progress.
+///
+/// Two transactions with a deadline between them, and the deadline is what this
+/// exists to make visible: the commitment expires about twenty blocks after it
+/// was signed, and missing that window spends the fee for nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistrationVm {
+    pub name: String,
+    /// "reserved" | "committed" | "waiting" | "ready" | "registering" | "done"
+    /// | "expired" | "lost"
+    pub step: String,
+    /// What is happening, in a sentence somebody can act on.
+    pub note: String,
+    /// The block the commitment must be registered by, and how long that is.
+    /// Empty when there is no deadline to state yet.
+    pub deadline: String,
+    /// The registration fee, formatted.
+    pub fee_display: String,
+    /// The identity's address, once it exists.
+    pub address: String,
+    /// Whether the wallet is waiting on a node right now.
+    pub busy: bool,
+    /// Set when this identity was registered as its own recovery authority, so
+    /// the screen can offer the fix while somebody is still looking at it.
+    pub cannot_be_revoked: bool,
+}
+
+/// One VerusID, as a row in the list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityVm {
+    /// `name.parent@` where the parent is known, otherwise the bare name.
+    pub name: String,
+    /// The i-address. The identifier to prefer for anything destructive, and
+    /// the one thing about an identity that never changes.
+    pub address: String,
+    /// "Active" · "Locked" · "Unlocking" · "Revoked".
+    pub status: String,
+    /// The pill colour, in the vocabulary the node list already uses.
+    pub tone: String,
+    /// What the status means, in a sentence. Empty for the ordinary case,
+    /// because a row that explains "Active" is a row nobody reads.
+    pub note: String,
+    /// Whether this wallet holds enough keys to sign for it. Decides which
+    /// actions are offered, and is a fact about this wallet rather than about
+    /// the identity.
+    pub mine: bool,
+}
+
+/// Everything the detail sheet shows about one identity.
+///
+/// Read through `current_identity`, which decodes the identity from the output
+/// script rather than from the node's JSON rendering — the same read every
+/// write operation starts from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityDetailVm {
+    pub name: String,
+    pub address: String,
+    pub status: String,
+    pub tone: String,
+    /// The addresses that may sign, and how many of them are needed.
+    pub primary_addresses: Vec<String>,
+    pub signatures_required: String,
+    /// "This wallet holds 1 of the 1 key needed" — or that it holds none.
+    pub control_note: String,
+    /// Whether this wallet holds enough keys to sign for it.
+    ///
+    /// Its own field rather than something inferred from `control_note`. A
+    /// capability read out of a sentence breaks the moment the sentence is
+    /// reworded, and what breaks is a button that builds a transaction the
+    /// chain then refuses — which costs a fee to discover.
+    pub can_sign: bool,
+    pub revocation_authority: String,
+    pub recovery_authority: String,
+    /// Set when the recovery authority is the identity itself, which makes it
+    /// **unrevokable**: consensus refuses a revocation whose subject is its own
+    /// recovery authority. A freshly registered identity has exactly this shape
+    /// by default, and nothing says so at the time.
+    pub cannot_be_revoked: bool,
+    /// The lock, in words. Never "locked: true" — the two locked states behave
+    /// nothing alike and only one of them ends on its own.
+    pub timelock_note: String,
+    /// What it holds, already formatted.
+    pub balance_display: String,
+    /// Published content as it stands now.
+    pub content: Vec<ContentEntryVm>,
+    /// Every value ever published, which is a different question — see
+    /// `ChainReader::identity_content`.
+    pub content_history: Vec<ContentEntryVm>,
+}
+
+/// One key in an identity's content map, with its values.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentEntryVm {
+    /// The VDXF key as the i-address the map is keyed by.
+    pub key: String,
+    /// The URI this key hashes from, when this wallet knows one that does.
+    /// Empty otherwise — and that is permanent, not pending: a VDXF key is a
+    /// one-way hash and there is no inverse.
+    pub name: String,
+    pub values: Vec<ContentValueVm>,
+}
+
+/// One published value.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentValueVm {
+    /// The bytes as text, when reading them that way is defensible. Empty
+    /// otherwise.
+    pub text: String,
+    /// Always available. The honest rendering, and the one to fall back to.
+    pub hex: String,
+    /// "12 bytes", for values that are not text.
+    pub size: String,
+    /// The daemon's own rendering, when it recognised the key. Cannot be turned
+    /// back into bytes, so it stands beside them rather than replacing them.
+    pub structured: String,
+}
+
 /// An address this wallet has paid, or been given a name for.
 ///
 /// On screen because a wallet that quietly keeps a list of who you paid, and
@@ -457,6 +574,10 @@ pub enum ScreenId {
     /// polling endpoints nobody is looking at is asking public infrastructure
     /// for something nothing will read.
     Nodes,
+    /// The VerusIDs this wallet's keys control. Like `Nodes`, its being open is
+    /// what justifies the requests it makes: finding them costs one call per
+    /// key, and nothing else on any other screen reads the answer.
+    Identities,
     Settings,
     CreateWallet,
     ImportWallet,

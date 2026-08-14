@@ -35,8 +35,9 @@ pub use error::{Severity, UiAction, UiError};
 pub use event::Event;
 pub use format::{coins, coins_u64};
 pub use models::{
-    AssetVm, BalanceVm, ChartPointVm, ChartVm, DraftValidationVm, HistoryRowVm, KeyOrigin, KeyVm,
-    KnownAddressVm, ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability,
+    AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, DraftValidationVm,
+    HistoryRowVm, IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, ListDelta,
+    LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability, RegistrationVm,
     ReviewOutputVm, ScreenId, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind,
     TxDetailVm, TxDirection, WalletVm,
 };

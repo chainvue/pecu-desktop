@@ -236,6 +236,92 @@ pub enum Command {
         action: PendingAction,
     },
 
+    // ── VerusIDs ────────────────────────────────────────────────────────
+    /// Find the identities this wallet's keys control. One request per key, so
+    /// it is asked for rather than run on a timer.
+    RefreshIdentities,
+    /// Look one up by `name@` or i-address — anyone's, not only your own.
+    LookUpIdentity(String),
+    /// Point an identity's authorities somewhere else.
+    ///
+    /// The one that fixes the unrevokable default. Empty leaves that authority
+    /// alone; both empty is nothing to do.
+    SetIdentityAuthorities {
+        address: String,
+        revocation: String,
+        recovery: String,
+    },
+    /// Hold an identity's funds, with this many blocks of wait once somebody
+    /// asks to unlock.
+    LockIdentity {
+        address: String,
+        delay_blocks: u32,
+    },
+    /// Start the countdown. Does **not** unlock — the funds stay held until the
+    /// chain reaches the height this publishes.
+    UnlockIdentity {
+        address: String,
+        extra_blocks: u32,
+    },
+    /// Revoke an identity. Signed by its revocation authority.
+    RevokeIdentity {
+        address: String,
+    },
+    /// Bring a revoked one back. Signed by its recovery authority.
+    RecoverIdentity {
+        address: String,
+    },
+    /// Send a prepared identity change.
+    ///
+    /// `typed` carries the confirmation word for the changes that need one —
+    /// checked in the core, never in the interface, so a different interface
+    /// cannot skip it.
+    ConfirmIdentityChange {
+        ticket: u64,
+        typed: String,
+    },
+    /// Throw one away unsent.
+    CancelIdentityChange {
+        ticket: u64,
+    },
+    /// Check whether a name can be registered, and what it would cost.
+    ///
+    /// Offline where it can be — the SDK's own name rule is a local check — and
+    /// then against the chain for availability and the fee.
+    CheckName(String),
+    /// Build and sign step one, write the salt down, and broadcast it.
+    ///
+    /// One command rather than three, because the three are one decision: the
+    /// salt is written between the build and the broadcast, and a caller who
+    /// could interleave anything there could lose it.
+    StartRegistration {
+        name: String,
+        /// Who may revoke it. Empty leaves the identity as its own, which makes
+        /// it unrevokable until somebody changes it.
+        revocation_authority: String,
+        /// Who may recover it. Empty means the same, and this is the one that
+        /// decides whether revocation works at all.
+        recovery_authority: String,
+    },
+    /// Run step two, now that the commitment has confirmed.
+    FinishRegistration,
+    /// Give up on the reservation in progress.
+    ///
+    /// Before the commitment is broadcast this costs nothing. After it, the
+    /// commitment fee is already spent and abandoning only stops the wallet
+    /// asking about it.
+    AbandonRegistration,
+    /// Forget the looked-up identities. Yours are untouched.
+    ClearLookups,
+    /// Stop watching one of them, by i-address.
+    UnwatchIdentity(String),
+    /// Open the detail sheet on an identity, by i-address.
+    OpenIdentity(String),
+    /// Derive a VDXF key from a URI, so somebody can test whether an identity
+    /// published under a name they know. A search, not a lookup: the hash has
+    /// no inverse, and this is the only direction that exists.
+    DeriveContentKey(String),
+
     // ── Shell ───────────────────────────────────────────────────────────
     /// Entering a screen. Core uses this to start screen-scoped polling.
     ScreenEntered(ScreenId),
