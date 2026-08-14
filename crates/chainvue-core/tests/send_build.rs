@@ -58,6 +58,8 @@ fn a_payment_is_built_signed_and_read_back_without_being_sent() {
         to: to.clone(),
         amount,
         unsent,
+        // Typed out as an address, not resolved from a name.
+        name: String::new(),
     };
 
     let review = send::review(

@@ -33,8 +33,10 @@
 //! zeroization. That is a security regression dressed as a modernisation, so
 //! `spawn_blocking` it is.
 
+pub mod identity;
 pub mod pending;
 pub mod portfolio;
+pub mod registration;
 pub mod runtime;
 pub mod send;
 pub mod wallet;
@@ -85,6 +87,9 @@ pub fn start(
     // Beside the wallet, so a backup of the wallet directory carries the
     // unresolved transactions with it.
     let pending_path = config.vault_path.with_file_name("pending-broadcast.json");
+    // Beside it, for the same reason: both hold something whose loss costs
+    // money and which nothing can reconstruct.
+    let reservation_path = config.vault_path.with_file_name("registration.json");
 
     // Beside the vault, in the per-network directory. Failing to open it is not
     // failing to start: everything in there is either a preference or something
@@ -108,6 +113,8 @@ pub fn start(
         events: event_tx,
         mock: config.mock,
         chain: None,
+        #[cfg(feature = "mock")]
+        mock_for: Vec::new(),
         cached: portfolio::Cached::default(),
         refreshing: false,
         work: work_tx,
@@ -122,6 +129,18 @@ pub fn start(
         broadcasting: false,
         history: HistoryScan::default(),
         known: std::collections::BTreeMap::new(),
+        identity: None,
+        resolving: None,
+        last_draft: chainvue_protocol::SendDraft::default(),
+        identities: std::collections::BTreeMap::new(),
+        looked_up: Vec::new(),
+        reservation: registration::Reservation::open(reservation_path),
+        identity_changes: std::collections::HashMap::new(),
+        identity_confirms: std::collections::HashSet::new(),
+        ready: None,
+        open_identity: String::new(),
+        open_content_keys: std::collections::BTreeSet::new(),
+        vdxf: None,
         store,
     };
 
@@ -140,6 +159,11 @@ struct Core {
     /// active node changes. `Arc` because a refresh runs on a blocking thread
     /// and must not borrow from the actor.
     chain: Option<Arc<Chain>>,
+    /// Which addresses the scripted chain was built to answer for. See
+    /// [`Core::scripted_chain`] — the script is generated from the wallet's own
+    /// keys, so the chain built before it unlocked answers for nobody.
+    #[cfg(feature = "mock")]
+    mock_for: Vec<String>,
     /// The two things that never change once known: the chain's own currency
     /// id, and the name of every currency the wallet has ever seen.
     cached: portfolio::Cached,
@@ -180,10 +204,159 @@ struct Core {
     /// paid this before" would say it late or not at all.
     known: std::collections::BTreeMap<String, String>,
 
+    /// What the last VerusID name typed into the send form turned out to be,
+    /// and whether a lookup is out. See [`Core::maybe_resolve_identity`].
+    identity: Option<Identity>,
+    resolving: Option<String>,
+    /// The last draft validated, so a resolution arriving afterwards can put
+    /// its answer on the form rather than waiting for the next keystroke.
+    last_draft: chainvue_protocol::SendDraft,
+
+    /// The identities this wallet's keys control, by i-address.
+    ///
+    /// **Only yours.** An earlier version kept looked-up identities in here
+    /// too, on the theory that one list with a `mine` flag was simpler. It was
+    /// simpler and it was wrong: the heading over the list says these were
+    /// found by asking the chain which names your keys control, and a
+    /// stranger's identity sitting under it made that sentence false — with no
+    /// way to remove it short of restarting.
+    ///
+    /// A fact about your keys and the answer to a question you just asked are
+    /// different things, and one list cannot be honest about both.
+    identities: std::collections::BTreeMap<String, chainvue_protocol::IdentityVm>,
+    /// Identities somebody looked up, newest first.
+    ///
+    /// Transient by design: kept so a sheet can be reopened without asking the
+    /// node again, cleared on request, and never counted as yours.
+    looked_up: Vec<chainvue_protocol::IdentityVm>,
+    /// Which identity the detail sheet is open on. Empty when it is closed.
+    open_identity: String,
+    /// The VDXF keys that identity published, so a derived guess can be
+    /// checked against them without another request.
+    open_content_keys: std::collections::BTreeSet<String>,
+    /// The one unfinished name registration, on disk.
+    ///
+    /// Beside the vault, like the pending-broadcast ledger, and for the same
+    /// reason: a backup of the wallet directory has to carry the things whose
+    /// loss costs money.
+    reservation: registration::Reservation,
+    /// Signed identity changes waiting for a Confirm. **The bytes never leave
+    /// here** — the UI holds a ticket, the same as a payment.
+    identity_changes: std::collections::HashMap<u64, identity::Prepared>,
+    /// Which of them still need a word typed before they go. Only revocations.
+    identity_confirms: std::collections::HashSet<u64>,
+    /// Step two, once a poll has said the claim confirmed.
+    ///
+    /// Held rather than stored: it is derived from the reservation on disk by a
+    /// poll, so it costs one request to get back and is never the only copy of
+    /// anything.
+    ready: Option<verus_sdk::network::Pending<verus_sdk::network::ReadyToRegister>>,
+    /// VDXF names this wallet can recognise, derived once the chain is known.
+    ///
+    /// `None` until a node has said which chain this is. A table derived
+    /// against the wrong chain matches nothing, which on screen is
+    /// indistinguishable from an identity that published nothing recognisable —
+    /// so it is not built until the answer is real.
+    vdxf: Option<identity::Names>,
+
     /// Settings, and a cache the wallet is free to throw away. `None` when the
     /// databases could not be opened — the wallet works without them, it just
     /// forgets between runs and starts every session with a blank dashboard.
     store: Option<chainvue_store::Store>,
+}
+
+/// `None` for an empty field, so a blank box means "leave it at the default"
+/// rather than "an authority whose name is nothing".
+fn some_if_set(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// The one line the send form gets to say about a VerusID.
+///
+/// Ordered by how much it should stop somebody. A name that now points
+/// somewhere else outranks everything: it is the case where the form looks
+/// perfectly ordinary and the money goes to a stranger.
+fn identity_note(identity: &Identity) -> String {
+    if identity.address.is_empty() {
+        return "No VerusID by that name on this chain.".to_string();
+    }
+    if let Some(previous) = &identity.was {
+        return format!(
+            "{} now points at {} — it was {}. Check this before sending.",
+            identity.name, identity.address, previous,
+        );
+    }
+    if identity.revoked {
+        return format!(
+            "{} has been revoked. This wallet will not pay it.",
+            identity.name
+        );
+    }
+    format!("VerusID {} · {}", identity.name, identity.address)
+}
+
+/// What a node said a VerusID name points at.
+///
+/// # Why this is held rather than resolved where it is needed
+///
+/// A name is not an address. `meineid@` is a *question*, and the answer comes
+/// from whichever node the wallet is talking to — so resolving it is a network
+/// round trip, and the form validates on every keystroke. Those two facts do
+/// not fit together, so the lookup happens once, off to one side, and what it
+/// found is kept here for the validator and the builder to read.
+///
+/// The builder reads the [`address`](Identity::address), never the typed text.
+/// A UI that could decide which address gets paid would be a UI holding the
+/// only decision that matters.
+#[derive(Clone, Debug)]
+struct Identity {
+    /// Exactly what was typed, so an answer can be matched to the question.
+    typed: String,
+    /// `name.parent@` as the chain spells it, which is not always as it was
+    /// typed — `meineid@` on testnet comes back `meineid.VRSCTEST@`.
+    name: String,
+    address: String,
+    revoked: bool,
+    /// This name pointed at a different address the last time it was looked up.
+    /// Carries the old one, because "it changed" without saying from what is an
+    /// alarm nobody can act on.
+    was: Option<String>,
+}
+
+/// Where a probe's answer comes from.
+///
+/// Built by [`Core::prober`] on the actor and then moved onto a blocking thread,
+/// which is why it owns everything it needs — a probe must not borrow from state
+/// the actor goes on mutating while the request is out.
+enum Prober {
+    /// A real endpoint, dialled fresh: a probe carries a shorter timeout than
+    /// the client the wallet reads through, so it does not reuse it.
+    Live(String),
+    /// The scripted chain, which is the same chain the dashboard is read from —
+    /// so the tip on the network panel and the tip the balances were computed
+    /// against cannot disagree.
+    #[cfg(feature = "mock")]
+    Scripted(Arc<Chain>),
+}
+
+impl Prober {
+    fn probe(
+        &self,
+    ) -> (
+        Result<verus_sdk::network::ChainInfo, verus_sdk::network::RpcError>,
+        std::time::Duration,
+    ) {
+        match self {
+            Self::Live(url) => chainvue_chain::probe(url),
+            #[cfg(feature = "mock")]
+            Self::Scripted(chain) => chain.probe(),
+        }
+    }
 }
 
 /// What the node poller is doing.
@@ -200,6 +373,11 @@ struct Polling {
     tip_in_flight: bool,
     /// When the nodes nobody is reading from were last asked anything.
     others_at: Option<std::time::Instant>,
+    /// When the unfinished name claim was last asked about, and whether an ask
+    /// is out. On the tick rather than the screen: a claim has a deadline, and
+    /// where somebody navigated must not decide whether it is met.
+    registration_at: Option<std::time::Instant>,
+    registration_in_flight: bool,
     /// Which screen is open. Entering one is leaving the last, so there is no
     /// second signal to get out of step with this.
     screen: chainvue_protocol::ScreenId,
@@ -250,6 +428,13 @@ enum Work {
         /// able to conclude that a new block has arrived.
         from_poller: bool,
     },
+    /// A node answered what a VerusID name points at.
+    Identity {
+        /// The text as it was typed, so a reply that arrives after the field
+        /// has moved on can be discarded rather than applied to something else.
+        typed: String,
+        result: Box<Result<verus_sdk::network::IdentityRecord, verus_sdk::network::RpcError>>,
+    },
     /// The raw JSON for a transaction the detail sheet is showing.
     RawTransaction {
         txid: String,
@@ -276,6 +461,64 @@ enum Work {
         record: u64,
         result: Box<Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>>,
     },
+    /// A name was checked for availability and price.
+    NameChecked {
+        name: String,
+        /// `None` when the question could not be answered — which is not the
+        /// same as the name being free.
+        taken: Option<bool>,
+        fee: Option<verus_sdk::money::Amount>,
+    },
+    /// Step one is built and signed. Nothing has been broadcast.
+    Reserved {
+        name: String,
+        label: String,
+        /// Carried through rather than re-taken: it was checked before the
+        /// signature, and a permit that has since lapsed should not silently
+        /// become a different one.
+        permit: Box<chainvue_chain::SpendPermit>,
+        result: Box<
+            Result<verus_sdk::network::Pending<verus_sdk::network::AwaitingCommitment>, String>,
+        >,
+    },
+    /// A change to an identity was built and signed. Nothing sent.
+    IdentityChangePrepared {
+        ticket: u64,
+        described: String,
+        /// Whether sending it needs a word typed first.
+        needs_confirmation: bool,
+        result: Box<Result<identity::Prepared, String>>,
+    },
+    /// It was sent, one way or another. The txid, or why not.
+    IdentityChanged(Box<Result<String, String>>),
+    /// A poll of the commitment's state.
+    CommitmentPolled(Box<Result<verus_sdk::network::CommitmentStatus, String>>),
+    /// Step two finished, one way or another.
+    Registered(Box<Result<verus_sdk::network::Registered, String>>),
+    /// The commitment was handed to a node, certainly or otherwise.
+    Committed {
+        pending: Box<verus_sdk::network::Pending<verus_sdk::network::AwaitingCommitment>>,
+        result: Box<Result<(), String>>,
+    },
+    /// The identities this wallet's keys control, gathered across every key.
+    Identities(
+        Box<Result<Vec<verus_sdk::network::IdentityAtAddress>, verus_sdk::network::RpcError>>,
+    ),
+    /// One identity looked up by name or i-address, with everything the detail
+    /// sheet needs.
+    IdentityDetail {
+        /// What was asked for, so an answer arriving late can be matched to its
+        /// question rather than applied to whatever is open now.
+        typed: String,
+        /// Whether this answer should open the detail sheet.
+        ///
+        /// **Not every read is a request to look at something.** Refreshing the
+        /// watch list re-reads each entry through the same path, and treating
+        /// that as "open this" made the sheet fly open by itself on the first
+        /// row every time somebody opened the screen.
+        open: bool,
+        result: Box<Result<identity::Detail, verus_sdk::network::RpcError>>,
+    },
 }
 
 impl Core {
@@ -287,6 +530,9 @@ impl Core {
         self.restore();
         self.emit_network();
         self.emit_wallet();
+        // A name claim the last run left unfinished. It has a deadline, so it is
+        // worth saying before anything else on that screen.
+        self.emit_registration(None);
         // A payment left unresolved by a previous run is the first thing worth
         // saying — it is money whose fate nobody knows.
         self.emit_pending();
@@ -316,6 +562,7 @@ impl Core {
                     self.poll_tip();
                     self.poll_inactive();
                     self.poll_pending();
+                    self.poll_registration();
                     continue;
                 }
             };
@@ -333,6 +580,9 @@ impl Core {
         match self.wallet.create(name, passphrase) {
             Ok(challenge) => {
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
                 // The phrase this just generated has never been seen by anyone.
                 // Announcing the challenge is what puts the backup screen in
                 // front of the dashboard rather than beside it.
@@ -369,6 +619,9 @@ impl Core {
         match self.wallet.import(label, imported, passphrase) {
             Ok(()) => {
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
                 // A restored wallet usually has a history. Asking for it is the
                 // whole reason someone restored.
                 self.refresh();
@@ -413,6 +666,9 @@ impl Core {
 
         if correct {
             self.emit_wallet();
+            // A name claim the last run left unfinished. It has a deadline, so it is
+            // worth saying before anything else on that screen.
+            self.emit_registration(None);
         }
     }
 
@@ -425,6 +681,11 @@ impl Core {
     /// active node throws this away rather than reusing a client pointed
     /// somewhere else.
     fn chain(&mut self) -> Option<Arc<Chain>> {
+        #[cfg(feature = "mock")]
+        if self.mock {
+            return self.scripted_chain();
+        }
+
         if let Some(chain) = &self.chain {
             return Some(chain.clone());
         }
@@ -441,6 +702,101 @@ impl Core {
                 None
             }
         }
+    }
+
+    /// The scripted chain, rebuilt when the wallet's addresses change.
+    ///
+    /// # Why this cannot be built once
+    ///
+    /// The script answers for the addresses this wallet holds, and those are
+    /// unknown until it unlocks. A chain built during the first tip poll — which
+    /// happens seconds before anyone has typed a passphrase — would answer for
+    /// nobody, and caching it the way the live client is cached would leave the
+    /// demo build with a permanently empty dashboard. So the address list is
+    /// what the cache is keyed on, not merely the fact that a chain exists.
+    #[cfg(feature = "mock")]
+    fn scripted_chain(&mut self) -> Option<Arc<Chain>> {
+        let addresses = self.wallet_addresses();
+        if let Some(chain) = &self.chain {
+            if self.mock_for == addresses {
+                return Some(chain.clone());
+            }
+        }
+
+        match Chain::mock(&addresses) {
+            Ok(chain) => {
+                let chain = Arc::new(chain);
+                self.mock_for = addresses;
+                self.chain = Some(chain.clone());
+                Some(chain)
+            }
+            Err(error) => {
+                self.notice(
+                    "node_connect",
+                    "The scripted chain could not be built",
+                    &error,
+                );
+                None
+            }
+        }
+    }
+
+    /// Every address this wallet holds. Public, and readable while locked.
+    fn wallet_addresses(&self) -> Vec<String> {
+        self.wallet
+            .view()
+            .keys
+            .into_iter()
+            .map(|key| key.address)
+            .collect()
+    }
+
+    /// How to ask where the chain is — for one node, right now.
+    ///
+    /// **Every probe in this application goes through here**, and that is the
+    /// point of it existing. There are three places that ask a node for its
+    /// `chain_info`: the fifteen-second tip poll, the one-off probe of a node
+    /// somebody is looking at, and the sweep at startup. When the mock backend
+    /// was first wired in, two of them were changed and the third — the only
+    /// `async` one, which reads differently enough to have been skipped — kept
+    /// dialling `api.verustest.net` from a build advertising itself as scripted.
+    ///
+    /// A single decision with three callers cannot be got two-thirds right.
+    ///
+    /// In a build without the `mock` feature this needs neither `self` nor the
+    /// `Option` — the answer is always a live endpoint. The signature is kept
+    /// uniform anyway, so the callers are one piece of code rather than two
+    /// arrangements of it, and so the demo build is not the configuration where
+    /// three call sites get edited.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn prober(&mut self, url: &str) -> Option<Prober> {
+        #[cfg(feature = "mock")]
+        if self.mock {
+            return self.chain().map(Prober::Scripted);
+        }
+
+        Some(Prober::Live(url.to_string()))
+    }
+
+    /// Ask a node where the chain is, off the actor. `false` if nothing went out.
+    fn dispatch_probe(&mut self, id: u32, url: &str, from_poller: bool) -> bool {
+        let Some(prober) = self.prober(url) else {
+            return false;
+        };
+
+        self.blocking.dispatch(
+            move || {
+                let (info, latency) = prober.probe();
+                Work::Tip {
+                    node: id,
+                    info: Box::new(info),
+                    latency,
+                    from_poller,
+                }
+            },
+            self.work.clone(),
+        );
+        true
     }
 
     /// Start reading balances and history, and return immediately.
@@ -492,14 +848,7 @@ impl Core {
             return;
         }
 
-        let addresses: Vec<String> = self
-            .wallet
-            .view()
-            .keys
-            .into_iter()
-            .map(|key| key.address)
-            .collect();
-
+        let addresses = self.wallet_addresses();
         if addresses.is_empty() {
             return;
         }
@@ -545,6 +894,35 @@ impl Core {
                 latency,
                 from_poller,
             } => self.finish_tip(node, &info, latency, from_poller),
+            Work::Identity { typed, result } => self.finish_identity(&typed, *result),
+            Work::NameChecked { name, taken, fee } => self.finish_name_check(&name, taken, fee),
+            Work::Reserved {
+                name,
+                label,
+                permit,
+                result,
+            } => self.finish_reserved(&name, &label, *permit, *result),
+            Work::Committed { pending, result } => self.finish_committed(*pending, *result),
+            Work::IdentityChangePrepared {
+                ticket,
+                described,
+                needs_confirmation,
+                result,
+            } => self.finish_identity_change_prepared(
+                ticket,
+                &described,
+                needs_confirmation,
+                *result,
+            ),
+            Work::IdentityChanged(result) => self.finish_identity_changed(*result),
+            Work::CommitmentPolled(result) => self.finish_poll(*result),
+            Work::Registered(result) => self.finish_registered(*result),
+            Work::Identities(result) => self.finish_identities(*result),
+            Work::IdentityDetail {
+                typed,
+                open,
+                result,
+            } => self.finish_detail(&typed, open, *result),
             Work::OlderHistory(page) => self.finish_older_history(*page),
             Work::RawTransaction { txid, json } => self.finish_raw_transaction(&txid, *json),
             Work::Checked {
@@ -635,6 +1013,14 @@ impl Core {
     ///
     /// Split out of [`Core::run`] so the loop stays what it is — a `select!`
     /// over three sources — and the command table stays readable as a table.
+    /// One command.
+    ///
+    /// Long because it is a dispatch table: one arm per command, each a call.
+    /// Splitting it would put the list of what the wallet can be asked to do in
+    /// two places, and the single readable list is the property worth keeping —
+    /// it is what makes a new secret-bearing command impossible to add
+    /// unnoticed.
+    #[allow(clippy::too_many_lines)]
     async fn handle(&mut self, command: Command) -> bool {
         match command {
             Command::ProbeNodes => self.probe_all().await,
@@ -654,6 +1040,57 @@ impl Core {
             Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
 
             // ── Send ─────────────────────────────────────────────────
+            Command::RefreshIdentities => self.refresh_identities(),
+            Command::LookUpIdentity(typed) => self.look_up_identity(&typed),
+            Command::SetIdentityAuthorities {
+                address,
+                revocation,
+                recovery,
+            } => self.prepare_identity_change(
+                &address,
+                identity::Change::Authorities {
+                    revocation: some_if_set(&revocation),
+                    recovery: some_if_set(&recovery),
+                },
+            ),
+            Command::LockIdentity {
+                address,
+                delay_blocks,
+            } => self.prepare_identity_change(
+                &address,
+                identity::Change::Lock {
+                    delay: delay_blocks,
+                },
+            ),
+            Command::UnlockIdentity {
+                address,
+                extra_blocks,
+            } => self.prepare_identity_change(&address, identity::Change::Unlock { extra_blocks }),
+            Command::RevokeIdentity { address } => {
+                self.prepare_identity_change(&address, identity::Change::Revoke);
+            }
+            Command::RecoverIdentity { address } => {
+                self.prepare_identity_change(&address, identity::Change::Recover);
+            }
+            Command::ConfirmIdentityChange { ticket, typed } => {
+                self.confirm_identity_change(ticket, &typed);
+            }
+            Command::CancelIdentityChange { ticket } => {
+                self.identity_changes.remove(&ticket);
+                self.identity_confirms.remove(&ticket);
+            }
+            Command::CheckName(name) => self.check_name(&name),
+            Command::StartRegistration {
+                name,
+                revocation_authority,
+                recovery_authority,
+            } => self.start_registration(&name, &revocation_authority, &recovery_authority),
+            Command::FinishRegistration => self.finish_registration(),
+            Command::AbandonRegistration => self.abandon_registration(),
+            Command::ClearLookups => self.clear_lookups(),
+            Command::UnwatchIdentity(address) => self.unwatch_identity(&address),
+            Command::OpenIdentity(address) => self.look_up_identity(&address),
+            Command::DeriveContentKey(uri) => self.derive_content_key(&uri),
             Command::ValidateDraft(draft) => self.validate_draft(&draft),
             Command::PrepareSend(draft) => self.prepare_send(draft),
             Command::ConfirmSend { ticket } => self.confirm_send(ticket),
@@ -700,6 +1137,9 @@ impl Core {
                 match self.wallet.unlock(&passphrase) {
                     Ok(()) => {
                         self.emit_wallet();
+                        // A name claim the last run left unfinished. It has a deadline, so it is
+                        // worth saying before anything else on that screen.
+                        self.emit_registration(None);
                         // Unlocking is the moment the figures become worth
                         // fetching, and the moment they are stalest.
                         self.refresh();
@@ -718,6 +1158,9 @@ impl Core {
                     reason: LockReason::Manual,
                 });
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
             }
             Command::ChangePassphrase { old, new } => {
                 self.change_passphrase(&old, &new);
@@ -851,13 +1294,7 @@ impl Core {
             return;
         };
 
-        let addresses: Vec<String> = self
-            .wallet
-            .view()
-            .keys
-            .into_iter()
-            .map(|key| key.address)
-            .collect();
+        let addresses = self.wallet_addresses();
         if addresses.is_empty() {
             return;
         }
@@ -1021,6 +1458,23 @@ impl Core {
             .map(|known| (known.address, known.label))
             .collect();
 
+        // The identities somebody chose to keep an eye on. Name and address
+        // only — everything else about an identity is a chain fact that would
+        // be a lie by now, so they come back saying so rather than claiming a
+        // status from last week, and the next refresh fills them in.
+        self.looked_up = store
+            .watched_identities()
+            .into_iter()
+            .map(|watched| chainvue_protocol::IdentityVm {
+                name: watched.name,
+                address: watched.address,
+                status: "Not read yet".to_string(),
+                tone: "unknown".to_string(),
+                note: String::new(),
+                mine: false,
+            })
+            .collect();
+
         // Endpoints the user configured, put back beside the built-ins. Their
         // ids are offset so a shipped node and a saved one can never collide —
         // see `user_node_id`.
@@ -1100,21 +1554,13 @@ impl Core {
         };
         let (id, url) = (node.id, node.url.clone());
 
-        self.polling.tip_in_flight = true;
-        self.polling.tip_at = Some(std::time::Instant::now());
-
-        self.blocking.dispatch(
-            move || {
-                let (info, latency) = chainvue_chain::probe(&url);
-                Work::Tip {
-                    node: id,
-                    info: Box::new(info),
-                    latency,
-                    from_poller: true,
-                }
-            },
-            self.work.clone(),
-        );
+        // Set only once the poll is genuinely on its way. Marking it in flight
+        // and then failing to dispatch would leave the flag stuck true and stop
+        // the wallet ever polling again.
+        if self.dispatch_probe(id, &url, true) {
+            self.polling.tip_in_flight = true;
+            self.polling.tip_at = Some(std::time::Instant::now());
+        }
     }
 
     fn finish_tip(
@@ -1161,6 +1607,18 @@ impl Core {
         if info.is_ok() && active && after != before {
             tracing::debug!(?before, ?after, "a new block");
             self.refresh();
+
+            // And the identities, while somebody is looking at them.
+            //
+            // A registration that has just been broadcast is not on the chain
+            // yet, so the refresh that follows it finds nothing —
+            // `identities_with_address` answers about identity outputs as of the
+            // current block height, and an unmined one has none. Without this
+            // the name somebody just claimed simply does not appear until they
+            // press Refresh, which looks exactly like it failed.
+            if self.polling.screen == chainvue_protocol::ScreenId::Identities {
+                self.refresh_identities();
+            }
         }
     }
 
@@ -1196,6 +1654,9 @@ impl Core {
         match self.wallet.add_generated_key(label) {
             Ok(challenge) => {
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
                 self.emit_challenge(&challenge);
                 // A new key has nothing on chain, and saying so from a node
                 // beats showing a zero the wallet made up.
@@ -1222,6 +1683,9 @@ impl Core {
             Ok(()) => {
                 tracing::info!(from, to, "a key was renamed");
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
             }
             Err(error) => self.notice("rename_key", &key_error_title(&error), &error),
         }
@@ -1231,6 +1695,9 @@ impl Core {
     fn set_active_key(&mut self, label: &str) {
         if self.wallet.set_active_key(label) {
             self.emit_wallet();
+            // A name claim the last run left unfinished. It has a deadline, so it is
+            // worth saying before anything else on that screen.
+            self.emit_registration(None);
         }
     }
 
@@ -1347,19 +1814,7 @@ impl Core {
     /// the active one — which is what a newly added endpoint needs, since it is
     /// not active and the poller would never reach it.
     fn probe_one(&mut self, id: u32, url: &str) {
-        let url = url.to_string();
-        self.blocking.dispatch(
-            move || {
-                let (info, latency) = chainvue_chain::probe(&url);
-                Work::Tip {
-                    node: id,
-                    info: Box::new(info),
-                    latency,
-                    from_poller: false,
-                }
-            },
-            self.work.clone(),
-        );
+        self.dispatch_probe(id, url, false);
     }
 
     /// Name an address, or clear its name.
@@ -1464,6 +1919,18 @@ impl Core {
         // endpoints are doing, immediately rather than at the next tick.
         if screen == chainvue_protocol::ScreenId::Nodes {
             self.probe_inactive();
+        }
+
+        // Same reasoning for the identities: one request per key, and nowhere
+        // else reads the answer.
+        //
+        // Unconditionally, not only when the list is empty. A wallet that had
+        // just registered a name arrived back at a non-empty list and never
+        // re-asked, so the identity it had watched being created was missing
+        // until somebody pressed Refresh — which reads as a failure rather than
+        // as a stale list.
+        if screen == chainvue_protocol::ScreenId::Identities {
+            self.refresh_identities();
         }
     }
 
@@ -1790,6 +2257,9 @@ impl Core {
             Ok(()) => {
                 self.notice_info("passphrase_changed", "Passphrase changed");
                 self.emit_wallet();
+                // A name claim the last run left unfinished. It has a deadline, so it is
+                // worth saying before anything else on that screen.
+                self.emit_registration(None);
             }
             Err(error) => self.notice(
                 "change_passphrase",
@@ -1823,6 +2293,9 @@ impl Core {
         }
         self.wallet.touch();
         self.emit_wallet();
+        // A name claim the last run left unfinished. It has a deadline, so it is
+        // worth saying before anything else on that screen.
+        self.emit_registration(None);
     }
 
     /// The typed confirmation is checked **here**, in the core.
@@ -1855,8 +2328,30 @@ impl Core {
     /// Runs on every keystroke, so it touches nothing but memory: address
     /// parsing and amount parsing are both offline and both exact, and the name
     /// comes from a map that was loaded at startup.
-    fn validate_draft(&self, draft: &chainvue_protocol::SendDraft) {
+    fn validate_draft(&mut self, draft: &chainvue_protocol::SendDraft) {
+        self.last_draft = draft.clone();
+        self.maybe_resolve_identity(draft.to.trim());
+
         let mut verdict = send::validate(draft, self.spendable);
+
+        // A VerusID typed by name. `send::validate` is offline and correctly
+        // refuses it — a name is not base58 and no amount of local parsing will
+        // make it one — so the answer a node already gave is applied here.
+        if let Some(identity) = self.resolved_for(draft.to.trim()) {
+            // Both halves. An empty address is a name the chain does not have,
+            // and `revoked` is false for one of those — so testing only the
+            // revocation would make every typo a valid recipient.
+            //
+            // A name that now points somewhere else is deliberately NOT refused,
+            // only shouted about: identities are updated legitimately, and a
+            // wallet that becomes unable to pay somebody because they moved
+            // their identity is broken in a way people route around.
+            verdict.to_valid = !identity.address.is_empty() && !identity.revoked;
+            verdict.to_note = identity_note(identity);
+        } else if self.resolving.as_deref() == Some(draft.to.trim()) {
+            verdict.to_note = "Looking this VerusID up…".to_string();
+        }
+        verdict.ready = verdict.to_valid && verdict.amount_valid;
 
         // A name this wallet gave the address, appended to the line that
         // already says what the address is. That is where somebody checking a
@@ -1877,13 +2372,1025 @@ impl Core {
         let _ = self.events.send(Event::SendValidation(verdict));
     }
 
+    // ── VerusIDs ────────────────────────────────────────────────────────────
+
+    /// The chain's name as the daemon spells it, once a node has said.
+    ///
+    /// `None` before any node has answered. VDXF keys are hashed from this
+    /// string, so guessing it would derive keys that match nothing — which on
+    /// screen looks exactly like an identity that published nothing.
+    fn chain_name(&self) -> Option<String> {
+        self.nodes
+            .active()
+            .and_then(|node| node.network.as_ref())
+            .map(|network| network.chain_name().to_string())
+    }
+
+    /// Build the VDXF name table, once the chain and its currency are known.
+    fn ensure_vdxf(&mut self) {
+        if self.vdxf.is_some() {
+            return;
+        }
+        let (Some(name), Some(id)) = (self.chain_name(), self.cached.native) else {
+            return;
+        };
+        self.vdxf = Some(identity::Names::derive(&name, id));
+    }
+
+    // ── Changing an identity ────────────────────────────────────────────────
+
+    /// Build and sign a change, without sending it.
+    ///
+    /// Same shape as a payment: the signed bytes stay here, the UI gets a
+    /// ticket and a description. Nothing is broadcast until somebody confirms,
+    /// and the broadcast needs a permit like every other write.
+    fn prepare_identity_change(&mut self, address: &str, change: identity::Change) {
+        let Some(label) = self.wallet.active_key.clone() else {
+            return;
+        };
+        let Some(vault) = self.wallet.vault() else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.tickets += 1;
+        let ticket = self.tickets;
+        let address = address.to_string();
+        let described = change.describe();
+        let needs_confirmation = change.needs_typed_confirmation();
+        self.busy(TaskKind::PreparingSend, true);
+
+        self.blocking.dispatch(
+            move || {
+                // One `with_key`, used for both roles. The funding key and the
+                // identity key are the same here: this wallet is changing an
+                // identity its own key controls, which is the only case it
+                // offers. A multisig identity would need every signer, and this
+                // is where that would go.
+                let built = vault.with_key(&label, |key| match &change {
+                    identity::Change::Unlock { extra_blocks } => {
+                        verus_sdk::network::prepare_identity_unlock(
+                            &*chain,
+                            key,
+                            &[key],
+                            &address,
+                            *extra_blocks,
+                        )
+                        .map(identity::Prepared::Updated)
+                        .map_err(|error| error.to_string())
+                    }
+                    // Signed by the **authority's** keys, not the identity's.
+                    // For an identity that is its own authority they are the
+                    // same key, which is the only case this wallet serves — and
+                    // the SDK checks the authority before signing, so a wallet
+                    // that does not hold them is told which ones were needed
+                    // rather than meeting a script verification failure the
+                    // daemon will not explain.
+                    identity::Change::Revoke => verus_sdk::network::prepare_identity_revocation(
+                        &*chain,
+                        key,
+                        &[key],
+                        &address,
+                    )
+                    .map(identity::Prepared::Revoked)
+                    .map_err(|error| error.to_string()),
+                    identity::Change::Recover => verus_sdk::network::prepare_identity_recovery(
+                        &*chain,
+                        key,
+                        &[key],
+                        &address,
+                        // Nothing restored beyond clearing the revocation. A
+                        // recovery may legitimately hand the identity to new
+                        // primary addresses, and offering that without a screen
+                        // built for it would be the most dangerous default here.
+                        &verus_sdk::network::IdentityChange::new(),
+                    )
+                    .map(identity::Prepared::Recovered)
+                    .map_err(|error| error.to_string()),
+                    other => match identity::as_sdk_change(other) {
+                        Ok(sdk) => verus_sdk::network::prepare_identity_update(
+                            &*chain,
+                            key,
+                            &[key],
+                            &address,
+                            &sdk,
+                        )
+                        .map(identity::Prepared::Updated)
+                        .map_err(|error| error.to_string()),
+                        Err(reason) => Err(reason),
+                    },
+                });
+
+                Work::IdentityChangePrepared {
+                    ticket,
+                    described,
+                    needs_confirmation,
+                    result: Box::new(match built {
+                        Ok(inner) => inner,
+                        Err(vault) => Err(vault.to_string()),
+                    }),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_identity_change_prepared(
+        &mut self,
+        ticket: u64,
+        described: &str,
+        needs_confirmation: bool,
+        result: Result<identity::Prepared, String>,
+    ) {
+        self.busy(TaskKind::PreparingSend, false);
+
+        match result {
+            Ok(prepared) => {
+                let fee = portfolio::coins(prepared.fee());
+                self.identity_changes.insert(ticket, prepared);
+                if needs_confirmation {
+                    self.identity_confirms.insert(ticket);
+                }
+                let _ = self.events.send(Event::IdentityChangePrepared {
+                    ticket,
+                    description: described.to_string(),
+                    fee_display: fee,
+                    needs_confirmation,
+                });
+            }
+            Err(reason) => {
+                self.notice_warning("identity_change", "Could not build that change", &reason);
+            }
+        }
+    }
+
+    /// Send it. The permit is the same gate every other write goes through.
+    fn confirm_identity_change(&mut self, ticket: u64, typed: &str) {
+        // The typed word, checked here rather than in the interface — for the
+        // same reason the mainnet switch is checked here. A guard the UI owns
+        // is a guard a different UI does not have.
+        if self.identity_confirms.contains(&ticket)
+            && !typed
+                .trim()
+                .eq_ignore_ascii_case(identity::REVOKE_CONFIRMATION)
+        {
+            self.notice_warning(
+                "identity_change",
+                "Type the word to confirm",
+                "A revocation cannot be undone without the recovery authority, and an \
+                 identity that is its own recovery authority cannot be recovered at all.",
+            );
+            return;
+        }
+
+        let Some(unsent) = self.identity_changes.remove(&ticket) else {
+            return;
+        };
+        self.identity_confirms.remove(&ticket);
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                // Put it back: rebuilding would produce different bytes, and
+                // the refusal may be something the user can fix.
+                self.identity_changes.insert(ticket, unsent);
+                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                return;
+            }
+        };
+        let Some(chain) = self.chain() else {
+            self.identity_changes.insert(ticket, unsent);
+            return;
+        };
+
+        self.busy(TaskKind::Broadcasting, true);
+        self.blocking.dispatch(
+            move || {
+                let result = unsent.broadcast(&chain.broadcaster(&permit));
+                Work::IdentityChanged(Box::new(result.map_err(|error| error.to_string())))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_identity_changed(&mut self, result: Result<String, String>) {
+        self.busy(TaskKind::Broadcasting, false);
+        match result {
+            Ok(txid) => {
+                tracing::info!(%txid, "an identity was changed");
+                let _ = self.events.send(Event::IdentityChanged { txid });
+                // The change is not on the chain until it is mined, so the list
+                // will show the old state until then — which the new-block
+                // refresh corrects on its own.
+                self.refresh_identities();
+            }
+            Err(reason) => {
+                self.notice_warning("identity_change", "The change was not accepted", &reason);
+            }
+        }
+    }
+
+    // ── Claiming a name ─────────────────────────────────────────────────────
+
+    /// Whether a name can be claimed, and what it would cost.
+    ///
+    /// The local rule first, because it needs no node and refuses the mistakes
+    /// people actually make — a capital letter, a dot, a space. Then the chain,
+    /// for whether it is taken and what the fee is.
+    fn check_name(&mut self, name: &str) {
+        let name = name.trim().to_string();
+        if let Some(problem) = identity::name_problem(&name) {
+            let _ = self.events.send(Event::NameChecked {
+                name,
+                problem,
+                fee_display: String::new(),
+            });
+            return;
+        }
+        if name.is_empty() {
+            let _ = self.events.send(Event::NameChecked {
+                name,
+                problem: String::new(),
+                fee_display: String::new(),
+            });
+            return;
+        }
+
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let asked = name.clone();
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                // Taken or free. `-5` is the daemon saying it does not exist,
+                // which here is the good answer — anything else is the question
+                // going unanswered, and the two must not read the same.
+                let taken = match chain.identity(&format!("{asked}@")) {
+                    Ok(_) => Some(true),
+                    Err(verus_sdk::network::RpcError::Node { code: -5, .. }) => Some(false),
+                    Err(_) => None,
+                };
+                let fee = chain
+                    .currency(&asked)
+                    .ok()
+                    .map(|policy| policy.id_registration_fee);
+                Work::NameChecked {
+                    name: asked,
+                    taken,
+                    fee,
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    /// Step one is built and signed. Write the salt down, then send it.
+    ///
+    /// The only ordering in this application where getting it backwards costs
+    /// money with nothing to show: the commitment fee is spent by the broadcast,
+    /// and without the salt it can never be redeemed. So the write comes first
+    /// and a write that fails stops here.
+    fn finish_reserved(
+        &mut self,
+        name: &str,
+        label: &str,
+        permit: chainvue_chain::SpendPermit,
+        result: Result<verus_sdk::network::Pending<verus_sdk::network::AwaitingCommitment>, String>,
+    ) {
+        self.busy(TaskKind::PreparingSend, false);
+
+        let pending = match result {
+            Ok(pending) => pending,
+            Err(reason) => {
+                self.notice_warning("registration", "Could not claim that name", &reason);
+                return;
+            }
+        };
+
+        if let Err(error) = self.reservation.reserve(name, label, pending.clone()) {
+            // Nothing has been broadcast, so this costs nothing but the attempt.
+            // Sending anyway would spend the fee on a claim whose secret exists
+            // only in this process.
+            self.notice(
+                "registration_write",
+                "Could not save the claim before sending it, so it was not sent",
+                &error,
+            );
+            return;
+        }
+        self.emit_registration(None);
+
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        self.busy(TaskKind::Broadcasting, true);
+        self.blocking.dispatch(
+            move || {
+                let mut pending = pending;
+                let result = pending.broadcast_commitment(&*chain, &chain.broadcaster(&permit));
+                Work::Committed {
+                    // Handed back either way: `broadcast_commitment` takes
+                    // `&mut self` rather than consuming, precisely so an
+                    // ambiguous failure does not destroy the salt.
+                    pending: Box::new(pending),
+                    result: Box::new(result.map_err(|error| error.to_string())),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_committed(
+        &mut self,
+        pending: verus_sdk::network::Pending<verus_sdk::network::AwaitingCommitment>,
+        result: Result<(), String>,
+    ) {
+        self.busy(TaskKind::Broadcasting, false);
+
+        // The anchor lands on the value whether or not the broadcast was
+        // certain, so it is kept either way — without it the poll that follows
+        // has nothing to compare against and stops noticing reorgs.
+        self.reservation.update(pending);
+
+        match result {
+            Ok(()) => {
+                self.reservation.mark_committed();
+                tracing::info!("a name claim was accepted by the network");
+            }
+            Err(reason) => {
+                // Not an abandonment. The claim may well be on the network —
+                // that is what makes the failure ambiguous — and the salt is
+                // still on disk, so the poller finds out which.
+                tracing::warn!(%reason, "the name claim's outcome is unknown");
+                self.reservation.mark_committed();
+                self.notice_warning(
+                    "registration_uncertain",
+                    "We could not confirm the claim was sent",
+                    "It may already be on its way. ChainVue saved it and is checking. \
+                     Do not start the same name again — that would spend a second fee.",
+                );
+            }
+        }
+        self.emit_registration(None);
+    }
+
+    /// Ask whether the claim has confirmed. **On the tick, not on the screen.**
+    ///
+    /// A commitment expires about twenty blocks after it is signed, and missing
+    /// that window spends the fee for nothing. So this runs whatever the user is
+    /// looking at — gating it on the Identities screen being open would make the
+    /// deadline depend on where somebody happened to navigate.
+    ///
+    /// `poll` costs up to four requests and never sleeps, which is why it is
+    /// driven from here rather than by `wait_blocking`.
+    fn poll_registration(&mut self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(20);
+
+        if self.polling.registration_in_flight
+            || self.ready.is_some()
+            || self
+                .polling
+                .registration_at
+                .is_some_and(|last| last.elapsed() < EVERY)
+        {
+            return;
+        }
+        let Some(record) = self.reservation.current() else {
+            return;
+        };
+        // Nothing has been broadcast yet, so there is nothing to find.
+        if record.step == registration::Step::Reserved {
+            return;
+        }
+        let pending = record.pending.clone();
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.polling.registration_in_flight = true;
+        self.polling.registration_at = Some(std::time::Instant::now());
+        self.blocking.dispatch(
+            move || {
+                Work::CommitmentPolled(Box::new(pending.poll(&*chain).map_err(|e| e.to_string())))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_poll(&mut self, result: Result<verus_sdk::network::CommitmentStatus, String>) {
+        use verus_sdk::network::CommitmentStatus;
+
+        self.polling.registration_in_flight = false;
+        let status = match result {
+            Ok(status) => status,
+            Err(reason) => {
+                // A poll that fails says nothing about the claim. It is still on
+                // disk and still has a deadline; the next tick asks again.
+                tracing::info!(%reason, "a name claim could not be polled");
+                return;
+            }
+        };
+
+        if let CommitmentStatus::Ready(ready) = &status {
+            self.ready = Some((**ready).clone());
+        }
+        self.emit_registration(Some(&status));
+    }
+
+    /// Step two: reveal the name and create the identity.
+    fn finish_registration(&mut self) {
+        let Some(ready) = self.ready.take() else {
+            return;
+        };
+        let Some(record) = self.reservation.current() else {
+            return;
+        };
+        // The same key that made the commitment. The commitment output is
+        // locked to its address, and the SDK refuses a mismatch rather than
+        // producing something unspendable.
+        let label = record.key_label.clone();
+        let Some(vault) = self.wallet.vault() else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                self.ready = Some(ready);
+                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                return;
+            }
+        };
+
+        self.busy(TaskKind::Broadcasting, true);
+        self.blocking.dispatch(
+            move || {
+                let outcome = vault.with_key(&label, |key| {
+                    ready
+                        .prepare(&*chain, key)
+                        .and_then(|unsent| unsent.broadcast(&chain.broadcaster(&permit)))
+                });
+                Work::Registered(Box::new(match outcome {
+                    Ok(Ok(registered)) => Ok(registered),
+                    Ok(Err(flow)) => Err(flow.to_string()),
+                    Err(vault) => Err(vault.to_string()),
+                }))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_registered(&mut self, result: Result<verus_sdk::network::Registered, String>) {
+        self.busy(TaskKind::Broadcasting, false);
+
+        match result {
+            Ok(registered) => {
+                let address = verus_sdk::verus_keys::Address::new(
+                    verus_sdk::verus_keys::AddressKind::Identity,
+                    registered.identity_address,
+                )
+                .to_string();
+                tracing::info!(
+                    name = %registered.name,
+                    %address,
+                    fee = %portfolio::coins(registered.fee_paid),
+                    "a VerusID was registered",
+                );
+
+                // The salt has done its work. This is one of exactly two places
+                // it is deleted, and the other is somebody saying to stop.
+                let cannot_be_revoked = self
+                    .reservation
+                    .current()
+                    .is_some_and(|record| record.pending.recovery_authority.is_none());
+                self.reservation.finish();
+
+                let _ = self.events.send(Event::Registration(Some(Box::new(
+                    chainvue_protocol::RegistrationVm {
+                        name: registered.name,
+                        step: "done".to_string(),
+                        note: "The identity exists on the chain.".to_string(),
+                        deadline: String::new(),
+                        fee_display: portfolio::coins(registered.fee_paid),
+                        address,
+                        busy: false,
+                        cannot_be_revoked,
+                    },
+                ))));
+
+                // It is one of yours now.
+                self.refresh_identities();
+            }
+            Err(reason) => {
+                // The claim is still on disk and may still be inside its
+                // window, so this is not the end of it — the poller will offer
+                // the step again.
+                tracing::warn!(%reason, "the registration could not be completed");
+                self.notice_warning(
+                    "registration",
+                    "Could not finish registering that name",
+                    &reason,
+                );
+                self.emit_registration(None);
+            }
+        }
+    }
+
+    /// Give up on the claim in progress.
+    fn abandon_registration(&mut self) {
+        let spent = self
+            .reservation
+            .current()
+            .is_some_and(|record| record.step == registration::Step::Committed);
+        self.reservation.finish();
+        self.ready = None;
+        if spent {
+            tracing::info!("a name claim was abandoned after its fee was spent");
+        }
+        self.emit_registration(None);
+    }
+
+    fn emit_registration(&self, status: Option<&verus_sdk::network::CommitmentStatus>) {
+        let Some(record) = self.reservation.current() else {
+            let _ = self.events.send(Event::Registration(None));
+            return;
+        };
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let vm = identity::registration_view(record, status, tip, false);
+        let _ = self.events.send(Event::Registration(Some(Box::new(vm))));
+    }
+
+    fn finish_name_check(
+        &mut self,
+        name: &str,
+        taken: Option<bool>,
+        fee: Option<verus_sdk::money::Amount>,
+    ) {
+        let problem = match taken {
+            Some(true) => "That name is already registered.".to_string(),
+            Some(false) => String::new(),
+            None => "Could not check whether that name is free.".to_string(),
+        };
+        let _ = self.events.send(Event::NameChecked {
+            name: name.to_string(),
+            problem,
+            fee_display: fee.map(portfolio::coins).unwrap_or_default(),
+        });
+    }
+
+    /// Build step one, write the salt down, and hand the commitment to a node.
+    ///
+    /// **The order is the point.** The salt cannot be recovered from the chain,
+    /// so it goes to disk before anything is broadcast — and a write that fails
+    /// stops the whole thing rather than sending bytes whose secret exists only
+    /// in memory. Same shape as the pending ledger, for the same reason.
+    fn start_registration(&mut self, name: &str, revocation: &str, recovery: &str) {
+        if self.reservation.in_progress() {
+            self.notice_warning(
+                "registration_busy",
+                "A name is already being registered",
+                "Finish or abandon it before starting another. A claim expires about \
+                 twenty blocks after it is signed, and two clocks running at once is \
+                 one more than anybody can watch.",
+            );
+            return;
+        }
+
+        let name = name.trim().to_string();
+        let Some(label) = self.wallet.active_key.clone() else {
+            return;
+        };
+        let Some(vault) = self.wallet.vault() else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        // The permit before the work, not after: a registration that cannot be
+        // broadcast should refuse before it costs a signature.
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                return;
+            }
+        };
+
+        let options = verus_sdk::network::RegistrationOptions {
+            revocation_authority: some_if_set(revocation),
+            recovery_authority: some_if_set(recovery),
+            ..verus_sdk::network::RegistrationOptions::default()
+        };
+
+        self.busy(TaskKind::PreparingSend, true);
+        self.blocking.dispatch(
+            move || {
+                let built = vault.with_key(&label, |key| {
+                    verus_sdk::network::prepare_registration(&*chain, key, &name, &options)
+                });
+                Work::Reserved {
+                    name,
+                    label,
+                    permit: Box::new(permit),
+                    result: Box::new(match built {
+                        Ok(Ok(pending)) => Ok(pending),
+                        Ok(Err(flow)) => Err(flow.to_string()),
+                        Err(vault) => Err(vault.to_string()),
+                    }),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    /// Find every identity this wallet's keys control.
+    ///
+    /// **One request per key**, which is why this is asked for rather than run
+    /// on a timer: nothing outside the Identities screen reads the answer, and
+    /// a wallet with eight keys polling in the background would be asking a
+    /// public node eight questions a minute for nobody.
+    fn refresh_identities(&mut self) {
+        self.ensure_vdxf();
+        let addresses = self.wallet_addresses();
+        if addresses.is_empty() {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.busy(TaskKind::RefreshingBalance, true);
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                let mut found = Vec::new();
+                for address in &addresses {
+                    match chain.identities_with_address(address) {
+                        Ok(mut some) => found.append(&mut some),
+                        // One key's answer failing must not lose the others.
+                        // A shorter list is the failure that looks like success
+                        // here, so it is reported rather than swallowed — but
+                        // only after every key has been asked.
+                        Err(error) => {
+                            return Work::Identities(Box::new(Err(error)));
+                        }
+                    }
+                }
+                Work::Identities(Box::new(Ok(found)))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_identities(
+        &mut self,
+        result: Result<Vec<verus_sdk::network::IdentityAtAddress>, verus_sdk::network::RpcError>,
+    ) {
+        self.busy(TaskKind::RefreshingBalance, false);
+
+        let found = match result {
+            Ok(found) => found,
+            Err(error) => {
+                self.notice("identities", "Could not read your VerusIDs", &error);
+                return;
+            }
+        };
+
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let chain_name = self.chain_name();
+
+        // Rebuilt, not merged: an identity this wallet has stopped controlling
+        // has to leave the list, and merging would keep it there forever.
+        self.identities.clear();
+
+        for record in &found {
+            let row = identity::row(record, tip, chain_name.as_deref(), true);
+            self.identities.insert(row.address.clone(), row);
+        }
+
+        // The watched ones are re-read too. They are stored as a name and an
+        // address only, so until this runs they say "Not read yet" rather than
+        // repeating a status from whenever they were last seen — which is the
+        // one thing a persisted chain fact must not do.
+        let watched: Vec<String> = self
+            .looked_up
+            .iter()
+            .map(|row| row.address.clone())
+            .collect();
+        for address in watched {
+            self.reread_identity(&address);
+        }
+
+        self.emit_identities();
+    }
+
+    /// Look one up and show it — anyone's, by `name@` or i-address.
+    fn look_up_identity(&mut self, typed: &str) {
+        self.read_identity(typed, true);
+    }
+
+    /// Read one again without opening anything, to refresh a watched row.
+    fn reread_identity(&mut self, address: &str) {
+        self.read_identity(address, false);
+    }
+
+    fn read_identity(&mut self, typed: &str, open: bool) {
+        self.ensure_vdxf();
+        let typed = typed.trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.blocking.dispatch(
+            move || {
+                let result = identity::read(&chain, &typed);
+                Work::IdentityDetail {
+                    typed,
+                    open,
+                    result: Box::new(result),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_detail(
+        &mut self,
+        typed: &str,
+        open: bool,
+        result: Result<identity::Detail, verus_sdk::network::RpcError>,
+    ) {
+        let detail = match result {
+            Ok(detail) => detail,
+            Err(error) => {
+                // A refresh that fails says nothing to the form. The field is
+                // not what somebody is looking at, and putting an error in it
+                // about a row further down the screen would be answering a
+                // question nobody asked.
+                if !open {
+                    tracing::info!(%typed, %error, "a watched VerusID could not be re-read");
+                    return;
+                }
+                // `-5` is the daemon saying it does not exist, which is an
+                // answer. Anything else is the question going unanswered, and
+                // the two must not read the same — one means "no such name",
+                // the other means "we do not know".
+                let reason = match &error {
+                    verus_sdk::network::RpcError::Node { code: -5, .. } => {
+                        "No VerusID by that name on this chain.".to_string()
+                    }
+                    other => format!("Could not read it: {other}"),
+                };
+                let _ = self.events.send(Event::IdentityMissing {
+                    typed: typed.to_string(),
+                    reason,
+                });
+                return;
+            }
+        };
+
+        // Everything this wallet can sign with, so the sheet can say plainly
+        // whether the buttons on it will work.
+        let mine = self.wallet_addresses();
+        let vdxf = self.vdxf.as_ref();
+        let vm = identity::detail(&detail, &mine, vdxf);
+
+        // Where the row goes depends on whose it is, and that is the whole
+        // point: one that turns out to be yours belongs with your identities,
+        // and one that does not must never be counted among them.
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let row = identity::row_of(&detail.record, tip, &mine);
+        if row.mine {
+            self.identities.insert(row.address.clone(), row);
+        } else if open {
+            // Somebody asked about this one. Newest first, no duplicates —
+            // looking the same name up twice is one entry, not two — and
+            // written down, because looking something up is a decision that
+            // used to evaporate on restart.
+            if let Some(store) = &self.store {
+                store.watch_identity(&row.address, &row.name, now());
+            }
+            self.looked_up.retain(|seen| seen.address != row.address);
+            self.looked_up.insert(0, row);
+        } else if let Some(existing) = self
+            .looked_up
+            .iter_mut()
+            .find(|seen| seen.address == row.address)
+        {
+            // A refresh. Updated where it stands, and the stored row is left
+            // alone: the list is ordered by when somebody chose to watch each
+            // entry, and bumping that on every refresh would reorder it by
+            // refresh time instead — which is not a fact about anything.
+            *existing = row;
+        }
+        self.emit_identities();
+
+        // A refresh updates the row and stops here. Opening the sheet is
+        // something somebody asks for by clicking — and re-reading the watch
+        // list through this same path is what once flung it open by itself on
+        // whichever row answered first.
+        if !open {
+            return;
+        }
+
+        self.open_identity.clone_from(&vm.address);
+        // What the try-a-key search compares a guess against.
+        self.open_content_keys = detail.content.keys().cloned().collect();
+        let _ = self.events.send(Event::IdentityDetail(Some(Box::new(vm))));
+    }
+
+    /// Derive a VDXF key from a URI, and say whether the open identity has it.
+    ///
+    /// The forward direction is the only one there is: the key is a hash of the
+    /// name, so this can confirm a guess and can never recover one.
+    fn derive_content_key(&mut self, uri: &str) {
+        let Some(chain_name) = self.chain_name() else {
+            return;
+        };
+        let Some(chain_id) = self.cached.native else {
+            return;
+        };
+
+        match identity::Names::derive_one(uri, &chain_name, chain_id) {
+            Ok(key) => {
+                // Whether the identity on screen published under it. The answer
+                // is only ever "this guess matched" or "it did not" — the hash
+                // has no inverse, so a miss says nothing about what the key is.
+                let present = self.open_content_keys.contains(&key);
+                let _ = self.events.send(Event::ContentKeyDerived {
+                    uri: uri.to_string(),
+                    key,
+                    present,
+                });
+            }
+            Err(reason) => {
+                let _ = self.events.send(Event::ContentKeyDerived {
+                    uri: uri.to_string(),
+                    key: String::new(),
+                    present: false,
+                });
+                tracing::info!(%uri, %reason, "a VDXF URI did not derive");
+            }
+        }
+    }
+
+    /// Forget the lookups. Yours are untouched — those are not a list anybody
+    /// chose to have, and clearing them would only mean asking again.
+    fn clear_lookups(&mut self) {
+        self.looked_up.clear();
+        if let Some(store) = &self.store {
+            store.unwatch_all_identities();
+        }
+        self.emit_identities();
+    }
+
+    /// Drop one of them.
+    fn unwatch_identity(&mut self, address: &str) {
+        self.looked_up.retain(|row| row.address != address);
+        if let Some(store) = &self.store {
+            store.unwatch_identity(address);
+        }
+        self.emit_identities();
+    }
+
+    fn emit_identities(&self) {
+        let _ = self.events.send(Event::Identities {
+            yours: self.identities.values().cloned().collect(),
+            looked_up: self.looked_up.clone(),
+        });
+    }
+
+    /// The resolution for this text, if it is the one that was asked about.
+    fn resolved_for(&self, typed: &str) -> Option<&Identity> {
+        self.identity.as_ref().filter(|found| found.typed == typed)
+    }
+
+    /// Look a VerusID name up, at most once per name.
+    ///
+    /// # Why the trigger is the `@` and not "it failed to parse"
+    ///
+    /// Every intermediate state of typing an address also fails to parse, so
+    /// resolving on that would send `getidentity` for `R`, `RQ`, `RQr` and
+    /// thirty more — a request storm against a public node, produced by
+    /// somebody pasting one address. A VerusID name always ends in `@`, and
+    /// nothing else does, which makes it a precise signal rather than a guess.
+    fn maybe_resolve_identity(&mut self, typed: &str) {
+        if typed.len() < 2 || !typed.ends_with('@') {
+            return;
+        }
+        // Already answered, or already asked.
+        if self.resolved_for(typed).is_some() || self.resolving.as_deref() == Some(typed) {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.resolving = Some(typed.to_string());
+        let name = typed.to_string();
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                let result = chain.identity(&name);
+                Work::Identity {
+                    typed: name,
+                    result: Box::new(result),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_identity(
+        &mut self,
+        typed: &str,
+        result: Result<verus_sdk::network::IdentityRecord, verus_sdk::network::RpcError>,
+    ) {
+        if self.resolving.as_deref() == Some(typed) {
+            self.resolving = None;
+        }
+
+        match result {
+            Ok(record) => {
+                // What this name meant last time, read BEFORE recording what it
+                // means now — the comparison is the whole point of keeping it.
+                let was = self
+                    .store
+                    .as_ref()
+                    .and_then(|store| store.identity_address(typed))
+                    .filter(|previous| previous != &record.identity_address);
+
+                if let Some(previous) = &was {
+                    tracing::warn!(
+                        name = %typed,
+                        %previous,
+                        now = %record.identity_address,
+                        "a VerusID resolved to a different address than last time",
+                    );
+                }
+
+                if let Some(store) = &self.store {
+                    store.remember_identity(typed, &record.identity_address, now());
+                }
+
+                self.identity = Some(Identity {
+                    typed: typed.to_string(),
+                    name: record.fully_qualified_name.clone(),
+                    address: record.identity_address.clone(),
+                    revoked: record.is_revoked(),
+                    was,
+                });
+            }
+            Err(error) => {
+                // Not a notice. Somebody halfway through typing a name has not
+                // done anything wrong, and a toast for every unfinished word
+                // would be the wallet shouting at them for typing.
+                tracing::info!(name = %typed, %error, "a VerusID did not resolve");
+                self.identity = Some(Identity {
+                    typed: typed.to_string(),
+                    name: String::new(),
+                    address: String::new(),
+                    revoked: false,
+                    was: None,
+                });
+            }
+        }
+
+        // Put the answer on the form now rather than at the next keystroke —
+        // otherwise a name typed and then left alone stays "looking up…".
+        let draft = self.last_draft.clone();
+        self.validate_draft(&draft);
+    }
+
     /// Build and sign, off the actor.
     ///
     /// `prepare_send` reads the funding set first, so this is several requests
     /// plus an ECDSA signature — not something to hold the actor for. The key
     /// is decrypted inside `with_key` on the worker thread and dropped before
     /// that closure returns.
-    fn prepare_send(&mut self, draft: chainvue_protocol::SendDraft) {
+    fn prepare_send(&mut self, mut draft: chainvue_protocol::SendDraft) {
+        // A VerusID typed by name becomes the address it resolved to, HERE,
+        // rather than in the UI. The interface never gets to decide which
+        // address is paid — it says what somebody typed, and the core says what
+        // that is. A revoked identity is not substituted at all, so the builder
+        // refuses the name as unparseable, which is the outcome the form is
+        // already telling them about.
+        let mut paid_name = String::new();
+        if let Some(identity) = self.resolved_for(draft.to.trim()) {
+            if !identity.address.is_empty() && !identity.revoked {
+                paid_name.clone_from(&identity.name);
+                draft.to.clone_from(&identity.address);
+            }
+        }
+
         let Some(label) = self.wallet.active_key.clone() else {
             return;
         };
@@ -1901,7 +3408,7 @@ impl Core {
         self.blocking.dispatch(
             move || Work::Prepared {
                 ticket,
-                result: Box::new(send::prepare(&chain, &vault, &label, &draft)),
+                result: Box::new(send::prepare(&chain, &vault, &label, &draft, &paid_name)),
             },
             self.work.clone(),
         );
@@ -2012,6 +3519,22 @@ impl Core {
 
         match result {
             Ok(sent) => {
+                // The one irreversible thing this application does, and until
+                // this line it was the only outcome that left no trace. Every
+                // failure was logged and every success was silent, so the file
+                // somebody reads after a bad day described a wallet that only
+                // ever fails — and "did it actually send?" had no answer in the
+                // one place they would look.
+                //
+                // The txid and the fee, and deliberately not the recipient or
+                // the amount. Both are on the chain and one lookup finds them,
+                // so this loses nothing — while a log holding a plaintext list
+                // of who was paid what is a file people attach to bug reports.
+                tracing::info!(
+                    txid = %sent.txid,
+                    fee = %portfolio::coins(sent.fee),
+                    "a payment was accepted by the network",
+                );
                 self.remember_recipient(record);
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
@@ -2068,6 +3591,9 @@ impl Core {
             reason: LockReason::Timeout,
         });
         self.emit_wallet();
+        // A name claim the last run left unfinished. It has a deadline, so it is
+        // worth saying before anything else on that screen.
+        self.emit_registration(None);
     }
 
     /// Probe every node, then report once.
@@ -2088,13 +3614,10 @@ impl Core {
         let requested = self.nodes.requested().cloned().unwrap_or(Network::Testnet);
 
         for (id, url) in targets {
-            let outcome = self
-                .blocking
-                .run(move || {
-                    let (result, latency) = chainvue_chain::probe(&url);
-                    (result, latency)
-                })
-                .await;
+            let Some(prober) = self.prober(&url) else {
+                continue;
+            };
+            let outcome = self.blocking.run(move || prober.probe()).await;
 
             let Some((result, latency)) = outcome else {
                 continue;
@@ -2325,6 +3848,15 @@ fn refusal_title(refused: &chainvue_chain::SpendRefused) -> String {
 /// a node that has stopped.
 const FAILURES_BEFORE_FAILOVER: u32 = 3;
 
+// There is deliberately no cap on the watch list.
+//
+// An earlier version kept five and dropped the rest, on the reasoning that the
+// section should stay a short aside. That was right while the list lived in
+// memory and vanished on restart. It is wrong now that it is durable and
+// removable one row at a time: these are entries somebody chose to keep, and a
+// list that silently forgets the sixth is one nobody can rely on. The address
+// book has no cap either, for the same reason.
+
 /// Whether any payment's fate is currently unknown.
 ///
 /// The rule that makes automatic failover safe, and it is stronger than "not
@@ -2499,6 +4031,59 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one line the send form gets about a VerusID, in priority order.
+    ///
+    /// The ordering is the point, not the wording. A name that now resolves
+    /// somewhere else is the only case where the form looks entirely ordinary
+    /// and the money reaches a stranger — so it has to outrank a revocation and
+    /// a plain success, both of which are visible in other ways.
+    #[test]
+    fn a_changed_verusid_outranks_everything_else_the_note_could_say() {
+        let base = Identity {
+            typed: "someone@".to_string(),
+            name: "someone.VRSCTEST@".to_string(),
+            address: "iNEW".to_string(),
+            revoked: false,
+            was: None,
+        };
+
+        let plain = identity_note(&base);
+        assert!(plain.contains("someone.VRSCTEST@"), "{plain}");
+        assert!(
+            plain.contains("iNEW"),
+            "the note hides the address: {plain}"
+        );
+
+        // Changed AND revoked: the change still wins, and the old address is
+        // named — "it changed" without saying from what is an alarm nobody can
+        // act on.
+        let moved = identity_note(&Identity {
+            was: Some("iOLD".to_string()),
+            revoked: true,
+            ..base.clone()
+        });
+        assert!(
+            moved.contains("iOLD"),
+            "the old address is missing: {moved}"
+        );
+        assert!(moved.contains("iNEW"), "{moved}");
+
+        let revoked = identity_note(&Identity {
+            revoked: true,
+            ..base.clone()
+        });
+        assert!(revoked.contains("revoked"), "{revoked}");
+
+        // No address at all is a name this chain does not have. It must not
+        // read as a success — the address being empty is exactly the case a
+        // check on `revoked` alone gets wrong.
+        let missing = identity_note(&Identity {
+            address: String::new(),
+            ..base
+        });
+        assert!(missing.contains("No VerusID"), "{missing}");
+    }
 
     /// Wait for the next `Event::Network`, ignoring anything else.
     async fn next_network(events: &mut mpsc::UnboundedReceiver<Event>) -> NetworkVm {

@@ -43,6 +43,16 @@ const PASSPHRASE: &str = "correct-horse-battery-staple-9931";
 /// From the SDK's own fixtures. A key this project has never held.
 const WIF: &str = "UusoQWsobQKUkezgBJa22D9G4t9Avo6k8wD5UUxmmfAEoTN8bawc";
 
+/// A salt with a shape nothing else produces.
+///
+/// Consecutive bytes, so a leak through any `Debug` of the reservation prints
+/// `200, 201, 202, 203` — a run that cannot occur by accident in prose, a hash,
+/// or a formatted amount.
+const SALT: [u8; 32] = [
+    200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218,
+    219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231,
+];
+
 /// A phrase with a broken checksum, so the import refuses it — which is the
 /// path that formats a message about it.
 const BAD_PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
@@ -102,6 +112,12 @@ async fn no_secret_reaches_the_log() {
     .expect("this test binary sets the subscriber once");
 
     let dir = tempfile::tempdir().expect("tempdir");
+
+    // A reservation on disk before the core starts, so it is picked up exactly
+    // as a resumed registration would be. Without this the salt would never
+    // exist and the assertions about it at the bottom would pass on nothing.
+    plant_a_reservation(dir.path());
+
     let handle = tokio::runtime::Handle::current();
     let (dispatcher, mut events) = start(
         &handle,
@@ -190,6 +206,18 @@ async fn no_secret_reaches_the_log() {
     });
     wait_for_notice(&mut events).await;
 
+    // ── And the name reservation, whose salt is the newest secret here ──
+    //
+    // Written to disk before the core starts, so it is picked up the way a
+    // resumed registration would be — and then every path that touches it runs:
+    // the tick poller, the view the screen is built from, and the error
+    // formatting when the unreachable node refuses.
+    dispatcher.send(Command::AbandonRegistration);
+    dispatcher.send(Command::CheckName("hygiene".to_string()));
+    for _ in 0..3 {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), events.recv()).await;
+    }
+
     dispatcher.send(Command::Shutdown);
 
     // ── What came out ───────────────────────────────────────────────────
@@ -231,6 +259,77 @@ async fn no_secret_reaches_the_log() {
         !log.contains(BAD_PHRASE),
         "the phrase somebody typed was quoted back into the log",
     );
+
+    // The registration salt.
+    //
+    // The newest secret in this application and the one with the shortest
+    // history of being handled carefully: it cannot be recovered from the
+    // chain, so a leak plus a lost file is a commitment fee nobody can redeem —
+    // and a leak on its own lets somebody else claim the name being reserved.
+    //
+    // Asserted in both spellings it could reach a log in: the `Debug` of a byte
+    // array, and hex.
+    let as_debug = SALT
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !log.contains(&as_debug[..24]),
+        "a name reservation's salt reached the log",
+    );
+    assert!(
+        !log.contains(&hex::encode(SALT)[..32]),
+        "a name reservation's salt reached the log as hex",
+    );
+}
+
+/// Write a name reservation carrying [`SALT`] into the wallet directory.
+///
+/// Built through the SDK rather than hand-assembled, so what lands on disk is
+/// the real shape — including whatever fields a future version adds, which is
+/// precisely what a hand-written fixture would stop covering.
+fn plant_a_reservation(dir: &std::path::Path) {
+    use verus_flows::testing::ScriptedReader;
+    use verus_sdk::verus_keys::PrivateKey;
+
+    let key = PrivateKey::from_bytes(&[7u8; 32], true).expect("a fixed scalar is a key");
+    let reader = ScriptedReader::new(1_000_000)
+        .with_utxo(&key.address().to_string(), 999_000, 200 * 100_000_000)
+        .with_policy(verus_sdk::network::CurrencyPolicy {
+            currency_id: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
+            name: "VRSCTEST".into(),
+            id_registration_fee: verus_sdk::money::Amount::from_sat(100 * 100_000_000),
+            id_referral_levels: 3,
+            id_import_fee: verus_sdk::money::Amount::ZERO,
+            currency_registration_fee: verus_sdk::money::Amount::ZERO,
+            proof_protocol: 1,
+        });
+
+    let pending = verus_flows::prepare_registration_with_salt(
+        &reader,
+        &key,
+        "hygiene",
+        &verus_flows::RegistrationOptions::default(),
+        SALT,
+    )
+    .expect("the reservation builds");
+    assert_eq!(pending.reservation.salt, SALT, "the fixture lost its salt");
+
+    // `Committed`, so the tick poller actually runs against it — a `Reserved`
+    // one is skipped, and the polling path is where a `Debug` of the whole
+    // value would most plausibly appear.
+    let record = chainvue_core::registration::Record {
+        name: "hygiene".to_string(),
+        key_label: "main".to_string(),
+        step: chainvue_core::registration::Step::Committed,
+        pending,
+    };
+    std::fs::write(
+        dir.join("registration.json"),
+        serde_json::to_string(&record).expect("serialize"),
+    )
+    .expect("write");
 }
 
 async fn wait_for_notice(events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) {

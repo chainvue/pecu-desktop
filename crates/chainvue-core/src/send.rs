@@ -51,6 +51,10 @@ pub struct Prepared {
     pub unsent: Unsent<Sent>,
     pub to: String,
     pub amount: Amount,
+    /// The VerusID name `to` was resolved from, when it was typed as a name.
+    /// Empty otherwise. Carried so the review can show the question as well as
+    /// the answer.
+    pub name: String,
 }
 
 // ── Validating what has been typed ──────────────────────────────────────────
@@ -119,6 +123,7 @@ pub fn prepare(
     vault: &Vault,
     label: &str,
     draft: &SendDraft,
+    name: &str,
 ) -> Result<Prepared, SendError> {
     let to = draft.to.trim();
     to.parse::<Address>().map_err(|_| SendError::BadAddress)?;
@@ -134,6 +139,7 @@ pub fn prepare(
         unsent,
         to: to.to_string(),
         amount,
+        name: name.to_string(),
     })
 }
 
@@ -173,6 +179,7 @@ pub fn review(
         balance_after_display: coins(spendable.checked_sub(total).unwrap_or(Amount::ZERO)),
         from_address: from.to_string(),
         first_time_recipient: !known_recipient,
+        recipient_name: prepared.name.clone(),
     }
 }
 

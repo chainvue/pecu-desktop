@@ -9,13 +9,14 @@
 use std::rc::Rc;
 
 use chainvue_protocol::{
-    Event, HistoryRowVm, KeyOrigin, ListDelta, NodeVm, PortfolioVm, Reachability, SendOutcomeVm,
-    TxDirection,
+    ContentEntryVm, Event, HistoryRowVm, IdentityDetailVm, IdentityVm, KeyOrigin, ListDelta,
+    NodeVm, PortfolioVm, Reachability, SendOutcomeVm, TxDirection,
 };
 use chainvue_ui::prelude::*;
 use chainvue_ui::{
-    qr, seed, ActivityRow, AppWindow, AssetRow, KeyRow, KnownAddressRow, NetworkState, NodeRow,
-    PendingRow, ReviewOutput, SeedState, SendState, TxState, WalletState,
+    qr, seed, ActivityRow, AppWindow, AssetRow, ContentEntry, IdentityRow, IdentityState, KeyRow,
+    KnownAddressRow, NetworkState, NodeRow, PendingRow, ReviewOutput, SeedState, SendState,
+    TxState, WalletState,
 };
 use slint::{Model, ModelRc, SharedString, VecModel, Weak};
 use tokio::sync::mpsc;
@@ -51,6 +52,12 @@ pub fn pump(
 /// Total by construction: no `unwrap`, no panic. A panic on the UI thread kills
 /// the window, so an event that cannot be applied is dropped and logged rather
 /// than taking the wallet with it.
+///
+/// Long because it is a dispatch table: one arm per event, each either a write
+/// or a call. Splitting it would put the list of what the wallet can say in two
+/// places, which is the one property worth keeping — a new `Event` variant
+/// breaks this match, and that is the point.
+#[allow(clippy::too_many_lines)]
 fn apply(ui: &AppWindow, event: Event) {
     match event {
         Event::Network(vm) => apply_network(ui, &vm),
@@ -150,6 +157,65 @@ fn apply(ui: &AppWindow, event: Event) {
                 .collect();
             ui.global::<SendState>()
                 .set_pending_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+        }
+
+        Event::Identities { yours, looked_up } => apply_identities(ui, &yours, &looked_up),
+
+        Event::IdentityChangePrepared {
+            ticket,
+            description,
+            fee_display,
+            needs_confirmation,
+        } => {
+            let state = ui.global::<IdentityState>();
+            state.set_change_description(description.into());
+            state.set_change_fee(fee_display.into());
+            state.set_change_needs_confirmation(needs_confirmation);
+            state.set_change_typed(SharedString::new());
+            // Last, because a non-zero ticket is what opens the review.
+            state.set_change_ticket(i32::try_from(ticket).unwrap_or(i32::MAX));
+        }
+
+        Event::IdentityChanged { txid } => {
+            tracing::info!(%txid, "an identity change was sent");
+            let state = ui.global::<IdentityState>();
+            state.set_change_ticket(0);
+            state.set_change_busy(false);
+            state.set_new_revocation(SharedString::new());
+            state.set_new_recovery(SharedString::new());
+            state.set_lock_blocks(SharedString::new());
+            state.set_change_typed(SharedString::new());
+        }
+
+        Event::NameChecked {
+            problem,
+            fee_display,
+            ..
+        } => {
+            let state = ui.global::<IdentityState>();
+            state.set_name_problem(problem.into());
+            state.set_name_fee(fee_display.into());
+        }
+
+        Event::Registration(claim) => apply_registration(ui, claim.as_deref()),
+
+        Event::IdentityMissing { typed, reason } => {
+            tracing::info!(%typed, %reason, "a VerusID lookup found nothing");
+            ui.global::<IdentityState>()
+                .set_lookup_problem(reason.into());
+        }
+
+        // The sheet is open exactly when the address is non-empty, so `None`
+        // closes it with one write rather than a second flag that could
+        // disagree with the first.
+        Event::IdentityDetail(Some(vm)) => apply_identity_detail(ui, &vm),
+        Event::IdentityDetail(None) => close_identity(ui),
+
+        Event::ContentKeyDerived { uri, key, present } => {
+            tracing::debug!(%uri, %key, present, "derived a VDXF key");
+            let state = ui.global::<IdentityState>();
+            state.set_derived_key(key.into());
+            state.set_derived_present(present);
         }
 
         Event::TxDetail(vm) => apply_tx_detail(ui, vm),
@@ -341,6 +407,131 @@ fn apply_history(ui: &AppWindow, delta: ListDelta<HistoryRowVm>) {
     }
 }
 
+/// A name claim in progress, or none.
+fn apply_registration(ui: &AppWindow, claim: Option<&chainvue_protocol::RegistrationVm>) {
+    let state = ui.global::<IdentityState>();
+    let Some(vm) = claim else {
+        // An empty step is what says there is no claim, so this is one write
+        // rather than a second flag that could disagree with it. The drafts go
+        // too — a finished claim must not leave its name in the box, where the
+        // next press would try to register it again.
+        state.set_reg_step(SharedString::new());
+        state.set_name_draft(SharedString::new());
+        state.set_revocation_draft(SharedString::new());
+        state.set_recovery_draft(SharedString::new());
+        state.set_name_fee(SharedString::new());
+        state.set_reg_busy(false);
+        return;
+    };
+
+    state.set_reg_name(vm.name.clone().into());
+    state.set_reg_note(vm.note.clone().into());
+    state.set_reg_deadline(vm.deadline.clone().into());
+    state.set_reg_fee(vm.fee_display.clone().into());
+    state.set_reg_address(vm.address.clone().into());
+    state.set_reg_busy(vm.busy);
+    state.set_reg_cannot_be_revoked(vm.cannot_be_revoked);
+    state.set_reg_step(vm.step.clone().into());
+}
+
+/// Close the detail sheet, and forget the answer it was showing.
+fn close_identity(ui: &AppWindow) {
+    let state = ui.global::<IdentityState>();
+    state.set_address(SharedString::new());
+    state.set_derived_key(SharedString::new());
+    state.set_key_draft(SharedString::new());
+}
+
+/// The VerusIDs lists — yours, and the ones somebody looked up.
+fn apply_identities(ui: &AppWindow, yours: &[IdentityVm], looked_up: &[IdentityVm]) {
+    let state = ui.global::<IdentityState>();
+    state.set_rows(identity_rows(yours));
+    state.set_looked_up(identity_rows(looked_up));
+}
+
+fn identity_rows(rows: &[IdentityVm]) -> ModelRc<IdentityRow> {
+    let rows: Vec<IdentityRow> = rows
+        .iter()
+        .map(|row| IdentityRow {
+            name: row.name.clone().into(),
+            address: row.address.clone().into(),
+            status: row.status.clone().into(),
+            tone: row.tone.clone().into(),
+            note: row.note.clone().into(),
+            mine: row.mine,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
+/// One VerusID, in full.
+fn apply_identity_detail(ui: &AppWindow, vm: &IdentityDetailVm) {
+    let state = ui.global::<IdentityState>();
+    state.set_name(vm.name.clone().into());
+    state.set_status(vm.status.clone().into());
+    state.set_tone(vm.tone.clone().into());
+    state.set_signatures_required(vm.signatures_required.clone().into());
+    state.set_control_note(vm.control_note.clone().into());
+    state.set_can_sign(vm.can_sign);
+    state.set_revocation_authority(vm.revocation_authority.clone().into());
+    state.set_recovery_authority(vm.recovery_authority.clone().into());
+    state.set_cannot_be_revoked(vm.cannot_be_revoked);
+    state.set_timelock_note(vm.timelock_note.clone().into());
+    state.set_balance(vm.balance_display.clone().into());
+
+    let primary: Vec<SharedString> = vm
+        .primary_addresses
+        .iter()
+        .map(|address| address.clone().into())
+        .collect();
+    state.set_primary_addresses(ModelRc::from(Rc::new(VecModel::from(primary))));
+
+    state.set_content(flatten(&vm.content));
+    state.set_content_history(flatten(&vm.content_history));
+
+    // A fresh sheet answers no stale question: the derived key belonged to the
+    // identity that was open before this one.
+    state.set_derived_key(SharedString::new());
+    state.set_derived_present(false);
+
+    // Last, because this is what opens the sheet — every field above is in
+    // place before anything renders.
+    state.set_address(vm.address.clone().into());
+}
+
+/// A content map, flattened into one row per value.
+///
+/// The key and its name go on the first row of each key only, the same way a
+/// day heading rides on the first transaction of its day. Grouping needs to see
+/// the row before this one, which a `for` over a model cannot — so it is
+/// decided here, once, rather than guessed at in the interface.
+fn flatten(entries: &[ContentEntryVm]) -> ModelRc<ContentEntry> {
+    let mut rows = Vec::new();
+    for entry in entries {
+        for (index, value) in entry.values.iter().enumerate() {
+            let first = index == 0;
+            rows.push(ContentEntry {
+                key: if first {
+                    entry.key.clone().into()
+                } else {
+                    SharedString::new()
+                },
+                name: if first {
+                    entry.name.clone().into()
+                } else {
+                    SharedString::new()
+                },
+                first,
+                text: value.text.clone().into(),
+                hex: value.hex.clone().into(),
+                size: value.size.clone().into(),
+                structured: value.structured.clone().into(),
+            });
+        }
+    }
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
 /// The review, built from the transaction that was actually signed.
 fn apply_review(ui: &AppWindow, vm: &chainvue_protocol::SendReviewVm) {
     let send = ui.global::<SendState>();
@@ -352,6 +543,7 @@ fn apply_review(ui: &AppWindow, vm: &chainvue_protocol::SendReviewVm) {
     send.set_balance_after(vm.balance_after_display.clone().into());
     send.set_from_address(vm.from_address.clone().into());
     send.set_first_time_recipient(vm.first_time_recipient);
+    send.set_recipient_name(vm.recipient_name.clone().into());
 
     let outputs: Vec<ReviewOutput> = vm
         .outputs

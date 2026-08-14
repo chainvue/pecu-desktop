@@ -32,10 +32,20 @@ use slint::{Model, SharedString};
 ///
 /// Testnet first and active by default: pointing a half-finished wallet at
 /// mainnet would be a choice made for the user rather than by them.
+#[cfg(not(feature = "mock"))]
 const BUILTIN_NODES: &[(&str, &str)] = &[
     ("VRSCTEST (public)", "https://api.verustest.net"),
     ("VRSC (public)", "https://api.verus.services"),
 ];
+
+/// The demo build's one endpoint, which is not an endpoint.
+///
+/// Every probe in this build is answered by the scripted chain rather than by a
+/// node, so shipping the real list would put `api.verus.services` on screen
+/// reporting VRSCTEST and a tip it never mined. One entry, named for what it is,
+/// and a URL scheme nothing in this application knows how to dial.
+#[cfg(feature = "mock")]
+const BUILTIN_NODES: &[(&str, &str)] = &[("Scripted chain", "mock://scripted")];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Held for the life of the process: the file writer is non-blocking, and
@@ -129,7 +139,19 @@ fn vault_path() -> std::path::PathBuf {
         })
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    let dir = base.join("testnet");
+    // The demo build gets its own directory, and that is not tidiness.
+    //
+    // Everything under here is written to: the vault, the settings, the cached
+    // dashboard, the address book, and the ledger of transactions whose fate is
+    // unknown. A demo run sharing that directory would put scripted figures and
+    // a `mock…` transaction into the same files a real wallet reads back on its
+    // next launch — and a wallet that cannot say whether a row on its screen
+    // came from a chain or from a fixture is worse than one with no demo mode.
+    let dir = if cfg!(feature = "mock") {
+        base.join("mock")
+    } else {
+        base.join("testnet")
+    };
     if let Err(error) = std::fs::create_dir_all(&dir) {
         tracing::warn!(%error, path = %dir.display(), "could not create the wallet directory");
     }
@@ -149,6 +171,7 @@ fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_wallet(ui, dispatcher.clone());
     wire_backup(ui, &dispatcher);
     wire_send(ui, &dispatcher);
+    wire_identity(ui, &dispatcher);
     wire_settings(ui, &dispatcher);
     wire_shell(ui, dispatcher);
 }
@@ -492,6 +515,194 @@ fn ticket_id(ticket: i32) -> u64 {
 
 /// Navigation, refresh, node selection, theme — nothing that can carry a
 /// secret, by construction.
+/// The VerusIDs screen.
+///
+/// Nothing here can be handed a secret: reading an identity needs no key, and
+/// the write operations that will need one are not built yet. When they are,
+/// they belong beside `wire_wallet`, not here.
+fn wire_identity(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let actions = ui.global::<Actions>();
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_refresh_identities(move || {
+            dispatcher.send(Command::RefreshIdentities);
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_look_up_identity(move |typed| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<chainvue_ui::IdentityState>()
+                    .set_lookup_problem(slint::SharedString::new());
+            }
+            dispatcher.send(Command::LookUpIdentity(typed.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_open_identity(move |address| {
+            dispatcher.send(Command::OpenIdentity(address.to_string()));
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        // Closing is the UI's own business: no request goes out, and waiting
+        // for the core to echo it back would put a round trip between the click
+        // and the sheet going away.
+        actions.on_close_identity(move || {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::IdentityState>();
+                state.set_address(slint::SharedString::new());
+                state.set_derived_key(slint::SharedString::new());
+                state.set_key_draft(slint::SharedString::new());
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_derive_content_key(move |uri| {
+            dispatcher.send(Command::DeriveContentKey(uri.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_clear_lookups(move || {
+            dispatcher.send(Command::ClearLookups);
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_unwatch_identity(move |address| {
+            dispatcher.send(Command::UnwatchIdentity(address.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_check_name(move |name| {
+            dispatcher.send(Command::CheckName(name.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_start_registration(move |name, revocation, recovery| {
+            dispatcher.send(Command::StartRegistration {
+                name: name.to_string(),
+                revocation_authority: revocation.to_string(),
+                recovery_authority: recovery.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_finish_registration(move || {
+            dispatcher.send(Command::FinishRegistration);
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_abandon_registration(move || {
+            dispatcher.send(Command::AbandonRegistration);
+        });
+    }
+
+    wire_identity_writes(ui, dispatcher);
+}
+
+/// The VerusID operations that build a transaction.
+///
+/// Split from the reads for the same reason `wire_wallet` is split from
+/// `wire_shell`: the surface worth reading closely should be short. Nothing here
+/// carries a secret either — the vault is reached by label — but every one of
+/// these ends in something signed, and three of them cannot be undone.
+fn wire_identity_writes(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let actions = ui.global::<Actions>();
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_set_identity_authorities(move |address, revocation, recovery| {
+            dispatcher.send(Command::SetIdentityAuthorities {
+                address: address.to_string(),
+                revocation: revocation.to_string(),
+                recovery: recovery.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_lock_identity(move |address, blocks| {
+            dispatcher.send(Command::LockIdentity {
+                address: address.to_string(),
+                delay_blocks: u32::try_from(blocks).unwrap_or(0),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_unlock_identity(move |address, blocks| {
+            dispatcher.send(Command::UnlockIdentity {
+                address: address.to_string(),
+                extra_blocks: u32::try_from(blocks).unwrap_or(0),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_confirm_identity_change(move |ticket, typed| {
+            dispatcher.send(Command::ConfirmIdentityChange {
+                ticket: ticket_id(ticket),
+                typed: typed.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_revoke_identity(move |address| {
+            dispatcher.send(Command::RevokeIdentity {
+                address: address.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_recover_identity(move |address| {
+            dispatcher.send(Command::RecoverIdentity {
+                address: address.to_string(),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_cancel_identity_change(move |ticket| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<chainvue_ui::IdentityState>()
+                    .set_change_ticket(0);
+            }
+            dispatcher.send(Command::CancelIdentityChange {
+                ticket: ticket_id(ticket),
+            });
+        });
+    }
+}
+
 fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     let actions = ui.global::<Actions>();
 
@@ -590,6 +801,7 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
             "receive" => ScreenId::Receive,
             "activity" => ScreenId::Activity,
             "nodes" => ScreenId::Nodes,
+            "identities" => ScreenId::Identities,
             "settings" => ScreenId::Settings,
             _ => ScreenId::Dashboard,
         };

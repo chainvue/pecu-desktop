@@ -530,6 +530,15 @@ pub struct SendReviewVm {
     pub from_address: String,
     /// True when we have never sent to this address before. Worth saying.
     pub first_time_recipient: bool,
+    /// The VerusID name this was addressed to, when it was addressed by name.
+    /// Empty for an address typed out.
+    ///
+    /// The outputs below carry the i-address, decoded from the signed bytes.
+    /// This is the *question* that produced it, and the review shows both:
+    /// somebody who typed `meineid@` cannot check an i-address they have never
+    /// seen, and somebody shown only the name is being asked to trust a lookup
+    /// they were not told happened.
+    pub recipient_name: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

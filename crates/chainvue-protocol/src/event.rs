@@ -7,8 +7,9 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, HistoryRowVm, KnownAddressVm, ListDelta, LockReason, NetworkVm, PendingVm,
-    PortfolioVm, SeedWordVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
+    ChartVm, HistoryRowVm, IdentityDetailVm, IdentityVm, KnownAddressVm, ListDelta, LockReason,
+    NetworkVm, PendingVm, PortfolioVm, RegistrationVm, SeedWordVm, SendOutcomeVm, SendReviewVm,
+    TaskKind, TxDetailVm, WalletVm,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +45,59 @@ pub enum Event {
     /// justifies taking the button away.
     HistoryExhausted(bool),
     Pending(ListDelta<PendingVm>),
+
+    /// The identities this wallet's keys control, and the ones somebody looked
+    /// up.
+    ///
+    /// **Two lists, deliberately.** They answer different questions — one is a
+    /// fact about your keys, the other is what you just asked about — and a
+    /// single list forces the heading over it to lie about one of them. It did:
+    /// a stranger's identity sat under "found by asking the chain which names
+    /// your keys control" until the wallet was restarted.
+    ///
+    /// An identity that is looked up and turns out to be yours appears in
+    /// `yours` only.
+    Identities {
+        yours: Vec<IdentityVm>,
+        looked_up: Vec<IdentityVm>,
+    },
+    /// A lookup that found nothing, or could not be answered. Carries what was
+    /// typed, so a reply arriving after the field moved on is discardable.
+    IdentityMissing {
+        typed: String,
+        reason: String,
+    },
+    /// A change to an identity, built and signed but not sent.
+    IdentityChangePrepared {
+        ticket: u64,
+        /// What it will do, in a sentence.
+        description: String,
+        fee_display: String,
+        /// Whether sending it needs a word typed first. Only a revocation does.
+        needs_confirmation: bool,
+    },
+    /// It was accepted by the network.
+    IdentityChanged {
+        txid: String,
+    },
+    /// Whether a name can be claimed, and what it would cost.
+    NameChecked {
+        name: String,
+        /// Empty when the name is fine. Otherwise why it is not.
+        problem: String,
+        /// The registration fee, formatted. Empty when it is not known yet.
+        fee_display: String,
+    },
+    /// How a registration in progress is doing. `None` when there is none.
+    Registration(Option<Box<RegistrationVm>>),
+    /// The detail sheet's contents. `None` closes it.
+    IdentityDetail(Option<Box<IdentityDetailVm>>),
+    /// A VDXF URI resolved to a key, and whether the open identity has it.
+    ContentKeyDerived {
+        uri: String,
+        key: String,
+        present: bool,
+    },
 
     SendValidation(DraftValidationVm),
     SendPrepared(SendReviewVm),
