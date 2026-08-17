@@ -29,6 +29,8 @@ use pecu_ui::{
     Actions, AppInfo, Motion, NetworkState, SeedState, SendState, Theme, WalletState,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 /// The endpoints Pecu ships with.
@@ -174,21 +176,100 @@ fn already_running() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Where an application keeps data on each of the three desktops.
+///
+/// A value rather than a `cfg`, and that is the point: with the platform
+/// gated at the `let`, two of these three branches are never compiled on any
+/// machine that builds this wallet, and the first time they are read by a
+/// compiler is on somebody else's computer. As data, all three type-check
+/// everywhere and all three are covered by tests here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Home {
+    /// `~/Library/Application Support/com.pecu.wallet`
+    MacOs,
+    /// `%APPDATA%\\Pecu`
+    Windows,
+    /// `$XDG_DATA_HOME/pecu`, falling back to `~/.local/share/pecu`
+    Xdg,
+}
+
+impl Home {
+    /// The one this build is for.
+    const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::MacOs
+    } else if cfg!(target_os = "windows") {
+        Self::Windows
+    } else {
+        Self::Xdg
+    };
+
+    /// Resolve against an environment, or `None` if it does not say enough.
+    ///
+    /// The environment is a parameter so the tests can hand it one that is not
+    /// this machine's — which is the only way the Windows and Linux answers get
+    /// checked from here at all.
+    fn resolve(self, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        match self {
+            // The reverse-DNS name is macOS's convention and stays here. On the
+            // other two it would be a macOS habit worn in the wrong place.
+            Self::MacOs => env("HOME")
+                .map(|home| PathBuf::from(home).join("Library/Application Support/com.pecu.wallet")),
+
+            // `APPDATA` is the roaming profile, which is what an installed
+            // application is expected to write to. `HOME` is deliberately not
+            // consulted: on Windows it is set by unix-shell ports and points
+            // somewhere no other application looks.
+            Self::Windows => env("APPDATA")
+                .map(|roaming| PathBuf::from(roaming).join("Pecu"))
+                .or_else(|| {
+                    env("USERPROFILE")
+                        .map(|profile| PathBuf::from(profile).join("AppData/Roaming/Pecu"))
+                }),
+
+            // Data rather than config: what lives under here is a vault and two
+            // databases, not preferences somebody might reasonably edit or
+            // check into a dotfiles repository.
+            //
+            // A relative `XDG_DATA_HOME` is ignored. The specification requires
+            // it to be absolute, and honouring a relative one would put a vault
+            // wherever the process happened to be started from.
+            Self::Xdg => env("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .or_else(|| env("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+                .map(|data| data.join("pecu")),
+        }
+    }
+}
+
 /// The application home, holding one directory per chain.
 ///
 /// Which chain's directory is opened inside it is [`Paths`]' decision, and the
-/// choice is remembered at the top of this one — see
-/// [`pecu_core::paths`] for why that is the one thing not kept per chain.
-fn home_dir() -> std::path::PathBuf {
-    std::env::var_os("PECU_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                std::path::PathBuf::from(home)
-                    .join("Library/Application Support/com.pecu.wallet")
-            })
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+/// choice is remembered at the top of this one — see [`pecu_core::paths`] for
+/// why that is the one thing not kept per chain.
+///
+/// `PECU_HOME` wins on every platform. It is what lets one machine hold a
+/// second wallet, and it is what the tests drive.
+fn home_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("PECU_HOME") {
+        return PathBuf::from(home);
+    }
+
+    // Wrapped rather than passed by name: `var_os` is generic over its key, so
+    // naming it directly gives the compiler one fixed lifetime where `resolve`
+    // asks for any.
+    Home::CURRENT.resolve(|key| std::env::var_os(key)).unwrap_or_else(|| {
+        // Nothing to derive a home from. The wallet still starts — every open
+        // below this fails on its own terms and says so, which is a better
+        // failure than refusing to launch — but it says so loudly, because a
+        // vault written relative to the working directory is one that vanishes
+        // the next time the application starts from somewhere else.
+        tracing::error!(
+            "no home directory could be determined from the environment; falling back to \
+             the working directory. Set PECU_HOME to choose one."
+        );
+        PathBuf::from(".")
+    })
 }
 
 /// Turn UI callbacks into commands.
@@ -1290,7 +1371,9 @@ fn log_dir() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::writable_log_directory;
+    use super::{Home, writable_log_directory};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
 
     #[test]
     fn a_log_directory_is_created_under_the_wallet_directory() {
@@ -1327,6 +1410,100 @@ mod tests {
             // Put it back, or the temporary directory cannot be cleaned up.
             std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
                 .expect("restore");
+        }
+    }
+
+    // ── Where the wallet lives on each desktop ──────────────────────────────
+    //
+    // These run on whatever machine builds this, and they check all three
+    // platforms — which is the reason `Home` is a value and not a `cfg`. Two
+    // of these three answers are otherwise never compiled here, let alone run.
+
+    /// An environment that is not this machine's.
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let owned: Vec<(String, OsString)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), OsString::from(*v)))
+            .collect();
+        move |key| {
+            owned
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    #[test]
+    fn macos_keeps_the_reverse_dns_name_under_application_support() {
+        let home = Home::MacOs.resolve(env_of(&[("HOME", "/Users/someone")]));
+        assert_eq!(
+            home,
+            Some(PathBuf::from(
+                "/Users/someone/Library/Application Support/com.pecu.wallet"
+            ))
+        );
+    }
+
+    #[test]
+    fn windows_uses_the_roaming_profile_and_a_plain_product_name() {
+        let home = Home::Windows.resolve(env_of(&[("APPDATA", r"C:\Users\someone\AppData\Roaming")]));
+        assert_eq!(
+            home,
+            Some(PathBuf::from(r"C:\Users\someone\AppData\Roaming").join("Pecu"))
+        );
+    }
+
+    /// The failure this whole change exists for.
+    ///
+    /// `HOME` is not set on Windows by the system — it is set by unix-shell
+    /// ports, and it points somewhere no other Windows application looks. The
+    /// previous implementation consulted it and nothing else, so on a plain
+    /// Windows install it fell through to the working directory and wrote a
+    /// vault next to whatever the process was started from.
+    #[test]
+    fn windows_does_not_answer_to_home() {
+        assert_eq!(Home::Windows.resolve(env_of(&[("HOME", "/home/someone")])), None);
+    }
+
+    #[test]
+    fn windows_falls_back_to_the_user_profile() {
+        let home = Home::Windows.resolve(env_of(&[("USERPROFILE", r"C:\Users\someone")]));
+        assert_eq!(
+            home,
+            Some(PathBuf::from(r"C:\Users\someone").join("AppData/Roaming/Pecu"))
+        );
+    }
+
+    #[test]
+    fn linux_prefers_xdg_data_home() {
+        let home = Home::Xdg.resolve(env_of(&[
+            ("XDG_DATA_HOME", "/home/someone/.local/share"),
+            ("HOME", "/home/someone"),
+        ]));
+        assert_eq!(home, Some(PathBuf::from("/home/someone/.local/share/pecu")));
+    }
+
+    #[test]
+    fn linux_falls_back_to_dot_local_share() {
+        let home = Home::Xdg.resolve(env_of(&[("HOME", "/home/someone")]));
+        assert_eq!(home, Some(PathBuf::from("/home/someone/.local/share/pecu")));
+    }
+
+    /// The specification requires an absolute `XDG_DATA_HOME`, and honouring a
+    /// relative one would put a vault wherever the process started.
+    #[test]
+    fn a_relative_xdg_data_home_is_ignored_in_favour_of_the_fallback() {
+        let home = Home::Xdg.resolve(env_of(&[
+            ("XDG_DATA_HOME", "relative/share"),
+            ("HOME", "/home/someone"),
+        ]));
+        assert_eq!(home, Some(PathBuf::from("/home/someone/.local/share/pecu")));
+    }
+
+    #[test]
+    fn an_environment_that_says_nothing_resolves_to_nothing() {
+        for platform in [Home::MacOs, Home::Windows, Home::Xdg] {
+            assert_eq!(platform.resolve(env_of(&[])), None, "{platform:?}");
         }
     }
 }
