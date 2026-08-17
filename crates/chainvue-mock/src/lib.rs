@@ -77,6 +77,35 @@ pub struct MockState {
     /// the answer. A scripted chain that refuses the question leaves that whole
     /// path unreachable without a real node.
     pub identities: BTreeMap<String, IdentityRecord>,
+    /// Identity output scripts, keyed by the display hex of the transaction
+    /// holding them.
+    ///
+    /// # Why a script and not a flag
+    ///
+    /// Because the launch flow reads the identity **from the chain's own
+    /// bytes**, not from the JSON `getidentity` returns — deliberately, since
+    /// the JSON is a rendering and the output is what gets spent. So
+    /// `getrawtransaction` has to answer with a real pay-to-identity script or
+    /// nothing downstream of it exists: no launch can be built, and the review
+    /// screen that spends two hundred coins is unreachable without a node.
+    ///
+    /// Keyed by transaction rather than by identity because that is the
+    /// question being answered — `raw_transaction` is handed a txid and knows
+    /// nothing about whose it is.
+    pub identity_outputs: BTreeMap<String, String>,
+    /// How many times something asked this chain to broadcast.
+    ///
+    /// Every one of them failed — see the [`Broadcaster`] impl — but "it failed"
+    /// and "it was never attempted" are different claims, and the flows that
+    /// must not reach the network are only proven by the second.
+    pub broadcast_attempts: usize,
+    /// Currencies this chain knows, keyed by fully qualified name.
+    ///
+    /// Deliberately fewer than there are identities: a currency is a flag on an
+    /// identity, and the screen's whole job is telling the two apart. A script
+    /// where every identity had one would never render the picker that offers
+    /// the ones that do not.
+    pub currencies: BTreeMap<String, CurrencySummary>,
     /// Latency to simulate on every call, so loading states are reachable.
     pub latency: std::time::Duration,
     /// When set, every read fails with this, so error states are reachable too.
@@ -94,6 +123,9 @@ impl Default for MockState {
             mempool: BTreeMap::new(),
             coinbase: BTreeSet::new(),
             identities: BTreeMap::new(),
+            identity_outputs: BTreeMap::new(),
+            broadcast_attempts: 0,
+            currencies: BTreeMap::new(),
             latency: std::time::Duration::from_millis(140),
             fail_reads: None,
         }
@@ -249,11 +281,26 @@ impl MockChain {
         };
 
         seed_identities(&mut state, address);
+        seed_launchable_identity(&mut state, address)?;
+        seed_currencies(&mut state);
 
         state.utxos.insert(address.clone(), utxos);
         state.deltas.insert(address.clone(), deltas);
         state.mempool.insert(address.clone(), vec![incoming]);
         Ok(Self::new(state))
+    }
+
+    /// How many times something asked this chain to broadcast.
+    ///
+    /// Zero is the assertion worth making: a flow that takes a reader and no
+    /// broadcaster cannot send, and this is how that stops being an argument
+    /// about types and starts being a measurement. A poisoned lock reads as
+    /// `usize::MAX` rather than as zero, so a test cannot pass because the
+    /// state was unreadable.
+    pub fn broadcast_attempts(&self) -> usize {
+        self.state
+            .lock()
+            .map_or(usize::MAX, |state| state.broadcast_attempts)
     }
 
     /// Read the script, applying the configured latency first so that loading
@@ -316,6 +363,12 @@ impl Broadcaster for MockChain {
     /// said no. It is also exactly true here: nothing was spent, nothing is in
     /// flight, and there is nothing to resolve.
     fn send_raw_transaction(&self, _hex: &str) -> Result<String, RpcError> {
+        // Counted before it is refused. A flow that must not reach the network
+        // is only shown not to have by a counter that stays at zero — "it
+        // failed" would be satisfied by a wallet that tried.
+        if let Ok(mut state) = self.state.lock() {
+            state.broadcast_attempts += 1;
+        }
         Err(RpcError::Node {
             code: -26,
             message: "this build is running against a scripted chain, which has \
@@ -432,15 +485,62 @@ impl ChainReader for MockChain {
                 // VRSCTEST's real figure when this was written.
                 id_registration_fee: Amount::from_sat(100 * 100_000_000),
                 id_referral_levels: 3,
-                id_import_fee: Amount::ZERO,
-                currency_registration_fee: Amount::ZERO,
+                // VRSCTEST's real figures. Both were `ZERO` while nothing read
+                // them, which made the launch panel show a currency that cost
+                // nothing — the one number on that screen somebody has to see
+                // before they agree to it.
+                //
+                // They are four orders of magnitude apart on purpose: a token
+                // or a basket pays `currency_registration_fee`, an NFT pays
+                // `id_import_fee`, and a demo where the two were the same would
+                // hide a wallet that read the wrong one.
+                //
+                // Both are VRSCTEST's own figures, read off the chain rather
+                // than chosen: `idimportfees = 0.02` and
+                // `currencyregistrationfee = 200.0`. Note that the JSON also
+                // carries `currencyimportfee = 100.0`, which is a *different*
+                // field and not the one an NFT launch is charged — the SDK
+                // reads `id_import_fee`, confirmed against the two NFT launches
+                // that exist on VRSCTEST.
+                id_import_fee: Amount::from_sat(2_000_000),
+                currency_registration_fee: Amount::from_sat(200 * 100_000_000),
                 proof_protocol: 1,
             })
         })
     }
 
-    fn currency_definition(&self, _name_or_id: &str) -> Result<CurrencySummary, RpcError> {
-        Err(unsupported("getcurrency"))
+    /// A currency, by name or by the i-address it shares with its identity.
+    ///
+    /// # The miss is `-8`, and this script once said `-5`
+    ///
+    /// Measured against `api.verustest.net`: `getcurrency` answers a miss with
+    /// **`-8` "Invalid currency or currency not found"**, while `getidentity`
+    /// answers one with `-5`. Two methods, two codes.
+    ///
+    /// This script was written to return `-5`, because the wallet had been
+    /// written to expect `-5` — and so the demo agreed with the wallet and both
+    /// were wrong. Against a real node every identity came back "the node would
+    /// not say", nothing was selectable, and the screen looked like it worked.
+    ///
+    /// **A scripted chain built from an assumption can only confirm it.** That
+    /// is the general lesson and this is where it cost something: what a script
+    /// answers has to be measured against a node, not derived from what the
+    /// caller happens to believe.
+    fn currency_definition(&self, name_or_id: &str) -> Result<CurrencySummary, RpcError> {
+        self.read(|s| {
+            s.currencies
+                .values()
+                .find(|c| {
+                    c.currency_id == name_or_id
+                        || c.name == name_or_id
+                        || c.fully_qualified_name == name_or_id
+                })
+                .cloned()
+                .ok_or_else(|| RpcError::Node {
+                    code: -8,
+                    message: "Invalid currency or currency not found".to_string(),
+                })
+        })
     }
 
     fn estimate_conversion(
@@ -458,7 +558,7 @@ impl ChainReader for MockChain {
     }
 
     fn list_currencies(&self) -> Result<Vec<CurrencySummary>, RpcError> {
-        self.read(|_| Ok(Vec::new()))
+        self.read(|s| Ok(s.currencies.values().cloned().collect()))
     }
 
     fn currency_converters(
@@ -591,11 +691,20 @@ impl ChainReader for MockChain {
         Err(unsupported("verifymessage"))
     }
 
-    /// Enough shape for the SDK's maturity check, and honest about the rest.
+    /// Enough shape for the SDK's maturity check and for reading an identity
+    /// out of the chain's own bytes, and honest about the rest.
     ///
-    /// `spendable` reads exactly one thing here: whether the first input has a
-    /// `coinbase` field. Answering that is what makes mined-but-immature coins
-    /// reachable in the demo, so the dashboard's three numbers can differ.
+    /// Two callers, two different questions. `spendable` reads exactly one
+    /// thing: whether the first input has a `coinbase` field. Answering that is
+    /// what makes mined-but-immature coins reachable in the demo, so the
+    /// dashboard's three numbers can differ.
+    ///
+    /// The launch flow asks something else entirely — for the **output** an
+    /// identity is held in, which it decodes rather than trusting the JSON
+    /// `getidentity` returned. A `vout` appears only for the transactions this
+    /// script actually placed an identity in; inventing one for every txid would
+    /// answer a question about a transaction that holds no identity, which no
+    /// daemon does.
     fn raw_transaction(&self, txid: &str) -> Result<serde_json::Value, RpcError> {
         self.read(|s| {
             let vin = if s.coinbase.contains(txid) {
@@ -603,7 +712,13 @@ impl ChainReader for MockChain {
             } else {
                 serde_json::json!([{ "txid": txid, "vout": 0 }])
             };
-            Ok(serde_json::json!({ "txid": txid, "vin": vin, "mock": true }))
+            let mut tx = serde_json::json!({ "txid": txid, "vin": vin, "mock": true });
+            if let Some(script) = s.identity_outputs.get(txid) {
+                tx["vout"] = serde_json::json!([
+                    { "valueSat": 0, "scriptPubKey": { "hex": script } }
+                ]);
+            }
+            Ok(tx)
         })
     }
 
@@ -698,6 +813,220 @@ fn seed_identities(state: &mut MockState, address: &str) {
     );
 }
 
+/// Add the one identity in the script that a currency can actually be launched
+/// from, with the chain-side bytes that makes possible.
+///
+/// # Why none of the four above will do
+///
+/// They are the states the *Identities* screen needs, and every one of them is
+/// disqualified here: `demo@` already defines a currency, `vault@` is
+/// timelocked, `gone@` is revoked, `stranger@` is not this wallet's. A script
+/// made of those renders a picker in which nothing can be chosen — which is a
+/// state worth being able to show, and a poor one to only ever show.
+///
+/// # Why this one's address is derived and theirs are borrowed
+///
+/// Theirs are real VRSCTEST i-addresses, taken so anything that parses one gets
+/// a valid address. That is enough for every screen that only reads them. It is
+/// not enough here: the launch builder recomputes `identity_id(name, parent)`
+/// and refuses a definition whose identity does not match, so a borrowed
+/// address belonging to a differently-named identity fails at the last step
+/// with a message about neither. Derived, the script agrees with the chain's
+/// own arithmetic.
+///
+/// # Errors
+///
+/// If the primary address is not a transparent one, or the identity's own
+/// output script cannot be built.
+fn seed_launchable_identity(state: &mut MockState, primary: &str) -> Result<(), RpcError> {
+    // The same name as the one identity Phase 5 registered on VRSCTEST for
+    // real, and for the same reason it is useful there: `getcurrency "maker"`
+    // answering `-8` is the measurement this whole screen was corrected by.
+    // Nothing here reaches that chain — this identity is derived from the
+    // script's own parent, and the script has no network.
+    const NAME: &str = "maker";
+
+    let parent: Address = state
+        .chain_id
+        .parse()
+        .map_err(|_| unsupported("a chain id that is not an address"))?;
+    let primary_hash = primary
+        .parse::<Address>()
+        .map_err(|_| unsupported("a primary address that is not an address"))?
+        .hash();
+
+    let id_hash = verus_sdk::identity::identity_id(NAME, Some(parent.hash()));
+    let id_address = Address::new(verus_sdk::verus_keys::AddressKind::Identity, id_hash);
+
+    // The identity as the chain holds it. `revocation`/`recovery` point at
+    // itself, which is what a freshly registered identity looks like and what
+    // the JSON below already says.
+    let held = verus_sdk::identity::Identity {
+        version: 3,
+        flags: 0,
+        primary_addresses: vec![verus_sdk::decode::Destination::PubKeyHash(primary_hash)],
+        min_sigs: 1,
+        parent: parent.hash(),
+        name: NAME.to_string(),
+        content_multimap: Vec::new(),
+        content_map: Vec::new(),
+        revocation_authority: id_hash,
+        recovery_authority: id_hash,
+        private_addresses: Vec::new(),
+        system_id: parent.hash(),
+        unlock_after: 0,
+    };
+    let script = verus_sdk::identity::identity_primary_script(
+        id_hash,
+        held.to_bytes()
+            .map_err(|_| unsupported("an identity that will not serialise"))?,
+        held.revocation_authority,
+        held.recovery_authority,
+        held.has_tokenized_control(),
+    )
+    .map_err(|_| unsupported("an identity output script that will not build"))?;
+
+    // Its own transaction, because `raw_transaction` is asked by txid and has
+    // no other way to tell whose output it is being asked about.
+    let holding = fixture_txid(21);
+    let mut record = identity(
+        &format!("{NAME}.{}@", state.chain_name),
+        &id_address.to_string(),
+        primary,
+        0,
+        0,
+    );
+    record.outpoint = (holding, 0);
+
+    state
+        .identity_outputs
+        .insert(holding.to_display_hex(), hex_of(&script));
+    state.identities.insert(format!("{NAME}@"), record);
+    Ok(())
+}
+
+/// Bytes as lowercase hex, the way a daemon writes a script.
+///
+/// Hand-rolled rather than pulling in the `hex` crate for one call: this is the
+/// only place in this crate that needs it, and a dependency added to a crate
+/// whose dependency list *is* its security property is a dependency that has to
+/// be argued for.
+fn hex_of(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+/// Currencies that belong to nobody in this script, for the reserve picker.
+///
+/// The picker lists **every** currency the chain knows about, not only the ones
+/// this wallet's identities define — a basket's reserves are usually somebody
+/// else's currency, and a scripted chain with two of them would show a picker
+/// that looks broken.
+///
+/// All three are read out of the SDK's own recorded `listcurrencies` reply for
+/// VRSCTEST: real names, real i-addresses, real options bits. Inventing them
+/// would have meant inventing an options bitfield, and the kind shown beside
+/// each row is read off exactly that.
+const OTHERS: [(&str, &str, u32, u32); 3] = [
+    // The chain's own currency, which is the reserve almost every basket has.
+    ("VRSCTEST", "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq", 264, 0),
+    // A basket, so the picker's kind pill has something other than Token in it.
+    (
+        "kneipe-veth-vrsctest-usdt-basket",
+        "iRqPwMWVawLy5uNsv6UPUjtEhmnX63rtGZ",
+        33,
+        218_100,
+    ),
+    // An NFT.
+    (
+        "stamp137",
+        "iJMWZJ9KMTpado8MqdcGsCwDtWC8qqYvUP",
+        34,
+        1_159_182,
+    ),
+];
+
+/// Seed the currencies this chain knows about.
+///
+/// **Two of the four identities, not all of them.** The Currencies screen shows
+/// what your identities define beside what they could still define, and a
+/// script where every identity had a currency would never render the second
+/// half — which is where the launch flow starts.
+///
+/// Two kinds rather than two of the same: a fixed-supply token and a mintable
+/// basket, so the row's "mintable" and the kind pill both have something to
+/// disagree about. `vault@` and `gone@` are deliberately left without one.
+///
+/// The i-addresses are the identities' own, because that is what a currency's
+/// address **is** — a script where they differed would describe a chain that
+/// cannot exist.
+fn seed_currencies(state: &mut MockState) {
+    for (name, currency_id, options, proof_protocol, start_block) in [
+        (
+            "demo.VRSCTEST",
+            "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv",
+            // TOKEN
+            0x20_u32,
+            1_u32,
+            1_170_000_u32,
+        ),
+        (
+            "stranger.VRSCTEST",
+            "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr",
+            // TOKEN | FRACTIONAL — a basket, and a centralized one.
+            0x21,
+            2,
+            1_171_402,
+        ),
+    ] {
+        state.currencies.insert(
+            name.to_string(),
+            CurrencySummary {
+                currency_id: currency_id.to_string(),
+                name: name.split('.').next().unwrap_or(name).to_string(),
+                fully_qualified_name: name.to_string(),
+                parent: Some(state.chain_name.clone()),
+                system_id: state.chain_id.clone(),
+                start_block,
+                end_block: 0,
+                options,
+                proof_protocol,
+                // The untyped tail. Left null rather than invented: the wallet
+                // reads the typed fields, and a hand-written blob here would be
+                // a shape nothing verified against a daemon.
+                definition: serde_json::Value::Null,
+            },
+        );
+    }
+
+    for (name, currency_id, options, start_block) in OTHERS {
+        state.currencies.insert(
+            name.to_string(),
+            CurrencySummary {
+                currency_id: currency_id.to_string(),
+                name: name.to_string(),
+                fully_qualified_name: name.to_string(),
+                // A root chain is defined under nothing, which is what makes
+                // VRSCTEST the one entry here without a parent.
+                parent: if name == state.chain_name {
+                    None
+                } else {
+                    Some(state.chain_name.clone())
+                },
+                system_id: state.chain_id.clone(),
+                start_block,
+                end_block: 0,
+                options,
+                proof_protocol: 1,
+                definition: serde_json::Value::Null,
+            },
+        );
+    }
+}
+
 /// One string out of a scripted identity object, or empty.
 fn text_field(identity: &serde_json::Value, key: &str) -> String {
     identity[key].as_str().unwrap_or_default().to_string()
@@ -720,6 +1049,17 @@ fn number_field(identity: &serde_json::Value, key: &str) -> u32 {
 /// are scripted, because the two look identical in a struct and behave nothing
 /// alike on screen.
 fn identity(name: &str, address: &str, primary: &str, flags: u32, timelock: u32) -> IdentityRecord {
+    // `getidentity` answers with the **name component alone** — `demo`, not
+    // `demo.VRSCTEST@`. The SDK says so on `IdentityAtAddress::name`, and the
+    // wallet qualifies it itself with the chain's name.
+    //
+    // This script used to put the qualified form in both places, so every row
+    // on the demo build's Identities screen read `demo.VRSCTEST@.VRSCTEST@` —
+    // and nothing failed, because no test compared a name against one the
+    // wallet had built. The same rule as the `-8` miss: what a script answers
+    // is measured against a daemon, not against what reads well here.
+    let bare = name.trim_end_matches('@').split('.').next().unwrap_or(name);
+
     IdentityRecord {
         fully_qualified_name: name.to_string(),
         identity_address: address.to_string(),
@@ -734,7 +1074,7 @@ fn identity(name: &str, address: &str, primary: &str, flags: u32, timelock: u32)
         // The whole object, in the shape `getidentity` returns it — the same
         // shape `content_multimap` and the timelock reader are written against.
         identity: serde_json::json!({
-            "name": name,
+            "name": bare,
             "identityaddress": address,
             "parent": "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq",
             "systemid": "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq",

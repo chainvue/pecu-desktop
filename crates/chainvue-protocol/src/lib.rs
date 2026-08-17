@@ -35,11 +35,14 @@ pub use error::{Severity, UiAction, UiError};
 pub use event::Event;
 pub use format::{coins, coins_u64};
 pub use models::{
-    AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, DraftValidationVm,
-    HistoryRowVm, IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, ListDelta,
-    LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm, Reachability, RegistrationVm,
-    ReviewOutputVm, ScreenId, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind,
-    TxDetailVm, TxDirection, WalletVm,
+    AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, CurrencyChoicesVm,
+    CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm, CurrencyProblemVm,
+    CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
+    IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
+    LaunchReviewVm, ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm,
+    PreallocationDraft, Reachability, RegistrationVm, ReserveDraft, ReviewOutputVm, ScreenId,
+    SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, TxDirection,
+    WalletVm,
 };
 pub use secret::Secret;
 

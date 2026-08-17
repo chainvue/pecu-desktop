@@ -132,6 +132,127 @@ export struct IdentityRow {
     mine: bool,
 }
 
+// One currency this wallet's identities define.
+//
+// A currency's address IS the address of the identity of the same name — they
+// are one object on the chain wearing two hats — which is why this list is read
+// through the identity list rather than fetched on its own.
+export struct CurrencyRow {
+    // As the chain spells it, dotted with its parent. NO trailing `@`: that
+    // suffix belongs to identities, and no currency on VRSCTEST carries one.
+    name: string,
+    address: string,
+    // "Token" | "Basket" | "NFT", read off the options bitfield rather than
+    // guessed from which fields happen to be filled in.
+    kind: string,
+    tone: string,
+    // What the kind means, for somebody who did not define it. Empty for a
+    // plain token, where the label already says everything.
+    note: string,
+    // Whether the supply can still grow. A permanent property, and a different
+    // promise to whoever holds it.
+    mintable: bool,
+    start-block: string,
+    // Whether it has reached that block. False for the window between the
+    // definition being mined and the currency beginning — where a freshly
+    // launched one sits, doing nothing, for twenty-odd minutes.
+    started: bool,
+}
+
+// An identity that could define a currency, and whether it still can.
+//
+// Rows with a `refusal` are shown rather than hidden: the commonest reason is
+// permanent — an identity may define one currency, once — and a name missing
+// from a picker with no explanation reads as a bug to the person who registered
+// it for exactly this.
+export struct EligibleIdentity {
+    name: string,
+    address: string,
+    // Empty when it may be used. Otherwise why not, in a sentence.
+    refusal: string,
+}
+
+// One slice of a proportional bar: a reserve's weight, or a share of supply.
+//
+// `percent` is a number rather than a string, which is the exception to this
+// crate's rule that figures cross pre-formatted. It is not an amount — nobody
+// reads it — it is what the layout multiplies a width by. The string beside it
+// is the one a person reads, and core computes both so the picture and the
+// caption cannot disagree.
+export struct CurrencySlice {
+    label: string,
+    percent: float,
+    // Where it starts along the bar, 0–100. Carried rather than accumulated
+    // here — see `CurrencySliceVm`, and see `ProportionBar` for why the slices
+    // are placed by hand rather than laid out.
+    offset-percent: float,
+    percent-display: string,
+    // "accent" | "positive" | "warning" | "neutral", cycled so two adjacent
+    // slices never share a colour.
+    tone: string,
+}
+
+// One reserve of a basket, as typed. Editable, so it lives in an `in-out`
+// model the form writes back into.
+// One currency somebody could pick as a reserve. See `CurrencyPickVm`.
+export struct CurrencyPick {
+    // Fully qualified, the way the chain spells it.
+    name: string,
+    // Its i-address, which is what the definition carries.
+    address: string,
+    kind: string,
+    // Something worth knowing before it is used as a reserve, or empty.
+    note: string,
+}
+
+export struct ReserveEntry {
+    // The reserve's i-address. Chosen from the chain's list rather than typed:
+    // a definition carries the address, and a name in this field failed the
+    // build after the launch had already been agreed to.
+    currency: string,
+    // What that address is called, for reading. Nobody can check an i-address
+    // by eye against the currency they meant.
+    name: string,
+    // A percentage, as typed. A string because the constraint on it is a sum:
+    // consensus wants the set to add to exactly one whole, and a value rounded
+    // on the way through would move the total off by a satoshi.
+    weight: string,
+}
+
+// One preallocation, as typed.
+export struct PreallocEntry {
+    // An identity — consensus pays a preallocation to a name, not an address.
+    recipient: string,
+    amount: string,
+}
+
+// One line of the definition preview.
+export struct CurrencyField {
+    label: string,
+    value: string,
+    // Cannot be changed after the launch. The mark is the whole reason this
+    // panel is on screen — everything else here is also in the form above it.
+    permanent: bool,
+}
+
+// Something wrong with a draft, or something permanent about to happen.
+export struct CurrencyProblem {
+    // True stops the launch. False only has to be read.
+    blocking: bool,
+    text: string,
+}
+
+// One step of the launch, for the diagram that says what happens next.
+export struct FlowStep {
+    label: string,
+    // "done" | "now" | "later"
+    state: string,
+    // Whether reaching this step spends money. Marked, because two of the four
+    // do and a diagram that treats them all alike is a diagram that lied about
+    // the one somebody wanted to stop before.
+    costs: bool,
+}
+
 // One published value in an identity's content map.
 //
 // Flattened: one row per value, and the key fields are filled only on the first

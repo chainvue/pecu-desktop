@@ -92,6 +92,16 @@ impl Paths {
         self.dir.join("registration.json")
     }
 
+    /// A currency somebody decided to make, held across the identity
+    /// registration it is waiting on.
+    ///
+    /// Beside the reservation because the two are halves of one act on the path
+    /// that starts from a new name — and because both describe one chain, so
+    /// both move when the chain does.
+    pub fn launch(&self) -> PathBuf {
+        self.dir.join("launch.json")
+    }
+
     /// The chain somebody last chose, if this home has been used before.
     ///
     /// `None` covers three cases that all deserve the same answer — never
@@ -142,6 +152,7 @@ mod tests {
             (test.vault(), main.vault()),
             (test.pending(), main.pending()),
             (test.registration(), main.registration()),
+            (test.launch(), main.launch()),
         ] {
             assert_ne!(a, b);
         }

@@ -171,9 +171,26 @@ export component Segmented inherits Rectangle {
             // A focus ring, because a control that can be reached by keyboard
             // and shows nothing when it is reached cannot be operated by
             // keyboard in practice.
-            Rectangle {
+            //
+            // **Inset, unlike every other ring in this file.** The rule
+            // elsewhere is to draw outside the shape so the ring never covers
+            // what it points at — but this root sets `clip: true` for the
+            // sliding highlight, so an outside ring on the first or last
+            // segment is sliced off at the control's edge and the two ends stop
+            // matching. Inside, and clear of the highlight's own 1px border by
+            // enough that the two do not stack into a smear.
+            //
+            // And only while the keyboard is driving. Shown on mouse focus it
+            // stayed lit on whichever segment was last clicked — which is
+            // always the selected one, so the control looked like it had a
+            // permanent halo rather than a focus state.
+            if focus.has-focus && InputMode.keyboard: Rectangle {
+                x: 5px;
+                y: 5px;
+                width: parent.width - 10px;
+                height: parent.height - 10px;
                 border-radius: R.sm;
-                border-width: focus.has-focus ? 2px : 0px;
+                border-width: 2px;
                 border-color: Theme.accent-ring;
             }
 

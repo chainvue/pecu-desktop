@@ -7,9 +7,10 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, HistoryRowVm, IdentityDetailVm, IdentityVm, KnownAddressVm, ListDelta, LockReason,
-    NetworkVm, PendingVm, PortfolioVm, RegistrationVm, SeedWordVm, SendOutcomeVm, SendReviewVm,
-    TaskKind, TxDetailVm, WalletVm,
+    ChartVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm, HistoryRowVm,
+    IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
+    ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, RegistrationVm, SeedWordVm,
+    SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +22,10 @@ pub enum Event {
     Appearance {
         dark: bool,
         reduce_motion: bool,
+        /// The size the window was last left at, in logical pixels, or `None`
+        /// for a wallet that has never been resized. Applied before the window
+        /// is shown, so there is no frame at the default size first.
+        window: Option<(u32, u32)>,
     },
     /// Who this wallet has paid, and what they have been named.
     AddressBook(Vec<KnownAddressVm>),
@@ -104,6 +109,35 @@ pub enum Event {
         key: String,
         present: bool,
     },
+
+    /// The currencies this wallet's identities define, and the identities that
+    /// could still define one.
+    ///
+    /// One event carrying both, because they are two readings of the same walk:
+    /// every identity either has a currency or is eligible for one. Sending
+    /// them separately would let the two halves describe wallets a second
+    /// apart, and the picker would offer a name the list above it had just
+    /// shown as taken.
+    Currencies {
+        yours: Vec<CurrencyVm>,
+        eligible: Vec<EligibleIdentityVm>,
+    },
+    /// What core makes of the draft being configured, including the numbers the
+    /// bars and the preview are drawn from.
+    CurrencyDraftChecked(Box<CurrencyDraftVm>),
+    /// What the chain's currency list holds that matches the picker's search.
+    CurrencyChoices(Box<CurrencyChoicesVm>),
+    /// A currency waiting for its identity, or waiting to be defined under one
+    /// that already landed. `None` when there is none.
+    ///
+    /// Carries the identity's name and which of the two it is waiting on, which
+    /// is the difference between "this may still be abandoned for free" and
+    /// "an identity has been paid for and nothing has been made with it".
+    LaunchPending(Option<Box<LaunchPendingVm>>),
+    /// A launch built and signed but not sent. `None` closes the review.
+    LaunchPrepared(Option<Box<LaunchReviewVm>>),
+    /// It reached the network.
+    LaunchDone(Box<LaunchDoneVm>),
 
     SendValidation(DraftValidationVm),
     SendPrepared(SendReviewVm),

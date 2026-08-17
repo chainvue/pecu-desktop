@@ -187,6 +187,16 @@ pub const CASES: &[Case] = &[
         "claiming-a-name",
         crate::fixtures::claiming_a_name,
     ),
+    (
+        "identities",
+        "claiming-authority",
+        crate::fixtures::claiming_authority,
+    ),
+    (
+        "identities",
+        "claiming-review",
+        crate::fixtures::claiming_review,
+    ),
     ("identities", "registering", crate::fixtures::registering),
     (
         "identities",
@@ -207,5 +217,62 @@ pub const CASES: &[Case] = &[
         "identities",
         "identity-authorities",
         crate::fixtures::identity_authorities,
+    ),
+    ("currencies", "currencies", crate::fixtures::currencies),
+    (
+        "currencies",
+        "currency-kind",
+        crate::fixtures::currency_kind,
+    ),
+    (
+        "currencies",
+        "currency-identity",
+        crate::fixtures::currency_identity,
+    ),
+    (
+        "currencies",
+        "currency-form",
+        crate::fixtures::defining_currency,
+    ),
+    ("currencies", "currency-nft", crate::fixtures::currency_nft),
+    (
+        "currencies",
+        "currency-reserve-picker",
+        crate::fixtures::currency_reserve_picker,
+    ),
+    (
+        "currencies",
+        "currency-review",
+        crate::fixtures::currency_review,
+    ),
+    (
+        "currencies",
+        "currency-authority",
+        crate::fixtures::currency_authority,
+    ),
+    (
+        "currencies",
+        "currency-weights-wrong",
+        crate::fixtures::currency_weights_wrong,
+    ),
+    (
+        "currencies",
+        "launch-review",
+        crate::fixtures::launching_currency,
+    ),
+    (
+        "currencies",
+        "currency-new-name",
+        crate::fixtures::claiming_a_name_for_a_currency,
+    ),
+    (
+        "currencies",
+        "launch-pending",
+        crate::fixtures::launch_pending,
+    ),
+    (
+        "currencies",
+        "currencies-empty",
+        crate::fixtures::currencies_empty,
     ),
 ];

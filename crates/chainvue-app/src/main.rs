@@ -16,6 +16,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod instance;
 
 use chainvue_chain::{Network, Node};
 use chainvue_core::paths::Paths;
@@ -27,7 +28,8 @@ use chainvue_ui::prelude::*;
 use chainvue_ui::{
     Actions, AppInfo, Motion, NetworkState, SeedState, SendState, Theme, WalletState,
 };
-use slint::{Model, SharedString};
+use slint::{Model, ModelRc, SharedString, VecModel};
+use std::rc::Rc;
 
 /// The endpoints ChainVue ships with.
 ///
@@ -59,6 +61,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // that stopped following the wallet halfway through a session would be worse
     // than one covering both chains.
     let _logging = init_tracing(&home);
+
+    // Before anything is opened. `instance::acquire` explains what two copies
+    // of this application do to the three files that record money already
+    // spent; the short version is that the second one wins and the first one's
+    // record is gone.
+    //
+    // Bound to a named variable, held to the end of `main`: the lock lives as
+    // long as the file descriptor, and `_` would drop it here.
+    let _instance = match instance::acquire(&home) {
+        Ok(guard) => Some(guard),
+        Err(instance::Busy::AlreadyRunning) => return already_running(),
+        // The lock could not be taken at all, which is not a reason to refuse
+        // somebody their wallet — see `instance::acquire`.
+        Err(instance::Busy::NoLockFile) => None,
+    };
 
     // Built by hand rather than via `#[tokio::main]`, so the main thread stays
     // free for Slint. Held for the life of the process: dropping it would abort
@@ -135,6 +152,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Say so, and stop.
+///
+/// A window rather than a line on stderr, because an application launched from
+/// the Finder has no stderr and a silent exit looks exactly like a crash — see
+/// `AlreadyRunning`.
+fn already_running() -> Result<(), Box<dyn std::error::Error>> {
+    tracing::warn!("a second instance was started; refusing");
+    let window = chainvue_ui::AlreadyRunning::new()?;
+    {
+        let weak = window.as_weak();
+        window.on_dismissed(move || {
+            if let Some(window) = weak.upgrade() {
+                let _ = window.hide();
+            }
+            let _ = slint::quit_event_loop();
+        });
+    }
+    window.show()?;
+    slint::run_event_loop()?;
+    Ok(())
+}
+
 /// The application home, holding one directory per chain.
 ///
 /// Which chain's directory is opened inside it is [`Paths`]' decision, and the
@@ -166,6 +205,9 @@ fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_backup(ui, &dispatcher);
     wire_send(ui, &dispatcher);
     wire_identity(ui, &dispatcher);
+    wire_currency(ui, &dispatcher);
+    wire_reserve_picker(ui, &dispatcher);
+    wire_launch(ui, &dispatcher);
     wire_settings(ui, &dispatcher);
     wire_shell(ui, dispatcher);
 }
@@ -514,6 +556,327 @@ fn ticket_id(ticket: i32) -> u64 {
 /// Nothing here can be handed a secret: reading an identity needs no key, and
 /// the write operations that will need one are not built yet. When they are,
 /// they belong beside `wire_wallet`, not here.
+/// The currency reads.
+///
+/// Its own function rather than more of `wire_identity`, even though a currency
+/// is an identity: these are two screens, and one wiring function that grew
+/// past a hundred lines is one nobody reads to the end. Nothing here signs
+/// anything — defining a currency is a later step and is not wired yet.
+/// Every reserve address already in the draft, apart from the row being chosen
+/// for.
+///
+/// Read off the interface rather than out of the core's copy of the draft: that
+/// copy may be a debounce behind what is on screen, and a picker built from it
+/// would offer a currency added to the basket half a second ago — which the same
+/// core then refuses as a duplicate.
+fn reserves_taken(ui: &AppWindow, except: i32) -> Vec<String> {
+    ui.global::<chainvue_ui::CurrencyState>()
+        .get_reserve_rows()
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| i32::try_from(*index) != Ok(except))
+        .map(|(_, row)| row.currency.to_string())
+        .filter(|address| !address.trim().is_empty())
+        .collect()
+}
+
+/// Open the picker for one reserve row, on the start of the list.
+fn open_reserve_picker(ui: &AppWindow, dispatcher: &Dispatcher, row: i32) {
+    let state = ui.global::<chainvue_ui::CurrencyState>();
+    state.set_picking_reserve(row);
+    state.set_choices_query(SharedString::new());
+    dispatcher.send(Command::SearchCurrencies {
+        query: String::new(),
+        exclude: reserves_taken(ui, row),
+    });
+}
+
+/// Choosing a reserve out of the chain's own currency list.
+///
+/// Its own function because `wire_currency` was already long, and because this
+/// is the half of the reserve rows that talks to the chain rather than to the
+/// draft — the same split `wire_send` and `wire_launch` follow.
+fn wire_reserve_picker(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let actions = ui.global::<Actions>();
+
+    // Choosing a reserve out of what the chain has.
+    //
+    // The exclusions are read here rather than in the core: the draft the core
+    // last saw may be a debounce behind what is on screen, and offering a
+    // currency that was added to the basket half a second ago would be offering
+    // a duplicate the same core then refuses.
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_search_currencies(move |query| {
+            if let Some(ui) = weak.upgrade() {
+                let picking = ui
+                    .global::<chainvue_ui::CurrencyState>()
+                    .get_picking_reserve();
+                dispatcher.send(Command::SearchCurrencies {
+                    query: query.to_string(),
+                    exclude: reserves_taken(&ui, picking),
+                });
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_choose_reserve(move |index, name, address| {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::CurrencyState>();
+                let mut rows: Vec<chainvue_ui::ReserveEntry> =
+                    state.get_reserve_rows().iter().collect();
+                if let Ok(index) = usize::try_from(index) {
+                    if let Some(row) = rows.get_mut(index) {
+                        row.currency = address;
+                        row.name = name;
+                    }
+                }
+                state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+            }
+        });
+    }
+}
+
+fn wire_currency(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let actions = ui.global::<Actions>();
+
+    {
+        // Marks the walk as running here rather than waiting for the core to
+        // say so: the request goes out immediately and the button has to stop
+        // being pressable in the same frame. `apply_currencies` clears it.
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_refresh_currencies(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<chainvue_ui::CurrencyState>().set_busy(true);
+            }
+            dispatcher.send(Command::RefreshCurrencies);
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_open_currency(move |address| {
+            dispatcher.send(Command::OpenCurrency(address.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_check_currency(move || {
+            if let Some(ui) = weak.upgrade() {
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+            }
+        });
+    }
+
+    // Adding and removing a row is a length change, which Slint cannot do from
+    // a binding. Each of these rebuilds the model and re-checks, so the picture
+    // never lags the form by an edit.
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_add_reserve(move || {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::CurrencyState>();
+                let mut rows: Vec<chainvue_ui::ReserveEntry> =
+                    state.get_reserve_rows().iter().collect();
+                rows.push(chainvue_ui::ReserveEntry::default());
+                let added = i32::try_from(rows.len().saturating_sub(1)).unwrap_or(0);
+                state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+                // Straight into the picker. "Add a reserve" means adding a
+                // currency, and an empty row with a weight field beside it is
+                // the step before that rather than the thing asked for.
+                open_reserve_picker(&ui, &dispatcher, added);
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_remove_reserve(move |index| {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::CurrencyState>();
+                let mut rows: Vec<chainvue_ui::ReserveEntry> =
+                    state.get_reserve_rows().iter().collect();
+                if let Ok(index) = usize::try_from(index) {
+                    if index < rows.len() {
+                        rows.remove(index);
+                    }
+                }
+                state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_add_preallocation(move || {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::CurrencyState>();
+                let mut rows: Vec<chainvue_ui::PreallocEntry> =
+                    state.get_supply_rows().iter().collect();
+                rows.push(chainvue_ui::PreallocEntry::default());
+                state.set_supply_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_remove_preallocation(move |index| {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<chainvue_ui::CurrencyState>();
+                let mut rows: Vec<chainvue_ui::PreallocEntry> =
+                    state.get_supply_rows().iter().collect();
+                if let Ok(index) = usize::try_from(index) {
+                    if index < rows.len() {
+                        rows.remove(index);
+                    }
+                }
+                state.set_supply_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                dispatcher.send(Command::ValidateCurrency(draft_of(&ui)));
+            }
+        });
+    }
+}
+
+/// Building, sending and abandoning a launch.
+///
+/// Its own function because it is the half of the currency screen that signs
+/// something — the same split `wire_send` and `wire_identity` follow, so the
+/// surface worth reviewing closely stays short.
+fn wire_launch(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let actions = ui.global::<Actions>();
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_prepare_launch(move || {
+            if let Some(ui) = weak.upgrade() {
+                dispatcher.send(Command::PrepareLaunch(draft_of(&ui)));
+            }
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        actions.on_confirm_launch(move |ticket| {
+            if let Some(ui) = weak.upgrade() {
+                // Marked here rather than waiting for the core to echo it: the
+                // button must stop being pressable in the same frame, or a
+                // second press sends a ticket the core has already taken.
+                ui.global::<chainvue_ui::CurrencyState>()
+                    .set_launch_busy(true);
+            }
+            dispatcher.send(Command::ConfirmLaunch {
+                ticket: u64::try_from(ticket).unwrap_or(0),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_check_currency_name(move |name| {
+            dispatcher.send(Command::CheckName(name.to_string()));
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        let handle = ui.as_weak();
+        actions.on_start_currency_from_new_name(move || {
+            let Some(ui) = handle.upgrade() else {
+                return;
+            };
+            let state = ui.global::<chainvue_ui::CurrencyState>();
+            dispatcher.send(Command::StartCurrencyFromNewName {
+                revocation_authority: state.get_new_revocation().trim().to_string(),
+                recovery_authority: state.get_new_recovery().trim().to_string(),
+                draft: draft_of(&ui),
+            });
+        });
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_resume_launch(move || dispatcher.send(Command::ResumeLaunch));
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_abandon_launch(move || dispatcher.send(Command::AbandonLaunch));
+    }
+
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_cancel_launch(move |ticket| {
+            dispatcher.send(Command::CancelLaunch {
+                ticket: u64::try_from(ticket).unwrap_or(0),
+            });
+        });
+    }
+}
+
+/// The draft as the interface currently holds it.
+///
+/// Read off `CurrencyState` rather than passed through a callback signature:
+/// eight parameters, two of them lists, is a signature nobody can change
+/// without changing five call sites — and every edit sends the whole draft
+/// anyway, because a basket's weights are only wrong together.
+fn draft_of(ui: &AppWindow) -> chainvue_protocol::CurrencyDraft {
+    let state = ui.global::<chainvue_ui::CurrencyState>();
+    chainvue_protocol::CurrencyDraft {
+        kind: state.get_kind().to_string(),
+        // Exactly one of the two, decided by which way in is showing rather
+        // than by which field happens to be non-empty. A name left behind by a
+        // change of mind must not travel with a draft that names an identity —
+        // core refuses a draft carrying both, and it is right to.
+        identity: if state.get_claiming() {
+            String::new()
+        } else {
+            state.get_identity().to_string()
+        },
+        new_name: if state.get_claiming() {
+            state.get_new_name().trim().to_string()
+        } else {
+            String::new()
+        },
+        mintable: state.get_mintable(),
+        start_delay: state.get_start_delay().to_string(),
+        reserves: state
+            .get_reserve_rows()
+            .iter()
+            .map(|row| chainvue_protocol::ReserveDraft {
+                currency: row.currency.to_string(),
+                name: row.name.to_string(),
+                weight: row.weight.to_string(),
+            })
+            .collect(),
+        preallocations: state
+            .get_supply_rows()
+            .iter()
+            .map(|row| chainvue_protocol::PreallocationDraft {
+                recipient: row.recipient.to_string(),
+                amount: row.amount.to_string(),
+            })
+            .collect(),
+    }
+}
+
 fn wire_identity(ui: &AppWindow, dispatcher: &Dispatcher) {
     let actions = ui.global::<Actions>();
 
@@ -807,6 +1170,20 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
         });
     }
 
+    {
+        let dispatcher = dispatcher.clone();
+        actions.on_remember_window(move |width, height| {
+            // Negatives cannot reach here — the window reports its own size —
+            // and a zero would be refused by the core anyway. Clamped rather
+            // than unwrapped so a surprising value is dropped instead of
+            // panicking the UI thread.
+            dispatcher.send(Command::RememberWindow {
+                width: u32::try_from(width).unwrap_or(0),
+                height: u32::try_from(height).unwrap_or(0),
+            });
+        });
+    }
+
     actions.on_navigate(move |screen| {
         let id = match screen.as_str() {
             "send" => ScreenId::Send,
@@ -814,6 +1191,7 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
             "activity" => ScreenId::Activity,
             "nodes" => ScreenId::Nodes,
             "identities" => ScreenId::Identities,
+            "currencies" => ScreenId::Currencies,
             "settings" => ScreenId::Settings,
             _ => ScreenId::Dashboard,
         };

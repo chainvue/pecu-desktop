@@ -1,0 +1,98 @@
+// The application icon, drawn rather than imported.
+//
+// # Why it is a Slint component and not a PNG somebody exported
+//
+// Because it is made of the same things the interface is made of — the accent
+// colour, and the one glyph the Currencies screen already uses — and a bitmap in
+// a folder is a second copy of those that nothing keeps in step.
+// `examples/render_icon.rs` renders this at 1024px with the same software
+// renderer the reference images use, so the icon is reproducible from source and
+// follows the palette when it changes.
+//
+// # The mark
+//
+// A ring with a centre: `⊙`, the glyph this wallet already uses for a currency.
+// It was chosen there by checking that the bundled font actually has it — `◈`,
+// `◉`, `⬡`, `♦` and `⧫` are all absent from Inter and drew nothing at all — and
+// reusing it means the icon in the dock and the mark beside a currency are the
+// same shape. Drawn as rectangles rather than as text, because a glyph
+// rasterised at 1024px is at the mercy of the font's hinting.
+//
+// # The geometry is Apple's, not a guess
+//
+// A macOS app icon is **not** masked by the system the way an iOS one is: the
+// rounded shape has to be in the file. Apple's template for Big Sur and later
+// puts an 824×824 rounded square inside a 1024×1024 canvas, with a corner radius
+// of 185.4px. The empty margin is what the drop shadow and the hover growth use,
+// and an icon drawn edge to edge sits visibly larger than every other icon in
+// the dock.
+//
+// # Why the fill is flat
+//
+// It was a gradient, and **the software renderer drops `border-radius` when the
+// fill is a gradient** — measured, by rendering it: the corners came out square
+// while everything else was right. A flat fill rounds correctly. This is the
+// same class of finding as the missing glyphs, and it is written down here for
+// the same reason: it is invisible in the source and obvious in the picture.
+
+import { Theme } from "theme/theme.slint";
+
+export component AppIcon inherits Window {
+    // The canvas. Set per render: every size in the iconset is drawn at its own
+    // size rather than shrunk from one big one — see `examples/render_icon.rs`.
+    in property <length> canvas: 1024px;
+    // The shape inside it, at Apple's proportion.
+    property <length> side: root.canvas * 824 / 1024;
+    // Below this the mark is drawn as a ring alone.
+    //
+    // # Why the small sizes are a different drawing
+    //
+    // Because the same drawing does not survive them, and both failures were
+    // looked at rather than assumed. Shrinking the 1024px render to 16 blurs the
+    // ring and the dot into one blob; drawing at 16 directly makes the ring
+    // 0.8px, which the renderer drops entirely and leaves a lone dot. Neither is
+    // the mark.
+    //
+    // So at 16px it is a ring with a floor under its stroke and nothing inside
+    // it — which is what Apple's own guidance means by simplifying at small
+    // sizes, and what a Finder row and the ⌘-Tab strip actually show.
+    property <bool> simplified: root.canvas < 32px;
+
+    width: root.canvas;
+    height: root.canvas;
+    // Nothing behind the shape. macOS composites the icon over whatever is
+    // under it — a dock, a Finder row, a dark background — and an opaque canvas
+    // would be a square with the icon painted on it.
+    background: transparent;
+
+    Rectangle {
+        width: root.side;
+        height: root.side;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: root.side * 185.4 / 824;
+        background: Theme.accent;
+
+        // The ring.
+        Rectangle {
+            width: root.side * 0.46;
+            height: root.side * 0.46;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.width / 2;
+            // Floored, so the stroke never falls below a pixel and vanishes.
+            border-width: max(root.side * 0.062, 1.5px);
+            border-color: Theme.text-on-accent;
+        }
+
+        // The centre, at every size that has room for it.
+        if !root.simplified: Rectangle {
+            width: root.side * 0.15;
+            height: root.side * 0.15;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.width / 2;
+            background: Theme.text-on-accent;
+        }
+    }
+}

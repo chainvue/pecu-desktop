@@ -191,6 +191,120 @@ payment without looking is the whole test. What to listen for specifically:
 Note that `build.rs` emits Slint debug info in unoptimised builds only, which is
 what makes the element tree inspectable. It is off in release deliberately.
 
+---
+
+## 4b. The miner fee on the launch review — needs one SDK field
+
+**Status:** disclosed in words, not in figures. Blocked on the SDK, not on the
+wallet.
+
+The launch review names three amounts: the launch fee, the half that becomes the
+new currency's reserve deposit, and the half that is burned with no output. All
+three come off the signed outcome. On top of them sits the miner fee, which the
+review currently handles with a sentence — *"The miner fee is on top of this and
+is not included."* — because the wallet cannot know the number.
+
+**Why it cannot.** `verus_tx_transparent::SignedTransaction` carries `fee`, the
+exact figure including any dust folded into it. `verus_flows::prepare_launch`
+receives it as `signed.fee` and then builds a `Launched` that has no field for
+it, so it is dropped one line before the wallet could see it. The send path has
+no such gap: `Sent` carries `fee` and the send review prints it.
+
+**Why it is not reconstructed here.** It could be recomputed —
+`estimate_fee(inputs, outputs + 1, DEFAULT_FEE_PER_KB, true)` over the decoded
+transaction — and it would be wrong in exactly the case that matters least and
+misleads most: when change fell below the dust threshold it is folded into the
+fee, and the recomputation cannot see that. A figure that is right except
+sometimes is worse on this screen than a sentence that is always right.
+
+**The move.** One field on `Launched` — `miner_fee: Amount`, set from
+`signed.fee` at `verus-flows/src/launch.rs:293` — then a fourth line on the
+review and a fourth figure in `currency::cost`. It also means bumping the pin
+past `8f01520`, which is nine commits behind `verus-rust-sdk` HEAD; one of those
+nine is a `verus-keys` base58check fix worth taking anyway.
+
+Proportion, so this is picked up with the right expectations: the miner fee is
+on the order of 0.0001 coins against a launch fee of 200. It does not change
+anyone's decision. What it changes is whether a wallet that says "here is what
+this costs" is telling the whole truth, and that is worth one field.
+
+---
+
+## 4c. Which currencies may actually be a reserve
+
+**Status:** the picker lists every currency the chain reports, and the wallet
+checks nothing about whether a given one is a legal reserve.
+
+A basket's reserves are chosen from `listcurrencies`, which is every currency on
+the system. The wallet refuses a repeated reserve, a reserve with no weight, and
+a set whose weights do not add to one whole — those are rules it can state and
+does. It says nothing about whether a *particular* currency may be a reserve of a
+*particular* basket, because that rule has not been established against a node
+and this project does not guess at consensus.
+
+Two things are known and neither is checked:
+
+* A currency whose `start_block` is ahead of the tip has not begun. The picker
+  **says so** on the row — `Starts at block …` — and lets it be chosen, because
+  a basket scheduled to start later than its reserve is legitimate and refusing
+  it here would be the wallet inventing a rule.
+* Nothing stops somebody choosing a currency from another system. `system_id` is
+  on every entry and is not read.
+
+**The move,** when it matters: establish the rule against a daemon — build a
+basket over an unstarted reserve and over a foreign-system one on VRSCTEST, and
+record what the node says. Then either filter in `currency::choices` or refuse in
+`currency::problems`, with the recorded reply cited the way `getcurrency`'s `-8`
+and `getidentity`'s `-5` are. Until that measurement exists, a refusal here would
+be a rule this wallet made up, and the failure mode is worse than the one it
+would prevent: a legal basket the wallet will not let anybody build.
+
+---
+
+## 4d. The native menu bar — built, measured, taken out again
+
+**Status:** written, rendered, reverted. The blocker is in Slint, not here.
+
+Slint 1.17 has `MenuBar`/`Menu`/`MenuItem`, and the winit backend answers
+`supports_native_menu_bar()` with `true` wherever `muda` is compiled in — so on
+macOS a declared menu bar really is the strip at the top of the screen and
+nothing is drawn in the window. A menu with Wallet (Lock, Refresh, Settings), Go
+(the seven screens with their existing ⌘1–⌘7) and View (switch theme) was
+written and compiled.
+
+**Why it came out.** `tests/visual.rs` and `docs/shots/` render through
+`MinimalSoftwareWindow`, which has no native menu bar — so it draws the menu
+*inside* the window, as a 38px band above the title bar, in **all eighty**
+reference images. The pictures this project reviews changes with would then show
+a control the shipped application does not have, on every screen. That is the
+same failure the fixtures already warn about in three places: an image that
+describes a wallet the product cannot produce.
+
+**Why it cannot simply be told otherwise.** `supports_native_menu_bar` is on
+`WindowAdapterInternal`, which `i-slint-core` does not export. A wrapper around
+`MinimalSoftwareWindow` cannot provide it, and there is no way in `.slint` to
+declare a menu bar conditionally — `MenuBar` "must not be in a `for` or an `if`".
+
+**What is not lost.** The backend installs a default native menu bar of its own
+when an application declares none, so ⌘Q and the window menu already work. Every
+shortcut the menu would have advertised — ⌘1–⌘7, ⌘L, ⌘R, ⌘, — is in the focus
+scope in `app.slint` and keeps working. What is missing is discoverability, for
+somebody who looks in the menu rather than pressing keys.
+
+**The move,** in order of preference: take it when Slint exposes native-menu
+support to a custom `WindowAdapter`, or when the snapshot renderer moves to a
+windowed backend. Failing both, split `AppWindow` into a `Window` that carries
+the `MenuBar` and an inner shell the snapshots render — which is the normal way
+to structure this and was judged too large a change to the one compile root for
+what it buys today.
+
+**There is no Edit menu in any version of this.** Slint 1.17 gives an
+application no clipboard and no way to ask which element has focus — `TextInput`
+owns both, which is why the receive screen copies by selecting its own element.
+Cut/Copy/Paste entries could only ever act on one hard-coded field.
+
+---
+
 ## 5. Keychain opt-in
 
 **Status:** planned, never started. `keyring` is not a dependency.
@@ -210,11 +324,33 @@ The last row is the one with a real use today, and it is also the smallest.
 
 ## 6. Packaging
 
-**Status:** never attempted.
+**Status:** the bundle is built and runs. Signing and notarisation are not done,
+and cannot be done from here.
 
-There is no `.app` bundle, no icon, no `Info.plist`, no signing, no
-notarisation, and `cargo build --release` has never been run — so the release
-profile, the Skia renderer decision and the binary size are all unmeasured.
+`scripts/bundle.sh` produces `target/ChainVue.app` — icon, `Info.plist`, the
+release binary — out of macOS built-ins only (`sips`, `iconutil`, `plutil`,
+`codesign`). The icon is rendered from `ui/icon.slint` by
+`cargo run -p chainvue-ui --example render_icon`, so it follows the palette
+rather than being a bitmap nothing keeps in step.
 
-This is not hard, but "never once run" is worth writing down rather than
-assuming.
+**Measured**, on this machine (M-series, `--release`, `lto = "thin"`,
+`strip = true`): 2m06s to build, **37 MB** binary, 38 MB bundle. `__text` is
+24 MB of it — that is FemtoVG, winit, tokio, rustls and the SDK, not debug
+information, which the profile already strips. It has been started, and started
+twice to check the instance guard refuses the second.
+
+**What is left, and it needs credentials this machine does not have:**
+
+* `CODESIGN_IDENTITY="Developer ID Application: …" scripts/bundle.sh` signs with
+  `--options runtime --timestamp`, which is what notarisation requires.
+* Notarisation itself is an App Store Connect API key and a round trip to Apple.
+  The four commands are printed by the script at the end of a run rather than
+  executed, because nobody should hand credentials to a script they have not
+  read.
+
+Until it is notarised the bundle runs on the machine that built it and Gatekeeper
+blocks it everywhere else. That is correct behaviour and not a bug in the bundle.
+
+**Not attempted:** a universal binary. This is an arm64 build; an Intel slice
+needs `cargo build --target x86_64-apple-darwin` and `lipo`, and nothing has been
+built or run on Intel.

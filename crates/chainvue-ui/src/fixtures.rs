@@ -20,9 +20,11 @@ use std::rc::Rc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::{
-    ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, IdentityRow, IdentityState, KeyRow,
-    KnownAddressRow, NetworkState, NodeRow, PendingRow, ReviewOutput, SeedState, SeedWord,
-    SendState, TxState, WalletState,
+    ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
+    CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
+    IdentityRow, IdentityState, KeyRow, KnownAddressRow, NetworkState, NodeRow, PendingRow,
+    PreallocEntry, ReserveEntry, ReviewOutput, SeedState, SeedWord, SendState, TxState,
+    WalletState,
 };
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -776,6 +778,525 @@ pub fn identities(ui: &AppWindow) {
     }]))));
 }
 
+/// The currencies screen with both halves populated.
+///
+/// Two currencies and four identities, deliberately mismatched: a fixed-supply
+/// token, a mintable basket, and two identities that could still define one —
+/// plus one that could not, because this wallet does not hold its keys. A
+/// fixture where every identity had a currency would never render the picker,
+/// and one where none did would never render the list.
+pub fn currencies(ui: &AppWindow) {
+    unlocked(ui);
+    ui.set_screen("currencies".into());
+    ui.global::<WalletState>().set_ticker("VRSCTEST".into());
+
+    let state = ui.global::<CurrencyState>();
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        CurrencyRow {
+            name: "demo.VRSCTEST".into(),
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            kind: "Token".into(),
+            tone: "online".into(),
+            note: "".into(),
+            mintable: false,
+            start_block: "1 170 000".into(),
+            started: true,
+        },
+        CurrencyRow {
+            name: "market.VRSCTEST".into(),
+            address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+            kind: "Basket".into(),
+            tone: "online".into(),
+            note: "Holds reserves and converts between them.".into(),
+            mintable: true,
+            start_block: "1 171 402".into(),
+            // Launched and not yet begun — the twenty-minute window in which a
+            // currency exists and does nothing. A list where every row had
+            // started would never render the line that says so.
+            started: false,
+        },
+    ]))));
+
+    state.set_eligible(ModelRc::from(Rc::new(VecModel::from(vec![
+        EligibleIdentity {
+            name: "demo.VRSCTEST@".into(),
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            refusal:
+                "Already defines demo.VRSCTEST. An identity can define one currency, and only once."
+                    .into(),
+        },
+        // The second currency's own identity. Present with a refusal rather
+        // than absent: every identity appears in this list, and one that had
+        // silently vanished because it already defines something would describe
+        // a wallet the core cannot produce.
+        EligibleIdentity {
+            name: "market.VRSCTEST@".into(),
+            address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+            refusal: "Already defines market.VRSCTEST. An identity can define one currency, and only once.".into(),
+        },
+        // The two refusals that are about the identity's state rather than
+        // about a currency. Both are refused in the picker now, and neither had
+        // an image: a launch under a revoked identity is refused by the flow
+        // several screens later, and one under a timelocked identity is refused
+        // by nothing at all until the node sees it.
+        EligibleIdentity {
+            name: "vault.VRSCTEST@".into(),
+            address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+            refusal: "Timelocked. Its output cannot be spent until the lock passes.".into(),
+        },
+        EligibleIdentity {
+            name: "gone.VRSCTEST@".into(),
+            address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+            refusal: "Revoked. A revoked identity cannot define a currency.".into(),
+        },
+        EligibleIdentity {
+            name: "spare.VRSCTEST@".into(),
+            address: "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr".into(),
+            refusal: "".into(),
+        },
+        EligibleIdentity {
+            name: "borrowed.VRSCTEST@".into(),
+            // Derived from the fixed scalar `[0x2b; 32]`, the way the R
+            // addresses above it are. It used to carry VRSCTEST's own currency
+            // id, which is a real address belonging to the chain itself — and
+            // the reserve picker now shows that id under the name it actually
+            // has, so the same twenty bytes appeared twice on one screen under
+            // two different names.
+            address: "i5irTLNFVvjQESy3bMjxoG7CXg8Ntmdc9V".into(),
+            refusal: "This wallet does not hold the keys that sign for it.".into(),
+        },
+    ]))));
+}
+
+/// The form's third question: a basket with three uneven reserves.
+///
+/// Three and uneven on purpose: two equal slices demonstrate nothing about a
+/// proportional bar, and the interesting case is the one where the eye cannot
+/// check the arithmetic. The weights add to 100% here, so the bar is full and
+/// the total reads green — the short-bar case is its own fixture.
+///
+/// This is also the base every other currency-form fixture is built on, so it
+/// fills in a complete draft and the answers the core would give about it. Each
+/// of the others changes the step it is on and nothing else, which is what keeps
+/// five reference images describing one wallet rather than five.
+pub fn defining_currency(ui: &AppWindow) {
+    currencies(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_defining(true);
+    state.set_form_step("setup".into());
+    state.set_kind("basket".into());
+    // The one in the list with no refusal. It used to be `vault@`, which the
+    // picker now refuses for being timelocked — so the image showed a selection
+    // the wallet would not make.
+    state.set_identity("i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr".into());
+    state.set_identity_name("spare.VRSCTEST@".into());
+    state.set_start_delay("20".into());
+    state.set_mintable(true);
+
+    state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        reserve("VRSCTEST", VRSCTEST, "50"),
+        reserve("Bridge.vETH", BRIDGE, "30"),
+        reserve("vUSDC.vETH", VUSDC, "20"),
+    ]))));
+
+    state.set_supply_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        PreallocEntry {
+            recipient: "demo@".into(),
+            amount: "750000".into(),
+        },
+        PreallocEntry {
+            recipient: "vault@".into(),
+            amount: "250000".into(),
+        },
+    ]))));
+
+    // What core would answer. Written out rather than computed here, because a
+    // fixture that did its own arithmetic would photograph a picture the core
+    // cannot produce.
+    state.set_slices(ModelRc::from(Rc::new(VecModel::from(vec![
+        slice("VRSCTEST", 50.0, 0.0, "50%", "accent"),
+        slice("Bridge.vETH", 30.0, 50.0, "30%", "positive"),
+        slice("vUSDC.vETH", 20.0, 80.0, "20%", "warning"),
+    ]))));
+    state.set_weights_total("100%".into());
+
+    state.set_supply_slices(ModelRc::from(Rc::new(VecModel::from(vec![
+        slice("demo@", 75.0, 0.0, "75%", "accent"),
+        slice("vault@", 25.0, 75.0, "25%", "positive"),
+    ]))));
+    state.set_supply_total("1 000 000.0000 0000".into());
+    state.set_start_block("1 187 520".into());
+    state.set_fee("200.0000 0000".into());
+
+    state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
+        field("Kind", "Basket"),
+        // Both, because they answer different halves of one check: the name
+        // is what was chosen, the address is what goes on the chain, and
+        // nobody can verify an address they never typed.
+        field("Defined under", "spare.VRSCTEST@"),
+        field("Its address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
+        field("Starts at block", "1 187 520"),
+        field("Supply can grow", "Yes — this identity may mint more"),
+        field("Reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
+        field("Starting supply", "1 000 000.0000 0000 VRSCTEST"),
+    ]))));
+
+    // One transaction, because this is the short path: an identity that already
+    // exists, one definition, one fee. The three-step list belongs to the path
+    // that claims a name — `claiming_a_name_for_a_currency` carries that one.
+    state.set_steps(ModelRc::from(Rc::new(VecModel::from(vec![step(
+        "Define the currency",
+        "later",
+        true,
+    )]))));
+
+    problems(&state, Vec::new());
+}
+
+/// The first question, on a fresh form: what is being made.
+pub fn currency_kind(ui: &AppWindow) {
+    defining_currency(ui);
+    ui.global::<CurrencyState>().set_form_step("kind".into());
+}
+
+/// The second question, unanswered — the identity picker with its refusals.
+///
+/// Its own image because this is the list that decides whether the screen is
+/// usable at all on a given wallet, and four of its five rows are refusals with
+/// a different reason each. A picture of it collapsed to the one chosen row says
+/// nothing about the four that were not.
+pub fn currency_identity(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_form_step("under".into());
+    state.set_identity("".into());
+    state.set_identity_name("".into());
+}
+
+/// Choosing a reserve out of what the chain has.
+///
+/// Its own image because the whole point of the overlay is that a reserve is
+/// **chosen and not typed** — the definition carries an i-address, and a name in
+/// that field was accepted by every check on the form and then refused by the
+/// builder after the launch had been agreed to.
+///
+/// Four rows, one of each thing a row has to be able to say: a plain token, a
+/// basket, an NFT, and a currency that has not started yet — which is the one
+/// fact about a reserve that is invisible in its name and changes what putting
+/// it in a basket means.
+pub fn currency_reserve_picker(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    // The third row, which is the one with a weight of 20% in the form behind.
+    state.set_picking_reserve(2);
+    state.set_choices_query("".into());
+    state.set_choices(ModelRc::from(Rc::new(VecModel::from(vec![
+        pick("VRSCTEST", VRSCTEST, "Token", ""),
+        pick("Bridge.vETH", BRIDGE, "Basket", ""),
+        pick("vUSDC.vETH", VUSDC, "Token", ""),
+        pick(
+            "stamp137",
+            "iJMWZJ9KMTpado8MqdcGsCwDtWC8qqYvUP",
+            "NFT",
+            "Starts at block 1 189 000",
+        ),
+    ]))));
+    // More than fit, said rather than hidden.
+    state.set_choices_more(286);
+}
+
+/// An NFT at the same step, which is the short version of it.
+///
+/// Its own image for two reasons. It is the only kind with nothing to fill in —
+/// no reserves, no supply — so it is the one case where the two questions that
+/// are always asked, minting and the start height, are visible without
+/// scrolling, and they had never been photographed. And it carries the caveat
+/// that no NFT has ever been accepted by a node from this SDK, which is a
+/// warning rather than a refusal and has to look like one.
+pub fn currency_nft(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_kind("nft".into());
+    state.set_mintable(false);
+    state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<ReserveEntry>::new(),
+    ))));
+    state.set_supply_rows(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<PreallocEntry>::new(),
+    ))));
+    state.set_slices(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<CurrencySlice>::new(),
+    ))));
+    state.set_supply_slices(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<CurrencySlice>::new(),
+    ))));
+    state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
+        field("Kind", "NFT"),
+        field("Defined under", "spare.VRSCTEST@"),
+        field("Its address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
+        field("Starts at block", "1 187 520"),
+        field("Supply can grow", "No — fixed at launch, forever"),
+    ]))));
+
+    problems(
+        &state,
+        vec![CurrencyProblem {
+            blocking: false,
+            text: "No NFT has ever been accepted by a node from this wallet's SDK. The \
+                   transaction is built correctly against two live examples, and has never \
+                   been sent."
+                .into(),
+        }],
+    );
+}
+
+/// The last question: the whole definition, at full width, before it is signed.
+pub fn currency_review(ui: &AppWindow) {
+    defining_currency(ui);
+    ui.global::<CurrencyState>().set_form_step("review".into());
+}
+
+/// The same form with weights that do not add up — the case the bar exists for.
+///
+/// The one basket mistake that cannot be fixed after the launch, and the one
+/// the SDK's Rust core does not refuse. The bar draws short and the total reads
+/// amber, which is the picture and the number saying the same thing.
+/// An identity registered and paid for, with nothing defined under it.
+///
+/// The state a crash between the two transactions leaves behind, and the one
+/// worth a reference image: it is not a loading state, it is a bill somebody
+/// has already settled with nothing to show for it — and that identity can
+/// never be used for a different currency.
+pub fn launch_pending(ui: &AppWindow) {
+    currencies(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_pending_note(
+        "market.VRSCTEST@ exists and nothing has been defined under it. It can never be \
+         used for a different currency."
+            .into(),
+    );
+    state.set_pending_can_continue(true);
+    // Progress, not a plan: the first three have happened and two of them were
+    // paid for. This is the state where the money is already gone and the thing
+    // it was for does not exist yet.
+    state.set_pending_steps(ModelRc::from(Rc::new(VecModel::from(vec![
+        step("Choose a name", "done", false),
+        step("Register the identity", "done", true),
+        step("Wait for it to confirm", "done", false),
+        step("Define the currency", "now", true),
+    ]))));
+    // Last, because a non-empty identity is what opens the panel.
+    state.set_pending_identity("market.VRSCTEST@".into());
+}
+
+/// The other way in: claiming a name as part of the launch.
+///
+/// Its own image because it is the entry point that makes this screen usable on
+/// a wallet with no spare identity — which is every wallet, the first time —
+/// and because the press at the end of it is the only one on this screen that
+/// spends money **before** showing a review. The two fees are stated together
+/// for that reason.
+pub fn claiming_a_name_for_a_currency(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_form_step("under".into());
+    state.set_claiming(true);
+    state.set_identity("".into());
+    state.set_identity_name("".into());
+    state.set_new_name("livecoin".into());
+    state.set_new_name_fee("100.0000 0000".into());
+    state.set_new_authority("other".into());
+    state.set_new_revocation("vault.VRSCTEST@".into());
+    state.set_new_recovery("vault.VRSCTEST@".into());
+    // Three steps, not one: this path is three transactions with a wait in the
+    // middle, and the review says so before anything is pressed.
+    state.set_steps(ModelRc::from(Rc::new(VecModel::from(vec![
+        step("Register the identity", "later", true),
+        step("Wait for it to confirm", "later", false),
+        step("Define the currency", "later", true),
+    ]))));
+    state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
+        field("Kind", "Basket"),
+        field("Defined under", "livecoin@ (to be claimed)"),
+        field("Starts at block", "1 187 520"),
+        field("Supply can grow", "Yes — this identity may mint more"),
+        field("Reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
+        field("Starting supply", "1 000 000.0000 0000 VRSCTEST"),
+    ]))));
+}
+
+/// The extra question that path asks, with neither answer given yet.
+///
+/// Its own image because the unanswered state is the point of the step: leaving
+/// both authorities blank is what makes an identity permanently unrevokable, and
+/// on the flat form that outcome was what happened to somebody who read nothing.
+/// A picture of it already answered would not show that.
+pub fn currency_authority(ui: &AppWindow) {
+    claiming_a_name_for_a_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_form_step("authority".into());
+    state.set_new_authority("".into());
+    state.set_new_revocation("".into());
+    state.set_new_recovery("".into());
+}
+
+/// The launch review: the last moment before something irreversible.
+///
+/// Its own image because it is the screen that spends two hundred coins, and it
+/// was written and wired without ever being looked at. The three figures are
+/// what the review exists for — the fee, the half that becomes the currency's
+/// reserve deposit, and the half that is burned with no output at all.
+pub fn launching_currency(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_launch_name("market.VRSCTEST".into());
+    state.set_launch_description(
+        "Defines market.VRSCTEST under this identity. An identity can define one currency, \
+         and only once — this cannot be undone or repeated."
+            .into(),
+    );
+    // VRSCTEST's own figures, and the halves add back to the fee — the property
+    // `currency::cost` is tested for.
+    state.set_launch_fee("200.0000 0000".into());
+    state.set_launch_deposit("100.0000 0000".into());
+    state.set_launch_burned("100.0000 0000".into());
+    // The same height the form behind this one is showing. They are the same
+    // number in the running wallet — the review reads it back off the signed
+    // bytes rather than off the form — and a reference image where the two
+    // disagree teaches that they are allowed to.
+    state.set_launch_start_block("1 187 520".into());
+    // Last, because a non-zero ticket is what opens the review.
+    state.set_launch_ticket(4);
+}
+
+pub fn currency_weights_wrong(ui: &AppWindow) {
+    defining_currency(ui);
+
+    let state = ui.global::<CurrencyState>();
+    state.set_reserve_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        reserve("VRSCTEST", VRSCTEST, "40"),
+        reserve("Bridge.vETH", BRIDGE, "30"),
+    ]))));
+    state.set_slices(ModelRc::from(Rc::new(VecModel::from(vec![
+        slice("VRSCTEST", 40.0, 0.0, "40%", "accent"),
+        slice("Bridge.vETH", 30.0, 40.0, "30%", "positive"),
+    ]))));
+    state.set_weights_total("70%".into());
+    problems(
+        &state,
+        vec![CurrencyProblem {
+            blocking: true,
+            text:
+                "The weights add up to 70%, not 100%. Consensus reads them as shares of one whole."
+                    .into(),
+        }],
+    );
+}
+
+/// Set the problem list, the count the pinned bar reads, and whether the form
+/// is ready — together, because they are three readings of one fact.
+///
+/// Set separately for one render and they disagreed: the bar said "nothing is
+/// blocking it" beside a disabled button and a basket whose weights added to
+/// 70%. The count exists because Slint cannot filter a model in a binding, and
+/// a derived value nobody derives is a value that drifts.
+fn problems(state: &CurrencyState, rows: Vec<CurrencyProblem>) {
+    let blocking = rows.iter().filter(|problem| problem.blocking).count();
+    state.set_problems(ModelRc::from(Rc::new(VecModel::from(rows))));
+    state.set_blocking_count(i32::try_from(blocking).unwrap_or(i32::MAX));
+    state.set_ready(blocking == 0);
+}
+
+/// The i-addresses the reserve fixtures use.
+///
+/// `VRSCTEST` is the real one, read out of the SDK's own recorded
+/// `listcurrencies` reply — it is the chain's own currency and belongs to
+/// nobody. The other two are derived from fixed scalars (`[0x3d; 32]` and
+/// `[0x4f; 32]`) the way the R addresses at the top of this file are: those
+/// currencies exist on VRSCTEST but their addresses are not in anything this
+/// wallet has recorded, and inventing one by hand is how a checksum ends up
+/// wrong in a picture somebody copies out of.
+const VRSCTEST: &str = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
+const BRIDGE: &str = "iPy29AAA5AUgVPzDvCWtWkNTVCyyMn8X4X";
+const VUSDC: &str = "i3XUvfqfZ3eT6iwNgyVEVzFVimMrziG5Ws";
+
+fn pick(name: &str, address: &str, kind: &str, note: &str) -> CurrencyPick {
+    CurrencyPick {
+        name: name.into(),
+        address: address.into(),
+        kind: kind.into(),
+        note: note.into(),
+    }
+}
+
+fn reserve(name: &str, address: &str, weight: &str) -> ReserveEntry {
+    ReserveEntry {
+        // The address is what the definition carries; the name is what anybody
+        // reads. Both, because neither can be derived from the other here.
+        currency: address.into(),
+        name: name.into(),
+        weight: weight.into(),
+    }
+}
+
+/// One slice of a bar, with where it starts written out.
+///
+/// The offset is given rather than accumulated, for the reason every figure in
+/// this file is: a fixture that did its own arithmetic would photograph a
+/// picture the core cannot produce.
+fn slice(label: &str, percent: f32, offset: f32, display: &str, tone: &str) -> CurrencySlice {
+    CurrencySlice {
+        label: label.into(),
+        percent,
+        offset_percent: offset,
+        percent_display: display.into(),
+        tone: tone.into(),
+    }
+}
+
+fn field(label: &str, value: &str) -> CurrencyField {
+    CurrencyField {
+        label: label.into(),
+        value: value.into(),
+        // Every field in a currency definition is permanent, which is the
+        // reason the panel exists.
+        permanent: true,
+    }
+}
+
+fn step(label: &str, state: &str, costs: bool) -> FlowStep {
+    FlowStep {
+        label: label.into(),
+        state: state.into(),
+        costs,
+    }
+}
+
+/// The screen before any identity defines anything — which is where every
+/// wallet starts, and the state the empty text was written for.
+pub fn currencies_empty(ui: &AppWindow) {
+    unlocked(ui);
+    ui.set_screen("currencies".into());
+    ui.global::<WalletState>().set_ticker("VRSCTEST".into());
+
+    ui.global::<CurrencyState>()
+        .set_eligible(ModelRc::from(Rc::new(VecModel::from(vec![
+            EligibleIdentity {
+                name: "demo.VRSCTEST@".into(),
+                address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+                refusal: "".into(),
+            },
+        ]))));
+}
+
 /// The claim form, open.
 ///
 /// Its own case because the form is now behind a button. Without this the
@@ -783,7 +1304,35 @@ pub fn identities(ui: &AppWindow) {
 /// reference image at all — a screen that exists and that nothing looks at.
 pub fn claiming_a_name(ui: &AppWindow) {
     identities(ui);
-    ui.global::<IdentityState>().set_claiming(true);
+    let state = ui.global::<IdentityState>();
+    state.set_claiming(true);
+    state.set_claim_step("name".into());
+    state.set_name_draft("chainvue".into());
+    state.set_name_fee("100.0000 0000".into());
+}
+
+/// The question that used to be two blank fields.
+///
+/// Unanswered on purpose. This is the state the whole step exists to create: on
+/// the old flat form, the dangerous answer — nobody can revoke it, ever — was
+/// what happened to somebody who read nothing and pressed the button. Here
+/// there is nothing to press until one of the two rows is chosen.
+pub fn claiming_authority(ui: &AppWindow) {
+    claiming_a_name(ui);
+    ui.global::<IdentityState>()
+        .set_claim_step("authority".into());
+}
+
+/// The last screen before the first fee.
+///
+/// Shown with the unrevokable answer chosen, because that is the one worth
+/// having an image of: the review has to say so plainly, and it is the only
+/// place left that can.
+pub fn claiming_review(ui: &AppWindow) {
+    claiming_a_name(ui);
+    let state = ui.global::<IdentityState>();
+    state.set_claim_step("review".into());
+    state.set_claim_authority("none".into());
 }
 
 /// One VerusID in full, with the warning that outranks everything on it.
@@ -916,6 +1465,13 @@ pub fn registering(ui: &AppWindow) {
     state.set_reg_deadline("Must confirm before block 1 188 674 — about 18 minutes".into());
     state.set_reg_fee("100.0000 0000".into());
     state.set_reg_cannot_be_revoked(true);
+    // Where it has got to: the first transaction is mined, the wait is running,
+    // and the one that costs the rest is still ahead.
+    state.set_reg_steps(ModelRc::from(Rc::new(VecModel::from(vec![
+        step("Claim the name", "done", true),
+        step("Wait for it to confirm", "now", false),
+        step("Register it", "later", true),
+    ]))));
 }
 
 pub fn network(ui: &AppWindow) {

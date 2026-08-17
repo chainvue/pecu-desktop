@@ -13,13 +13,17 @@ import { ListView } from "std-widgets.slint";
 import { Theme, Sp, R, Typo, Motion, InputMode } from "theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, Segmented } from "components/base.slint";
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
-import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry } from "vm/structs.slint";
+import { AppIcon } from "icon.slint";
+import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick } from "vm/structs.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
-export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry }
+export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick }
 export { Theme, Motion, InputMode }
+// Rendered to a PNG by `examples/render_icon.rs`, never shown. Exported from
+// here because this file is the one compile root — see `build.rs`.
+export { AppIcon }
 
 // ── The data the UI is given ────────────────────────────────────────────────
 //
@@ -208,6 +212,139 @@ export global SendState {
 // One list, not two. An identity somebody looked up sits beside their own, and
 // `mine` on the row is what tells them apart — two lists would let the same
 // identity appear twice and answer differently.
+// The currencies this wallet's identities define.
+//
+// Two lists from one walk, and they are the two halves of the same question:
+// every identity either defines a currency or could still define one. They
+// arrive in a single event so the picker can never offer a name the list above
+// it has just shown as taken.
+export global CurrencyState {
+    in property <[CurrencyRow]> rows: [];
+    in property <[EligibleIdentity]> eligible: [];
+    in property <bool> busy: false;
+
+    // ── Configuring one ─────────────────────────────────────────────────
+    // Whether the form is open. Purely the interface's business until somebody
+    // presses the button — same shape as `IdentityState.claiming`, and here for
+    // the same reason: the form's Cancel and the window's Escape both reach it.
+    in-out property <bool> defining: false;
+    // Which question the form is on:
+    // "kind" → "under" → ("authority" when a name is being claimed) → "setup"
+    // → "review". Same shape as `SendState.step` and `IdentityState.claim-step`,
+    // and reset with `defining` for the same reason: a form reopened later must
+    // not start halfway through somebody else's answers.
+    in-out property <string> form-step: "kind";
+
+    // The draft, held here so a fixture can put a half-configured currency on
+    // screen. Element text cannot be reached from outside an `if`, and a state
+    // no test can reach is a state that quietly rots.
+    in-out property <string> kind: "token";
+    in-out property <string> identity: "";
+    // Its name, for the collapsed row. Carried beside the address rather than
+    // looked up again: the picker already had it, and searching the list for a
+    // name the wallet is holding is a second source of the same fact.
+    in-out property <string> identity-name: "";
+    in-out property <bool> mintable: false;
+    in-out property <string> start-delay: "20";
+    // The rows are edited through `Actions`, because adding and removing one
+    // changes the length of a model and Slint cannot do that from a binding.
+    in-out property <[ReserveEntry]> reserve-rows: [];
+    in-out property <[PreallocEntry]> supply-rows: [];
+
+    // ── Choosing a reserve ──────────────────────────────────────────────
+    // Which reserve row the picker is open for. `-1` is closed — one field
+    // rather than a flag and an index, the same rule `TxState.txid` follows, so
+    // the overlay and the row it will write to cannot disagree.
+    in-out property <int> picking-reserve: -1;
+    in-out property <string> choices-query: "";
+    // What the chain's list holds that matches. Built in core: Slint cannot
+    // filter a model in a binding, and what counts as a match is a rule worth a
+    // test rather than a binding nobody can check.
+    in property <[CurrencyPick]> choices: [];
+    // How many more matched than are carried. A list that truncated silently
+    // would read as "that is all there is" while hiding the one being looked
+    // for.
+    in property <int> choices-more: 0;
+    in property <bool> choices-busy: false;
+    in property <string> choices-problem: "";
+
+    // What core makes of it. Everything below is computed there — the bars, the
+    // captions beside them and the preview are three renderings of one
+    // arithmetic, and three places dividing the same totals will one day
+    // disagree in front of somebody spending two hundred coins.
+    in property <[CurrencyProblem]> problems: [];
+    in property <bool> ready: false;
+    in property <[CurrencySlice]> slices: [];
+    in property <string> weights-total: "";
+    in property <string> supply-total: "";
+    in property <[CurrencySlice]> supply-slices: [];
+    in property <string> start-block: "";
+    in property <string> fee: "";
+    in property <[CurrencyField]> preview: [];
+    // Where the launch has got to. Four steps, and two of them cost money.
+    in property <[FlowStep]> steps: [];
+
+    // ── The last moment before it is irreversible ───────────────────────
+    // A ticket of 0 means there is no review open. One field, not two — the
+    // same rule the identity sheet follows, so the two cannot disagree.
+    in property <int> launch-ticket: 0;
+    in property <string> launch-name: "";
+    in property <string> launch-description: "";
+    in property <string> launch-fee: "";
+    in property <string> launch-deposit: "";
+    in property <string> launch-burned: "";
+    // The height the currency begins at, off the signed bytes rather than off
+    // the form. A launch is not instant and this is the last screen that can
+    // say when it starts.
+    in property <string> launch-start-block: "";
+    in property <bool> launch-busy: false;
+    // How many of `problems` stop the launch. Counted in the bridge because
+    // Slint cannot filter a model in a binding, and the pinned bar needs the
+    // number rather than the list.
+    in property <int> blocking-count: 0;
+
+    // ── A currency waiting for its name ─────────────────────────────────
+    // Non-empty when one is unfinished. Two waits, and they are not the same:
+    // waiting for a name may still be abandoned for nothing, while waiting to
+    // define under one that already exists means an identity has been paid for
+    // with nothing made under it — and it can never be used for a different
+    // currency.
+    in property <string> pending-identity: "";
+    in property <string> pending-note: "";
+    in property <bool> pending-can-continue: false;
+    // The same diagram the form drew as a plan, now as progress. Its own
+    // property rather than `steps`, because one is what will happen and the
+    // other is what has — and a single model would make the form's plan flicker
+    // into progress for a launch it is not describing.
+    in property <[FlowStep]> pending-steps: [];
+
+    // ── Claiming a name as part of the launch ───────────────────────────
+    // Which of the two ways in is showing. The interface's own business — core
+    // is told nothing until a button is pressed — but it lives here so the
+    // chooser and the form can both reach it.
+    in-out property <bool> claiming: false;
+    // Non-empty when the currency is to be defined under a name that does not
+    // exist yet. Exactly one of this and `identity` is ever set; core refuses a
+    // draft carrying both rather than picking one.
+    in-out property <string> new-name: "";
+    // What the chain and the local rule make of that name, and what claiming it
+    // costs. Both arrive from the same check the identity screen uses.
+    in property <string> new-name-problem: "";
+    in property <string> new-name-fee: "";
+    // Who may revoke and who may recover the identity that gets claimed.
+    //
+    // Offered here rather than left to a later update because leaving them
+    // blank makes the identity its own authority, which means it can never be
+    // revoked — and finding that out afterwards costs another transaction.
+    in-out property <string> new-revocation: "";
+    in-out property <string> new-recovery: "";
+    // The answer to that question: "" | "none" | "other". Empty is not a
+    // default — it is the step being unanswered, and the form will not move past
+    // it. The same rule `IdentityState.claim-authority` follows, because it is
+    // the same decision with the same permanent consequence.
+    in-out property <string> new-authority: "";
+}
+
 export global IdentityState {
     // Yours, and the ones somebody looked up. Two lists, because they answer
     // different questions — one is a fact about your keys, the other is what
@@ -267,6 +404,14 @@ export global IdentityState {
     in-out property <int> content-view: 0;
 
     // ── Claiming a name ─────────────────────────────────────────────────
+    // Which question the form is on: "name" | "authority" | "review". Same
+    // shape as `SendState.step`, and reset with `claiming` so a form reopened
+    // later does not start halfway through somebody else's answers.
+    in-out property <string> claim-step: "name";
+    // The answer to the second question: "" | "none" | "other". Empty is not a
+    // default — it is the step being unanswered, and the form will not move
+    // past it. That is the point of the step existing.
+    in-out property <string> claim-authority: "";
     in-out property <string> name-draft: "";
     // Why the name will not do. Empty when it is fine.
     in property <string> name-problem: "";
@@ -287,6 +432,11 @@ export global IdentityState {
     in property <string> reg-deadline: "";
     in property <string> reg-fee: "";
     in property <string> reg-address: "";
+    // The three transactions a claim is made of, and how far it has got. Built
+    // in the core — how many there are and which cost money are chain facts.
+    // Empty when the claim ended without finishing, because a diagram of a
+    // journey nobody is on any more is worse than none.
+    in property <[FlowStep]> reg-steps: [];
     in property <bool> reg-busy: false;
     in property <bool> reg-cannot-be-revoked: false;
 
@@ -520,6 +670,52 @@ export global Actions {
     // the label beside it. Everything durable is chosen from this, so the core
     // is what decides; this only asks.
     callback set-requested-network(string);
+
+    // ── Currencies ──────────────────────────────────────────────────────
+    // Reads only. Defining one is a later step and is not wired here yet.
+    callback refresh-currencies();
+    callback open-currency(string);
+    // Re-check the draft. Called on every edit; the core answers from memory.
+    //
+    // No arguments: the draft lives on `CurrencyState`, and a callback with
+    // eight parameters — two of them lists — would be a signature nobody could
+    // change without changing five call sites.
+    callback check-currency();
+    // Adding and removing a row changes the length of a model, which Slint
+    // cannot do from a binding. Rust rebuilds it and the form re-checks.
+    callback add-reserve();
+    callback remove-reserve(int);
+    // Narrow the chain's currency list. Debounced by the picker: the first of
+    // these fetches half a megabyte, the rest are answered from memory.
+    callback search-currencies(string);
+    // How big the window is now, in logical pixels. Debounced by the window —
+    // see `AppWindow`.
+    callback remember-window(int, int);
+    // Row index, the chosen name, and its i-address — all three, because the
+    // draft carries the address and the form reads the name, and looking one up
+    // from the other here would be a second source of the same fact.
+    callback choose-reserve(int, string, string);
+    callback add-preallocation();
+    callback remove-preallocation(int);
+    // Whether that name can be claimed, and what it would cost. Same check the
+    // identity screen makes, because it is the same question.
+    callback check-currency-name(string);
+    // Build and sign it. Nothing is sent — the review that follows is decoded
+    // from what this produced.
+    callback prepare-launch();
+    // Claim the name, then define the currency under it. One press, because it
+    // is one decision — and the currency is written down before the
+    // registration is paid for, so a wallet that dies in between knows what the
+    // identity it just bought was for.
+    callback start-currency-from-new-name();
+    // Pick up a currency whose identity landed while the wallet was closed.
+    // Never automatic: nobody was watching, and signing a two hundred coin
+    // launch because an application was opened is not a decision to make on
+    // somebody's behalf.
+    callback resume-launch();
+    callback abandon-launch();
+    callback confirm-launch(int);
+    callback cancel-launch(int);
 
     // ── VerusIDs ────────────────────────────────────────────────────────
     // None of these carries a secret. Reading an identity needs no key, and
@@ -3167,23 +3363,167 @@ component LookUpForm inherits VerticalLayout {
     }
 }
 
-// Claiming a name: the form, and then the claim in progress.
-component RegisterForm inherits VerticalLayout {
-    spacing: Sp.s5;
+// What happens, in order, and where it has got to.
+//
+// # Why this exists rather than a spinner
+//
+// Creating a currency from a new name is two transactions with a wait between
+// them, and the wallet does the second one by itself. "Happening in the
+// background" is the whole promise, and a spinner is the shape that promise
+// takes when nobody makes it legible — so this names the four steps and marks
+// the two that spend money, which is what somebody would want to stop before.
+component FlowStepper inherits HorizontalLayout {
+    in property <[FlowStep]> steps;
+    spacing: Sp.s2;
+    alignment: start;
 
-    VerticalLayout {
+    for step[i] in root.steps: HorizontalLayout {
+        spacing: Sp.s2;
+
+        VerticalLayout {
+            spacing: Sp.s2;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: center;
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: step.state == "done" ? Theme.positive
+                        : step.state == "now" ? Theme.accent
+                        : step.state == "failed" ? Theme.negative
+                        : Theme.bg-inset;
+                    border-width: step.state == "later" ? 1px : 0px;
+                    border-color: Theme.border-default;
+                    Text {
+                        // A tick, a dot, an exclamation, or the step's number.
+                        // All four are in Inter — checked, because a glyph the
+                        // shipped font lacks draws nothing at all and this file
+                        // has been caught by that three times.
+                        text: step.state == "done" ? "✓"
+                            : step.state == "now" ? "●"
+                            : step.state == "failed" ? "!"
+                            : (i + 1);
+                        font-size: Typo.micro;
+                        font-weight: Typo.w-medium;
+                        color: step.state == "later" ? Theme.text-tertiary : Theme.text-on-accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 0px;
+                    alignment: center;
+                    Text {
+                        text: step.label;
+                        font-size: Typo.caption;
+                        font-weight: step.state == "now" ? Typo.w-medium : Typo.w-regular;
+                        color: step.state == "later" ? Theme.text-tertiary : Theme.text-primary;
+                    }
+                    if step.costs: Text {
+                        text: "costs a fee";
+                        font-size: Typo.micro;
+                        color: Theme.warning;
+                    }
+                }
+            }
+        }
+
+        // The connector, on every step but the last.
+        if i < root.steps.length - 1: Rectangle {
+            width: 24px;
+            height: 1px;
+            y: 10px;
+            background: Theme.border-default;
+        }
+    }
+}
+
+// Claiming a name: three questions, one at a time.
+//
+// # Why this is stepped and the send form is not
+//
+// Because one of the three is a decision people do not know they are making.
+// The authority fields, left blank, make the identity its own authority — and
+// consensus refuses a revocation whose subject is its own recovery authority,
+// so the name is then **unrevokable, permanently**, until a later transaction
+// pays to change it. On one flat form that outcome was what happened to
+// somebody who read nothing: the explanation was the biggest block of text on
+// the screen, sitting between the two fields it was about, and the way past it
+// was to ignore it.
+//
+// A step cannot be ignored. It can only be answered.
+component RegisterForm inherits VerticalLayout {
+    spacing: Sp.s6;
+
+    // The breadcrumb is built here, unlike the currency form's diagram, which
+    // comes from the core.
+    //
+    // The difference is what each one is about. That one draws **transactions**
+    // — how many there are and which cost money are facts about the chain, and
+    // an interface deciding them for itself would be a second opinion about
+    // what is being spent. This draws where somebody is in a form, which is
+    // this file's own business and has no chain fact in it at all. Routing it
+    // through the core would put a round trip between pressing Next and seeing
+    // the step change.
+    FlowStepper {
+        steps: [
+            {
+                label: "Choose the name",
+                state: IdentityState.claim-step == "name" ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Who can take it back",
+                state: IdentityState.claim-step == "name" ? "later"
+                    : IdentityState.claim-step == "authority" ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Check and claim",
+                state: IdentityState.claim-step == "review" ? "now" : "later",
+                costs: false,
+            },
+        ];
+    }
+
+    // ── 1 · The name ────────────────────────────────────────────────────
+    if IdentityState.claim-step == "name": VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Name";
+            text: "The name this identity will be known by. It becomes an address that never changes, and it cannot be renamed later.";
             font-size: Typo.caption;
             color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+        // Same debounce as the currency form's name field, for the same reason:
+        // two chain requests per keystroke.
+        //
+        // One difference worth stating: there, the local rule about what a name
+        // may contain still runs immediately, because the draft check runs it
+        // too. Here `check-name` is the only path, so a capital letter is now
+        // flagged after the pause rather than on the keystroke. That is a third
+        // of a second on a message nobody is racing, against sixteen requests
+        // for an eight-letter name.
+        namecheck := Timer {
+            interval: 350ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                Actions.check-name(IdentityState.name-draft);
+            }
         }
         name := Field {
             mono: true;
             placeholder: "lowercase, digits, _ and -";
             text <=> IdentityState.name-draft;
             invalid: name.text != "" && IdentityState.name-problem != "";
-            edited => { Actions.check-name(name.text); }
+            edited => {
+                namecheck.running = false;
+                namecheck.running = true;
+            }
         }
         if IdentityState.name-problem != "": Text {
             text: IdentityState.name-problem;
@@ -3199,71 +3539,218 @@ component RegisterForm inherits VerticalLayout {
         }
     }
 
-    // Not buried in an "advanced" fold, because the default is the dangerous
-    // one and this is the only moment it is free to change.
-    VerticalLayout {
+    // ── 2 · Who can take it back ────────────────────────────────────────
+    //
+    // Two answers, both of them written down. Neither is preselected: the whole
+    // reason this is a step is that the dangerous answer used to be what
+    // happened when nobody chose.
+    if IdentityState.claim-step == "authority": VerticalLayout {
         spacing: Sp.s3;
-        Eyebrow { text: "WHO CAN TAKE IT AWAY"; }
         Text {
-            text: "Leave these blank and the identity becomes its own authority — which means it cannot be revoked, because the chain refuses a revocation whose subject is its own recovery authority. You can change that later with your own keys, but it costs another transaction.";
+            text: "If this name is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that can only be set for free now.";
             font-size: Typo.caption;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
-        HorizontalLayout {
-            spacing: Sp.s4;
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: Sp.s2;
-                Text {
-                    text: "Revocation";
-                    font-size: Typo.caption;
-                    color: Theme.text-secondary;
+
+        choice := VerticalLayout {
+            spacing: Sp.s3;
+
+            Rectangle {
+                border-radius: R.md;
+                border-width: 1px;
+                border-color: IdentityState.claim-authority == "other"
+                    ? Theme.accent : Theme.border-subtle;
+                background: IdentityState.claim-authority == "other"
+                    ? Theme.accent-soft : Theme.bg-surface;
+                VerticalLayout {
+                    padding: Sp.s4;
+                    spacing: 2px;
+                    Text {
+                        text: "Another identity can recover it";
+                        font-size: Typo.body;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "The one to choose if this name matters. Name an identity you also control, or one you trust.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
                 }
-                revocation := Field {
-                    mono: true;
-                    placeholder: "name@ or i-address";
-                    text <=> IdentityState.revocation-draft;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { IdentityState.claim-authority = "other"; }
+                }
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Another identity can recover it. The one to choose if this name matters.";
+                accessible-action-default => { IdentityState.claim-authority = "other"; }
+            }
+
+            Rectangle {
+                border-radius: R.md;
+                border-width: 1px;
+                border-color: IdentityState.claim-authority == "none"
+                    ? Theme.warning : Theme.border-subtle;
+                background: IdentityState.claim-authority == "none"
+                    ? Theme.warning-soft : Theme.bg-surface;
+                VerticalLayout {
+                    padding: Sp.s4;
+                    spacing: 2px;
+                    Text {
+                        text: "Nobody — it can never be revoked";
+                        font-size: Typo.body;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        IdentityState.claim-authority = "none";
+                        // Cleared, so what the review shows and what the command
+                        // carries cannot disagree with the answer given here.
+                        IdentityState.revocation-draft = "";
+                        IdentityState.recovery-draft = "";
+                    }
+                }
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Nobody. It can never be revoked.";
+                accessible-action-default => {
+                    IdentityState.claim-authority = "none";
+                    IdentityState.revocation-draft = "";
+                    IdentityState.recovery-draft = "";
                 }
             }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: Sp.s2;
-                Text {
-                    text: "Recovery";
-                    font-size: Typo.caption;
-                    color: Theme.text-secondary;
+        }
+
+        if IdentityState.claim-authority == "other": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                spacing: Sp.s4;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Recovery — required";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> IdentityState.recovery-draft;
+                    }
                 }
-                recovery := Field {
-                    mono: true;
-                    placeholder: "name@ or i-address";
-                    text <=> IdentityState.recovery-draft;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Revocation — optional";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> IdentityState.revocation-draft;
+                    }
                 }
+            }
+            // Which of the two actually decides this, said plainly. It is not
+            // obvious and it is the reason one field is required and the other
+            // is not.
+            Text {
+                text: "Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
             }
         }
     }
 
-    HorizontalLayout {
-        alignment: end;
-        spacing: Sp.s3;
-        Btn {
-            text: "Cancel";
-            variant: "ghost";
-            enabled: !IdentityState.reg-busy;
-            clicked => { IdentityState.claiming = false; }
+    // ── 3 · Check and claim ─────────────────────────────────────────────
+    if IdentityState.claim-step == "review": VerticalLayout {
+        spacing: Sp.s5;
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: IdentityState.name-draft + "@";
+                font-family: Typo.mono;
+                font-size: Typo.title3;
+                color: Theme.text-primary;
+                wrap: char-wrap;
+            }
+            Text {
+                text: IdentityState.claim-authority == "none"
+                    ? "Nobody can revoke it, ever."
+                    : "Recoverable by " + IdentityState.recovery-draft;
+                font-size: Typo.body;
+                color: IdentityState.claim-authority == "none"
+                    ? Theme.warning : Theme.text-secondary;
+                wrap: word-wrap;
+            }
         }
-        Btn {
-            text: IdentityState.reg-busy ? "Working…" : "Claim this name";
-            variant: "primary";
-            enabled: !IdentityState.reg-busy
-                && IdentityState.name-draft != ""
-                && IdentityState.name-problem == "";
-            clicked => {
-                Actions.start-registration(
-                    IdentityState.name-draft,
-                    IdentityState.revocation-draft,
-                    IdentityState.recovery-draft,
-                );
+
+        // What the chain is about to be asked to do. Stated in words rather
+        // than drawn as a second diagram: the one above says where you are in
+        // this form, and two three-step pictures on one screen is a puzzle.
+        //
+        // The deadline belongs here, before the first fee, and not only in the
+        // panel that appears after it has been paid.
+        Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                Eyebrow { text: "WHAT HAPPENS NEXT · TWO TRANSACTIONS"; }
+                Text {
+                    text: "1 · The claim is signed and sent, and it costs a fee.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "2 · It has to be mined, which takes a few minutes. ChainVue may be closed while that happens — the claim is written down and picked up again.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "3 · The name is registered, which costs the rest of the fee. This must happen within about twenty blocks: the deadline is inside the bytes the claim was signed with, so it cannot be extended, and missing it spends the first fee for nothing.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if IdentityState.claim-authority == "none": Rectangle {
+            background: Theme.warning-soft;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s2;
+                Text {
+                    text: "This name will not be revokable";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "If its keys are ever copied, there is nothing that stops the copy being used. Naming a recovery authority is free right now and costs a transaction afterwards.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
             }
         }
     }
@@ -3286,6 +3773,14 @@ component RegistrationPanel inherits VerticalLayout {
         font-size: Typo.body;
         color: Theme.text-secondary;
         wrap: word-wrap;
+    }
+
+    // Where the claim has got to, in the same diagram the review described it
+    // with. Empty when the claim ended without finishing — the note above
+    // already says the fee is spent and the name was not registered, and a
+    // path somebody might still walk would be the wrong picture of that.
+    if IdentityState.reg-steps.length > 0: FlowStepper {
+        steps: IdentityState.reg-steps;
     }
 
     // The deadline, in the shape the send screen uses for a warning — because
@@ -3390,6 +3885,2023 @@ component RegistrationPanel inherits VerticalLayout {
     }
 }
 
+// What this wallet's identities define, and what they could still define.
+//
+// # Why the second list is on the same screen
+//
+// A currency cannot exist without an identity of the same name, and an identity
+// may define exactly one, once. So "which of my names are still free for this"
+// is not a separate question somebody goes looking for — it is the other half
+// of the list they are already reading, and the place a launch starts from.
+// A proportional bar: slices side by side, each as wide as its share.
+//
+// # Why a bar and not a pie
+//
+// The arithmetic is the same; the reading is not. A pie needs path arcs — new
+// geometry code in a crate that plots time series — and at this size it makes
+// two similar shares indistinguishable. A bar is rectangles with proportional
+// widths, which Slint lays out for free, and it can draw **short**: a basket
+// whose weights do not add to one whole leaves a visible gap, which is the one
+// mistake on this screen that cannot be fixed after the launch.
+//
+// A pie normalised to its own total is always full, and would have hidden it.
+// One answer, with its consequence written inside the thing you press.
+//
+// # Why a row rather than a segmented control
+//
+// Every either/or in the currency form is difficult for the same reason: the
+// labels are short and what they commit to is not. A segmented control can hold
+// "Token · Basket · NFT" and nothing else, so the explanation ends up in a
+// paragraph underneath that changes as the selection moves — which is a caption
+// about a control rather than a description of a choice, and it is read last if
+// it is read at all.
+//
+// A row carries the sentence. That is also what a screen reader announces,
+// because the label is built from both halves.
+component ChoiceRow inherits Rectangle {
+    in property <string> title;
+    in property <string> body;
+    // A value belonging to the answer rather than a sentence about it — an
+    // i-address, so far. Monospaced and last, because it is what somebody checks
+    // rather than what they read.
+    in property <string> note;
+    in property <bool> selected: false;
+    // An answer that is on screen to be read rather than pressed, with `body`
+    // carrying the reason. Refused options stay visible: a wallet whose
+    // unusable identities had silently vanished would look identical to one
+    // with no identities at all.
+    in property <bool> enabled: true;
+    // "accent" for an ordinary answer, "warning" for one with no way back.
+    in property <string> tone: "accent";
+    callback chosen();
+
+    border-radius: R.md;
+    // A refused answer loses its outline as well as its colour. With one, it
+    // reads as a control that happens to be off; without one, it reads as a note
+    // — which is what it is, and the difference has to survive a dark palette
+    // where a disabled fill and a live one are four per cent apart.
+    border-width: root.enabled || root.selected ? 1px : 0px;
+    border-color: root.selected
+        ? (root.tone == "warning" ? Theme.warning : Theme.accent)
+        : Theme.border-subtle;
+    background: root.selected
+        ? (root.tone == "warning" ? Theme.warning-soft : Theme.accent-soft)
+        : root.enabled ? Theme.bg-surface : Theme.bg-inset;
+    animate border-color, background { duration: Motion.fast; enabled: Motion.enabled; }
+
+    VerticalLayout {
+        padding: Sp.s4;
+        spacing: 2px;
+        Text {
+            text: root.title;
+            font-size: Typo.body;
+            font-weight: root.selected ? Typo.w-medium : Typo.w-regular;
+            color: root.enabled ? Theme.text-primary : Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+        if root.body != "": Text {
+            text: root.body;
+            font-size: Typo.caption;
+            color: root.enabled ? Theme.text-secondary : Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+        if root.note != "": Text {
+            text: root.note;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-tertiary;
+            wrap: char-wrap;
+        }
+    }
+
+    if root.enabled: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.chosen(); }
+    }
+
+    // The role has to be a constant — the same rule `ListRow` records — so a
+    // refused answer is announced as a button that cannot be pressed, with the
+    // reason in its label, rather than being silently inert.
+    accessible-role: AccessibleRole.button;
+    accessible-enabled: root.enabled;
+    accessible-label: root.body == "" ? root.title : root.title + ". " + root.body;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.chosen();
+        }
+    }
+}
+
+// The question a step is asking, and one line on why it matters.
+//
+// Every step starts with one of these, so a person who has just pressed Next
+// lands on a sentence rather than on a field.
+component StepHead inherits VerticalLayout {
+    in property <string> title;
+    in property <string> body;
+    spacing: Sp.s2;
+
+    Text {
+        text: root.title;
+        font-size: Typo.title3;
+        font-weight: Typo.w-semibold;
+        color: Theme.text-primary;
+        wrap: word-wrap;
+    }
+    if root.body != "": Text {
+        text: root.body;
+        font-size: Typo.caption;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+}
+
+component ProportionBar inherits VerticalLayout {
+    in property <[CurrencySlice]> slices;
+    // What an empty bar should say. An empty bar is not a neutral state here —
+    // for a token it means a currency that can never hold anything.
+    in property <string> empty-note;
+    spacing: Sp.s3;
+
+    // The slices are placed by hand rather than by a horizontal layout, and the
+    // reason is a compile error rather than a preference.
+    //
+    // A slice's width is a share of the track — `track.width * percent / 100`.
+    // Inside a layout, that width feeds the layout's minimum width, which feeds
+    // its parent's, and once this bar sits in a column whose own width is being
+    // negotiated the chain closes: the enclosing `Flickable` derives its
+    // viewport width from the content's minimum width, which now depends on the
+    // track's width, which depends on the viewport. Slint refuses to compile a
+    // binding loop, and it is right to — the layout would have no fixed point.
+    //
+    // Placed absolutely, a slice reports no minimum of its own and the loop is
+    // gone. The cost is that the running offset has to be carried, which is what
+    // `offset-percent` is for; the core computes it beside the share, from the
+    // same arithmetic, so the two cannot disagree about where a slice starts.
+    track := Rectangle {
+        height: 14px;
+        border-radius: R.sm;
+        background: Theme.bg-inset;
+        clip: true;
+
+        for slice in root.slices: Rectangle {
+            // The one place numbers cross this boundary unformatted, and they
+            // are proportions rather than amounts — see `CurrencySlice`.
+            x: track.width * slice.offset-percent / 100;
+            // Two pixels of daylight between neighbours, taken off the right so
+            // the first slice still starts at the left edge.
+            width: max(0px, track.width * slice.percent / 100 - 2px);
+            height: parent.height;
+            border-radius: R.sm;
+            background: slice.tone == "accent" ? Theme.accent
+                : slice.tone == "positive" ? Theme.positive
+                : slice.tone == "warning" ? Theme.warning
+                : Theme.text-tertiary;
+        }
+    }
+
+    if root.slices.length == 0 && root.empty-note != "": Text {
+        text: root.empty-note;
+        font-size: Typo.caption;
+        color: Theme.text-tertiary;
+        wrap: word-wrap;
+    }
+
+    // The legend. Colour is never the only signal — every slice is named and
+    // its share written out, which is also what a screen reader gets.
+    if root.slices.length > 0: VerticalLayout {
+        spacing: Sp.s2;
+        for slice in root.slices: HorizontalLayout {
+            spacing: Sp.s3;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                y: 4px;
+                border-radius: 2px;
+                background: slice.tone == "accent" ? Theme.accent
+                    : slice.tone == "positive" ? Theme.positive
+                    : slice.tone == "warning" ? Theme.warning
+                    : Theme.text-tertiary;
+            }
+            Text {
+                text: slice.label == "" ? "—" : slice.label;
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: slice.percent-display;
+                font-family: Typo.mono;
+                font-size: Typo.num-sm;
+                color: Theme.text-primary;
+            }
+        }
+    }
+}
+
+
+// What would go on the chain, updating as the form is edited.
+//
+// The permanent fields are marked, and that marking is the reason the panel is
+// here: everything else it shows is also in the form above it.
+component DefinitionPreview inherits VerticalLayout {
+    in property <[CurrencyField]> fields;
+    spacing: Sp.s3;
+
+    // Label beside value, in two columns.
+    //
+    // It was stacked for a while, and the reason was real: this panel lived in a
+    // 360px column, where the value got whatever the label left of it and an
+    // i-address does not fit in that — so the preview clipped, and a preview
+    // showing a different definition from the one being made is worse than no
+    // preview.
+    //
+    // The panel is on a full-width review now. Seven label/value pairs stacked
+    // is fourteen lines of alternating type sizes that has to be read in order
+    // to be read at all; in two columns it is a table, which is what somebody
+    // checking a definition against what they meant actually wants. The label
+    // column is fixed so the values line up down the page.
+    for field in root.fields: HorizontalLayout {
+        spacing: Sp.s5;
+        Text {
+            text: field.label;
+            width: 180px;
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+        Text {
+            text: field.value;
+            horizontal-stretch: 1;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-primary;
+            // `char-wrap`, not `word-wrap`. Half of these are single unbroken
+            // tokens — an i-address has no spaces to break at — and
+            // word-wrapping one just clips it.
+            wrap: char-wrap;
+        }
+    }
+}
+
+// Configuring a currency: one question at a time.
+//
+// # Why this is stepped now, when it deliberately was not before
+//
+// It used to be one page — the kind, the identity, the reserves, the supply,
+// two permanent switches and a start height down the left, with a live picture
+// of the definition on the right. The argument for that shape was written into
+// this file: every field here is permanent, and a stepped flow hides the
+// consequence of step two while somebody is on step one.
+//
+// That was the wrong conclusion from a true premise. Nothing was hidden and
+// nothing was legible either: two of the six sections did not apply to the kind
+// that was selected, the right-hand panel restated six values that were already
+// on the left, and the whole form was three windows tall in a column 420px
+// wide. "Everything visible at once" had become "none of it readable".
+//
+// So the premise is answered where it belongs instead. Each step asks one
+// thing, and the **last step is the whole definition at full width** — every
+// value, both bars, the fee, and every warning — which is the screen the old
+// side panel was trying to be. Nothing is signed before it has been seen, and
+// the review after it still reads its figures off the transaction rather than
+// off this form.
+component CurrencyForm inherits VerticalLayout {
+    spacing: Sp.s6;
+
+    // Where the form is, as a number, so the breadcrumb is written once rather
+    // than five times. The claiming path has one more question in the middle —
+    // see `plan()` in the core for why that path is a different journey rather
+    // than this one with a step inserted.
+    property <int> at: CurrencyState.form-step == "kind" ? 0
+        : CurrencyState.form-step == "under" ? 1
+        : CurrencyState.form-step == "authority" ? 2
+        : CurrencyState.form-step == "setup" ? (CurrencyState.claiming ? 3 : 2)
+        : (CurrencyState.claiming ? 4 : 3);
+
+    // Re-checking the draft is cheap in the core — arithmetic over what was
+    // typed, no node asked — but the answer rebuilds five models: the problems,
+    // both bars' slices, the preview and the step list. Done on every keystroke
+    // that is five model swaps and a repaint per character, which is what typing
+    // into a weight or an amount felt like.
+    //
+    // A tenth of a second collapses a burst into one check and is under the
+    // threshold where a preview reads as lagging behind the field.
+    //
+    // Only the typed fields go through here. Choosing a kind, picking an
+    // identity or adding a row are single acts with nothing to collapse, and
+    // they still check immediately.
+    draftcheck := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            Actions.check-currency();
+        }
+    }
+
+    function recheck() {
+        draftcheck.running = false;
+        draftcheck.running = true;
+    }
+
+    // The breadcrumb, built here rather than in the core.
+    //
+    // The difference from `CurrencyState.steps` is what each one is about. That
+    // one draws **transactions** — how many there are and which cost money are
+    // facts about the chain, and an interface deciding them for itself would be
+    // a second opinion about what is being spent. This draws where somebody is
+    // in a form, which is this file's own business. The same split the identity
+    // claim form records.
+    //
+    // Two of them rather than one with a conditional entry, because the two
+    // paths have a different number of questions and a step that appears and
+    // disappears under the current position is worse than two honest pictures.
+    if !CurrencyState.claiming: FlowStepper {
+        steps: [
+            {
+                label: "Kind",
+                state: root.at == 0 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Identity",
+                state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Set it up",
+                state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Check and launch",
+                state: root.at < 3 ? "later" : "now",
+                costs: false,
+            },
+        ];
+    }
+    if CurrencyState.claiming: FlowStepper {
+        steps: [
+            {
+                label: "Kind",
+                state: root.at == 0 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Name",
+                state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Who can take it back",
+                state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Set it up",
+                state: root.at < 3 ? "later" : root.at == 3 ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Check and launch",
+                state: root.at < 4 ? "later" : "now",
+                costs: false,
+            },
+        ];
+    }
+
+    // ── 1 · What kind ───────────────────────────────────────────────────
+    //
+    // First, because it decides which questions come after it.
+    if CurrencyState.form-step == "kind": VerticalLayout {
+        spacing: Sp.s4;
+
+        StepHead {
+            title: "What kind of currency?";
+            body: "This decides what the rest of the form asks for, and it is fixed at launch.";
+        }
+
+        ChoiceRow {
+            title: "Token";
+            body: "A plain token. It exists in whatever quantity you allocate at launch, or that you mint later.";
+            selected: CurrencyState.kind == "token";
+            chosen => {
+                CurrencyState.kind = "token";
+                Actions.check-currency();
+            }
+        }
+        ChoiceRow {
+            title: "Basket";
+            body: "Holds reserves of other currencies and converts between them. You set each reserve's share of the whole, and consensus reads those shares exactly.";
+            selected: CurrencyState.kind == "basket";
+            chosen => {
+                CurrencyState.kind = "basket";
+                Actions.check-currency();
+            }
+        }
+        ChoiceRow {
+            title: "NFT";
+            body: "A single indivisible unit. No supply to set and no reserves to hold.";
+            selected: CurrencyState.kind == "nft";
+            chosen => {
+                CurrencyState.kind = "nft";
+                Actions.check-currency();
+            }
+        }
+    }
+
+    // ── 2 · Which identity ──────────────────────────────────────────────
+    //
+    // One list, not a chooser above a list.
+    //
+    // This step used to ask twice: a pair of rows for *where the identity comes
+    // from*, and then, underneath, the identities themselves in rows that looked
+    // exactly the same. Two levels of the same control, and the reader had to
+    // work out which pair was the question.
+    //
+    // There is only one question — which name does this currency take — and a
+    // name that does not exist yet is one of its answers. So it is one list with
+    // exactly one selection, and the last entry is the one that has to be
+    // claimed first.
+    if CurrencyState.form-step == "under": VerticalLayout {
+        spacing: Sp.s4;
+
+        StepHead {
+            title: "Which name will it use?";
+            body: "The currency takes that identity's address and its name, and that identity can never define another one.";
+        }
+
+        // Collapsed the moment it is answered.
+        //
+        // Every identity in the wallet, listed in full, is as tall as the wallet
+        // is old — and the field that appears when a new name is chosen sat
+        // below all of them, off the bottom of the window. Choosing is a step,
+        // and a finished step should take one row.
+        if CurrencyState.claiming || CurrencyState.identity != "": HorizontalLayout {
+            spacing: Sp.s4;
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: R.md;
+                border-width: 1px;
+                border-color: Theme.accent;
+                background: Theme.accent-soft;
+                VerticalLayout {
+                    padding: Sp.s4;
+                    spacing: 2px;
+                    Text {
+                        text: CurrencyState.claiming
+                            ? "A new name, claimed as part of this launch"
+                            : CurrencyState.identity-name == ""
+                                ? CurrencyState.identity
+                                : CurrencyState.identity-name;
+                        font-size: Typo.body;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+                    if !CurrencyState.claiming: Text {
+                        text: CurrencyState.identity;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-tertiary;
+                        wrap: char-wrap;
+                    }
+                }
+            }
+            Btn {
+                text: "Change";
+                variant: "ghost";
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    CurrencyState.claiming = false;
+                    CurrencyState.identity = "";
+                    CurrencyState.identity-name = "";
+                    CurrencyState.new-name = "";
+                    Actions.check-currency();
+                }
+            }
+        }
+
+        // Wrapped in a layout because Slint cannot put a `for` directly after
+        // an `if` — the condition takes one element, and a repeater is not one.
+        if !CurrencyState.claiming && CurrencyState.identity == "": VerticalLayout {
+            spacing: Sp.s3;
+
+            for entry in CurrencyState.eligible: ChoiceRow {
+                title: entry.name;
+                // The refusal when there is one, and the address when there is
+                // not. Never both: a row that can be pressed does not need to
+                // explain itself, and one that cannot has nothing else to say.
+                body: entry.refusal;
+                note: entry.refusal == "" ? entry.address : "";
+                enabled: entry.refusal == "";
+                selected: !CurrencyState.claiming && CurrencyState.identity == entry.address;
+                chosen => {
+                    CurrencyState.claiming = false;
+                    CurrencyState.new-name = "";
+                    CurrencyState.identity = entry.address;
+                    CurrencyState.identity-name = entry.name;
+                    Actions.check-currency();
+                }
+            }
+
+            // The answer that makes this screen usable on a wallet with no spare
+            // identity — which is every wallet, the first time. An entry in the
+            // same list rather than a link somewhere below, because it answers
+            // the same question the rows above it do.
+            ChoiceRow {
+                title: "A new name";
+                body: "Claim one as part of this launch. The identity and the currency share the name and the address, and the wallet does the two in order.";
+                selected: CurrencyState.claiming;
+                chosen => {
+                    CurrencyState.claiming = true;
+                    // Clearing the other answer, because core refuses a draft
+                    // that carries both — and it is right to: guessing which was
+                    // meant would define a currency under an identity nobody
+                    // chose.
+                    CurrencyState.identity = "";
+                    CurrencyState.identity-name = "";
+                    Actions.check-currency();
+                }
+            }
+        }
+
+        // Directly under the row it belongs to, so the field and the answer that
+        // asked for it read as one thing.
+        if CurrencyState.claiming: VerticalLayout {
+            spacing: Sp.s3;
+
+            // Asking the chain about a name costs two requests — is it taken,
+            // and what does it cost — and firing them on every keystroke sent
+            // sixteen of them for the word "livecoin", each one landing out of
+            // order and rewriting the field's answer as it went. That is what
+            // the screen feeling slow actually was.
+            //
+            // The local rule still runs on every keystroke: it is arithmetic
+            // over a string and it is what refuses a capital letter instantly.
+            // Only the chain waits for a pause.
+            namecheck := Timer {
+                interval: 350ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    Actions.check-currency-name(CurrencyState.new-name);
+                }
+            }
+            Text {
+                text: "The name to claim";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+            }
+            newname := Field {
+                mono: true;
+                placeholder: "lowercase, digits, _ and -";
+                text <=> CurrencyState.new-name;
+                invalid: newname.text != "" && CurrencyState.new-name-problem != "";
+                edited => {
+                    // Restarted, not merely started: each keystroke pushes the
+                    // question back, so it is asked once about the name
+                    // somebody stopped typing.
+                    namecheck.running = false;
+                    namecheck.running = true;
+                    root.recheck();
+                }
+            }
+            if CurrencyState.new-name-problem != "": Text {
+                text: CurrencyState.new-name-problem;
+                font-size: Typo.caption;
+                color: Theme.negative;
+                wrap: word-wrap;
+            }
+            // Both fees, together. They are charged by two different
+            // transactions and a screen that showed one of them would understate
+            // what this commits to by the larger half.
+            if CurrencyState.new-name-problem == "" && CurrencyState.new-name-fee != "": Text {
+                text: "Free to claim · the name costs " + CurrencyState.new-name-fee + " " + WalletState.ticker
+                    + ", and the launch costs " + CurrencyState.fee + " " + WalletState.ticker + " on top.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+    }
+    // ── 3 · Who can take the name back ──────────────────────────────────
+    //
+    // Only on the path that claims one, and the same question the identity
+    // screen asks in the same words — because it is the same decision with the
+    // same permanent consequence, and two wordings for it would be two answers.
+    //
+    // Neither answer is preselected. The whole reason this is a step is that the
+    // dangerous one used to be what happened when nobody chose.
+    if CurrencyState.form-step == "authority": VerticalLayout {
+        spacing: Sp.s4;
+
+        StepHead {
+            title: "Who can take this name back?";
+            body: "If it is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that is free to set only now.";
+        }
+
+        ChoiceRow {
+            title: "Another identity can recover it";
+            body: "The one to choose if this name matters. Name an identity you also control, or one you trust.";
+            selected: CurrencyState.new-authority == "other";
+            chosen => { CurrencyState.new-authority = "other"; }
+        }
+        ChoiceRow {
+            title: "Nobody — it can never be revoked";
+            tone: "warning";
+            body: "The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.";
+            selected: CurrencyState.new-authority == "none";
+            chosen => {
+                CurrencyState.new-authority = "none";
+                // Cleared, so what the review shows and what the command carries
+                // cannot disagree with the answer given here.
+                CurrencyState.new-revocation = "";
+                CurrencyState.new-recovery = "";
+            }
+        }
+
+        if CurrencyState.new-authority == "other": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                spacing: Sp.s4;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Recovery — required";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> CurrencyState.new-recovery;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Revocation — optional";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> CurrencyState.new-revocation;
+                    }
+                }
+            }
+            // Which of the two actually decides this, said plainly. It is not
+            // obvious and it is the reason one field is required and the other
+            // is not.
+            Text {
+                text: "Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // ── 4 · Set it up ───────────────────────────────────────────────────
+    //
+    // The kind-specific questions, and the two permanent switches that are not
+    // amounts. Each table has its bar directly underneath rather than in a
+    // column beside the form: the bar is feedback on the rows above it, and at
+    // full width its legend stops reflowing every time a row is added.
+    if CurrencyState.form-step == "setup": VerticalLayout {
+        spacing: Sp.s6;
+
+        StepHead {
+            title: CurrencyState.kind == "basket" ? "Set up the basket"
+                : CurrencyState.kind == "nft" ? "Set up the NFT"
+                : "Set up the token";
+            body: CurrencyState.kind == "nft"
+                ? "An NFT is one indivisible unit, so there is no supply to allocate and no reserve to hold."
+                : "Everything here is fixed at launch.";
+        }
+
+        // Reserves — a basket only.
+        if CurrencyState.kind == "basket": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                Text {
+                    text: "Reserves";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Btn {
+                    text: "Add a reserve";
+                    clicked => { Actions.add-reserve(); }
+                }
+            }
+            Text {
+                text: "The weights are shares of one whole and must add to 100%. Consensus reads them exactly, and a basket launched with the wrong ones has the wrong prices in it forever.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            // Column names, because a placeholder disappears the moment somebody
+            // types into the field it was describing — which is when a bare `50`
+            // in a narrow column stops saying what it is a share of.
+            if CurrencyState.reserve-rows.length > 0: HorizontalLayout {
+                spacing: Sp.s4;
+                Text {
+                    text: "CURRENCY";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "SHARE %";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    width: 120px;
+                }
+                Rectangle { width: 108px; }
+            }
+            for entry[i] in CurrencyState.reserve-rows: HorizontalLayout {
+                spacing: Sp.s4;
+                // Chosen, not typed.
+                //
+                // The definition carries a currency's **i-address**, and this
+                // field used to take a name — so a basket with `VRSCTEST` as a
+                // reserve was accepted by every check on this screen and then
+                // refused by the builder, after the launch had been agreed to,
+                // with a message about i-addresses that nothing had mentioned.
+                // A list of what the chain actually has cannot be typed wrong.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 42px;
+                    border-radius: R.md;
+                    border-width: 1px;
+                    border-color: pick.has-focus && InputMode.keyboard
+                        ? Theme.accent
+                        : Theme.border-default;
+                    background: touch.has-hover ? Theme.bg-hover : Theme.bg-inset;
+                    animate background, border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+                    HorizontalLayout {
+                        padding-left: Sp.s5;
+                        padding-right: Sp.s5;
+                        spacing: Sp.s3;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 0px;
+                            Text {
+                                text: entry.name == ""
+                                    ? (entry.currency == "" ? "Choose a currency" : entry.currency)
+                                    : entry.name;
+                                font-size: Typo.body;
+                                color: entry.currency == "" ? Theme.text-disabled : Theme.text-primary;
+                                overflow: elide;
+                            }
+                            if entry.name != "": Text {
+                                text: entry.currency;
+                                font-family: Typo.mono;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                overflow: elide;
+                            }
+                        }
+                        Text {
+                            text: "▾";
+                            font-size: Typo.caption;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    pick := FocusScope {
+                        key-pressed(event) => {
+                            if (event.text == "\n" || event.text == " ") {
+                                CurrencyState.picking-reserve = i;
+                                Actions.search-currencies("");
+                                return EventResult.accept;
+                            }
+                            return EventResult.reject;
+                        }
+                    }
+                    // Outside the shape, and only while the keyboard is
+                    // driving — the rule `Btn` documents.
+                    if pick.has-focus && InputMode.keyboard: Rectangle {
+                        x: -3px;
+                        y: -3px;
+                        width: parent.width + 6px;
+                        height: parent.height + 6px;
+                        border-radius: R.md + 3px;
+                        border-width: 2px;
+                        border-color: Theme.accent-ring;
+                    }
+
+                    touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            InputMode.keyboard = false;
+                            pick.focus();
+                            CurrencyState.picking-reserve = i;
+                            // Opened on an empty query, which is the start of
+                            // the whole list rather than nothing at all.
+                            Actions.search-currencies("");
+                        }
+                    }
+
+                    accessible-role: AccessibleRole.button;
+                    accessible-label: entry.name == ""
+                        ? "Choose a currency for this reserve"
+                        : "Reserve currency, " + entry.name + ". Choose a different one.";
+                    accessible-action-default => {
+                        CurrencyState.picking-reserve = i;
+                        Actions.search-currencies("");
+                    }
+                }
+                // Seeded on `init`, not bound.
+                //
+                // `Field.text` is an alias for its inner input's text. A one-way
+                // binding on it — `text: entry.weight` — fights the typing: the
+                // binding re-evaluates and puts the old value back, so the field
+                // silently refuses everything typed into it. And `<=>` cannot
+                // point at a model element; Slint requires a property reference.
+                //
+                // So the row seeds itself once when it is built and writes back
+                // on every edit. The model stays the source of truth for Rust,
+                // and the field owns what is in it while somebody is typing.
+                Field {
+                    width: 120px;
+                    mono: true;
+                    placeholder: "%";
+                    init => { self.text = entry.weight; }
+                    edited => {
+                        CurrencyState.reserve-rows[i].weight = self.text;
+                        root.recheck();
+                    }
+                }
+                Btn {
+                    text: "Remove";
+                    variant: "ghost";
+                    width: 108px;
+                    clicked => { Actions.remove-reserve(i); }
+                }
+            }
+            // The total beside the bar, in the tone the bar is drawn in, so the
+            // picture and the number say the same thing.
+            HorizontalLayout {
+                height: 16px;
+                Eyebrow {
+                    text: "SHARES OF THE WHOLE";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: CurrencyState.weights-total;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: CurrencyState.weights-total == "100%"
+                        ? Theme.positive
+                        : Theme.warning;
+                    vertical-alignment: center;
+                }
+            }
+            ProportionBar {
+                slices: CurrencyState.slices;
+                empty-note: "No reserves yet. A basket without them holds nothing.";
+            }
+        }
+
+        // Starting supply — everything except an NFT, which is always exactly
+        // one unit.
+        if CurrencyState.kind != "nft": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                Text {
+                    text: "Starting supply";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Btn {
+                    text: "Allocate to an identity";
+                    clicked => { Actions.add-preallocation(); }
+                }
+            }
+            Text {
+                text: "Allocations go to identities, not to addresses. Nothing here means the currency starts empty — which is only useful if it can be minted.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            if CurrencyState.supply-rows.length > 0: HorizontalLayout {
+                spacing: Sp.s4;
+                Text {
+                    text: "IDENTITY";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "AMOUNT";
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    width: 160px;
+                }
+                Rectangle { width: 108px; }
+            }
+            for entry[i] in CurrencyState.supply-rows: HorizontalLayout {
+                spacing: Sp.s4;
+                Field {
+                    horizontal-stretch: 1;
+                    mono: true;
+                    placeholder: "name@ or i-address";
+                    init => { self.text = entry.recipient; }
+                    edited => {
+                        CurrencyState.supply-rows[i].recipient = self.text;
+                        root.recheck();
+                    }
+                }
+                Field {
+                    width: 160px;
+                    mono: true;
+                    placeholder: "0.0000 0000";
+                    init => { self.text = entry.amount; }
+                    edited => {
+                        CurrencyState.supply-rows[i].amount = self.text;
+                        root.recheck();
+                    }
+                }
+                Btn {
+                    text: "Remove";
+                    variant: "ghost";
+                    width: 108px;
+                    clicked => { Actions.remove-preallocation(i); }
+                }
+            }
+            HorizontalLayout {
+                height: 16px;
+                Eyebrow {
+                    text: "ALLOCATED AT LAUNCH";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: CurrencyState.supply-total;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+            }
+            ProportionBar {
+                slices: CurrencyState.supply-slices;
+                empty-note: "Nothing allocated. The currency starts empty.";
+            }
+        }
+
+        // Can the supply grow. Two rows rather than a segmented control,
+        // because the two answers are a sentence apart and one of them cannot be
+        // undone.
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Can more be minted later?";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            ChoiceRow {
+                title: "No — fixed at launch";
+                body: "The supply is what it is, and nothing can add to it, ever.";
+                selected: !CurrencyState.mintable;
+                chosen => {
+                    CurrencyState.mintable = false;
+                    Actions.check-currency();
+                }
+            }
+            ChoiceRow {
+                title: "Yes — this identity can mint more";
+                body: "Whoever controls the identity can create more at any time. Whoever holds the currency is trusting that.";
+                selected: CurrencyState.mintable;
+                chosen => {
+                    CurrencyState.mintable = true;
+                    Actions.check-currency();
+                }
+            }
+        }
+
+        // When it begins. A launch is not instant, and consensus refuses a
+        // currency that starts at or before the block it was mined in.
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "When does it start?";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            HorizontalLayout {
+                spacing: Sp.s5;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: "Blocks from now";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Text {
+                        text: CurrencyState.start-block == ""
+                            ? "Consensus refuses a currency that begins at or before the current block."
+                            : "Block " + CurrencyState.start-block + ", roughly " + CurrencyState.start-delay + " minutes away.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
+                delay := Field {
+                    width: 160px;
+                    mono: true;
+                    placeholder: "20";
+                    y: (parent.height - self.height) / 2;
+                    init => { self.text = CurrencyState.start-delay; }
+                    edited => {
+                        CurrencyState.start-delay = delay.text;
+                        root.recheck();
+                    }
+                }
+            }
+        }
+
+        // Why the button is off, or what the chain will say yes to anyway.
+        // Blocking first — one of them is the reason Next does not move.
+        if CurrencyState.problems.length > 0: VerticalLayout {
+            spacing: Sp.s3;
+            for problem in CurrencyState.problems: Rectangle {
+                background: problem.blocking ? Theme.negative-soft : Theme.warning-soft;
+                border-radius: R.md;
+                VerticalLayout {
+                    padding: Sp.s5;
+                    Text {
+                        text: problem.text;
+                        font-size: Typo.caption;
+                        color: problem.blocking ? Theme.negative : Theme.warning;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 5 · Check and launch ────────────────────────────────────────────
+    //
+    // The whole definition at full width, which is what the old side panel was
+    // trying to be in 360px beside a form that already said most of it.
+    if CurrencyState.form-step == "review": VerticalLayout {
+        spacing: Sp.s5;
+
+        StepHead {
+            title: "Check it, then launch";
+            body: "Every value here is fixed when the definition is mined. An identity defines one currency, once.";
+        }
+
+        Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s4;
+                // Said once, here, rather than tagged on every row. Every field
+                // of a currency definition is permanent, and a "permanent" mark
+                // beside all six of them is six copies of one sentence.
+                Eyebrow { text: "WHAT GOES ON THE CHAIN · ALL OF IT PERMANENT"; }
+                DefinitionPreview { fields: CurrencyState.preview; }
+            }
+        }
+
+        if CurrencyState.kind == "basket": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                height: 16px;
+                Eyebrow {
+                    text: "RESERVES";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: CurrencyState.weights-total;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: CurrencyState.weights-total == "100%"
+                        ? Theme.positive
+                        : Theme.warning;
+                    vertical-alignment: center;
+                }
+            }
+            ProportionBar {
+                slices: CurrencyState.slices;
+                empty-note: "No reserves. A basket without them holds nothing.";
+            }
+        }
+
+        if CurrencyState.kind != "nft": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                height: 16px;
+                Eyebrow {
+                    text: "STARTING SUPPLY";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: CurrencyState.supply-total;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+            }
+            ProportionBar {
+                slices: CurrencyState.supply-slices;
+                empty-note: "Nothing allocated. The currency starts empty.";
+            }
+        }
+
+        if CurrencyState.fee != "": VerticalLayout {
+            spacing: Sp.s2;
+            HorizontalLayout {
+                Text {
+                    text: "Launch fee";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Money {
+                    amount: CurrencyState.fee;
+                    currency: WalletState.ticker;
+                    size: Typo.num;
+                }
+            }
+            // The half that is burned is not a detail. The SDK's own capture
+            // shows 205 in, 105 out and 100 unaccounted for, and the miner fee
+            // is on top of all of it.
+            Text {
+                text: "Half of this becomes the new currency's reserve deposit and half is burned. The miner fee is on top and is not included here.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+
+        // What the chain is about to be asked to do, from the core — how many
+        // transactions there are and which cost money are its facts, not this
+        // file's. Written as a list rather than drawn with `FlowStepper`,
+        // because the breadcrumb at the top of this form is already a stepper
+        // and two of those on one screen is a puzzle.
+        if CurrencyState.steps.length > 0: Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                Eyebrow {
+                    text: CurrencyState.steps.length == 1
+                        ? "WHAT HAPPENS NEXT · ONE TRANSACTION"
+                        : "WHAT HAPPENS NEXT · " + CurrencyState.steps.length + " STEPS";
+                }
+                for step[i] in CurrencyState.steps: HorizontalLayout {
+                    spacing: Sp.s3;
+                    Text {
+                        text: i + 1;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-tertiary;
+                    }
+                    Text {
+                        text: step.label;
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+                    if step.costs: Text {
+                        text: "costs a fee";
+                        font-size: Typo.micro;
+                        color: Theme.warning;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            background: Theme.warning-soft;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s2;
+                Text {
+                    text: "This cannot be undone or repeated";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: CurrencyState.claiming
+                        ? "The next press claims the name and pays for it. The launch itself is reviewed afterwards, once the name is on the chain."
+                        : "The next press builds and signs the definition and shows the exact fee. Nothing is sent until that review is agreed to.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if CurrencyState.problems.length > 0: VerticalLayout {
+            spacing: Sp.s3;
+            for problem in CurrencyState.problems: Rectangle {
+                background: problem.blocking ? Theme.negative-soft : Theme.warning-soft;
+                border-radius: R.md;
+                VerticalLayout {
+                    padding: Sp.s5;
+                    Text {
+                        text: problem.text;
+                        font-size: Typo.caption;
+                        color: problem.blocking ? Theme.negative : Theme.warning;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The last moment before something irreversible.
+//
+// Its own layer over the screen rather than a section inside it, for the reason
+// the send review and the identity change review are: this is not one heading
+// among eight. Everything on it was read back off the transaction that was
+// actually built and signed — the fee especially, which comes from chain policy
+// and not from anything typed into the form.
+component LaunchReview inherits Rectangle {
+    background: Theme.dark ? #0B0C0EE0 : #FBFBFCE0;
+    TouchArea {}
+
+    Card {
+        elevated: true;
+        width: 520px;
+        height: content.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        content := VerticalLayout {
+            padding: Sp.s8;
+            spacing: Sp.s5;
+
+            VerticalLayout {
+                spacing: Sp.s2;
+                Text {
+                    text: "Launch this currency";
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-semibold;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: CurrencyState.launch-name;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-secondary;
+                }
+            }
+
+            Text {
+                text: CurrencyState.launch-description;
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            // Three figures, because one would understate it. The fee splits in
+            // half and both halves are funded — only one comes back as an
+            // output — and the miner fee is on top of both.
+            VerticalLayout {
+                spacing: Sp.s3;
+                HorizontalLayout {
+                    Text {
+                        text: "Launch fee";
+                        font-size: Typo.body;
+                        font-weight: Typo.w-medium;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
+                    }
+                    Money {
+                        amount: CurrencyState.launch-fee;
+                        currency: WalletState.ticker;
+                        size: Typo.num;
+                    }
+                }
+                HorizontalLayout {
+                    Text {
+                        text: "of which, the currency's reserve deposit";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        horizontal-stretch: 1;
+                    }
+                    Money {
+                        amount: CurrencyState.launch-deposit;
+                        currency: WalletState.ticker;
+                        size: Typo.num-sm;
+                        tone: "muted";
+                        show-currency: false;
+                    }
+                }
+                HorizontalLayout {
+                    Text {
+                        text: "of which, burned";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        horizontal-stretch: 1;
+                    }
+                    Money {
+                        amount: CurrencyState.launch-burned;
+                        currency: WalletState.ticker;
+                        size: Typo.num-sm;
+                        tone: "muted";
+                        show-currency: false;
+                    }
+                }
+                Text {
+                    text: "The miner fee is on top of this and is not included.";
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // When it begins, which is not now. A currency exists from the
+            // moment this transaction is mined and does nothing until its start
+            // block — and somebody who is not told that reads the first quiet
+            // hour as a failed launch.
+            HorizontalLayout {
+                Text {
+                    text: "Begins at block";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: CurrencyState.launch-start-block;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    color: Theme.text-primary;
+                }
+            }
+
+            Rectangle {
+                background: Theme.warning-soft;
+                border-radius: R.md;
+                VerticalLayout {
+                    padding: Sp.s5;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "This cannot be undone or repeated";
+                        font-size: Typo.body;
+                        font-weight: Typo.w-medium;
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "An identity defines one currency, once. Every value in this definition is fixed at launch.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+                alignment: end;
+                Btn {
+                    text: "Back";
+                    variant: "ghost";
+                    enabled: !CurrencyState.launch-busy;
+                    clicked => { Actions.cancel-launch(CurrencyState.launch-ticket); }
+                }
+                Btn {
+                    text: CurrencyState.launch-busy ? "Sending…" : "Launch it";
+                    variant: "primary";
+                    enabled: !CurrencyState.launch-busy;
+                    clicked => { Actions.confirm-launch(CurrencyState.launch-ticket); }
+                }
+            }
+        }
+    }
+}
+
+// What the form costs and what it is waiting for, pinned below the scroller.
+//
+// # Why this is not inside the form
+//
+// Because the form is taller than the window and gets taller with every reserve
+// somebody adds. Everything that decides whether to go ahead — the fee, what is
+// still blocking, and the button itself — sat under the fold, while the thing
+// that caused the blockage sat at the top. A basket with weights that do not add
+// up showed an amber `70%` beside the bar and nothing else: the sentence
+// explaining it, and the disabled button it explains, were both off screen.
+//
+// So it lives between the scrolling area and the status bar, as a real layout
+// row rather than an overlay. That means no coordinate arithmetic against the
+// nav rail's width, and nothing to keep in step when the window resizes.
+// Choosing a reserve out of what the chain actually has.
+//
+// # Why an overlay rather than a dropdown under the row
+//
+// Because the list is long — 290 currencies on VRSCTEST — and it has to be
+// searched. A menu that opens inside a scrolling form either clips at the card's
+// edge or has to be positioned against coordinates the layout owns, and it has
+// nowhere to put a search field. This is the shape the wallet already uses for
+// "one decision, on top of everything": the transaction sheet, the identity
+// sheet, both reviews.
+//
+// # Why the search runs in the core
+//
+// Slint cannot filter a model in a binding, so it could not be done here even if
+// it should be. It should not: what counts as a match, and what ranks above
+// what, is a rule — and `currency::choices` is where it is written down with a
+// test against it.
+component ReservePicker inherits Rectangle {
+    background: Theme.dark ? #0B0C0EE0 : #FBFBFCE0;
+
+    // Swallows clicks aimed at the form behind, and closes on one that lands on
+    // nothing — the same behaviour every other overlay in this file has.
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    function dismiss() {
+        CurrencyState.picking-reserve = -1;
+        CurrencyState.choices-query = "";
+    }
+
+    Card {
+        elevated: true;
+        width: 560px;
+        height: 560px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        // Over the dismissing area below it, so a click inside the card does
+        // not close it.
+        TouchArea {}
+
+        VerticalLayout {
+            padding: Sp.s7;
+            spacing: Sp.s5;
+
+            VerticalLayout {
+                spacing: Sp.s2;
+                Text {
+                    text: "Choose a reserve";
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-semibold;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Every currency this chain knows about. What goes into the definition is the address, not the name — which is why this is a list rather than a field.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // The same reason the name fields debounce: a keystroke here is a
+            // message to the core and a rebuild of the list model. Local work
+            // rather than a request, so a shorter wait than the 350ms the chain
+            // lookups use.
+            narrowing := Timer {
+                interval: 120ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    Actions.search-currencies(CurrencyState.choices-query);
+                }
+            }
+
+            query := Field {
+                placeholder: "Search by name or address";
+                text <=> CurrencyState.choices-query;
+                // Focused on open, so the list can be narrowed by typing
+                // without reaching for the pointer first.
+                init => { query.focus(); }
+                edited => {
+                    narrowing.running = false;
+                    narrowing.running = true;
+                }
+            }
+
+            if CurrencyState.choices-busy: Text {
+                text: "Asking the node for the chain's currency list. This is one large reply and it is only fetched once.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            if CurrencyState.choices-problem != "": Rectangle {
+                background: Theme.negative-soft;
+                border-radius: R.md;
+                VerticalLayout {
+                    padding: Sp.s5;
+                    spacing: Sp.s3;
+                    Text {
+                        text: CurrencyState.choices-problem;
+                        font-size: Typo.caption;
+                        color: Theme.negative;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Btn {
+                            text: "Try again";
+                            clicked => { Actions.search-currencies(CurrencyState.choices-query); }
+                        }
+                    }
+                }
+            }
+
+            if !CurrencyState.choices-busy && CurrencyState.choices-problem == ""
+                && CurrencyState.choices.length == 0: Text {
+                text: CurrencyState.choices-query == ""
+                    ? "This chain lists no currencies that are not already reserves of this basket."
+                    : "Nothing on this chain matches that.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: list.preferred-height;
+
+                list := VerticalLayout {
+                    spacing: Sp.s2;
+                    alignment: start;
+
+                    for row in CurrencyState.choices: Rectangle {
+                        height: line.preferred-height;
+                        border-radius: R.md;
+                        background: hover.has-hover ? Theme.bg-hover : transparent;
+
+                        line := HorizontalLayout {
+                            padding: Sp.s4;
+                            spacing: Sp.s4;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text {
+                                    text: row.name;
+                                    font-size: Typo.body;
+                                    color: Theme.text-primary;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: row.address;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.micro;
+                                    color: Theme.text-tertiary;
+                                    overflow: elide;
+                                }
+                                // Only when there is something to say. A
+                                // reserve that has not started yet is a reserve
+                                // holding something that does not exist.
+                                if row.note != "": Text {
+                                    text: row.note;
+                                    font-size: Typo.micro;
+                                    color: Theme.warning;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                StatusPill {
+                                    state: "online";
+                                    text: row.kind;
+                                }
+                            }
+                        }
+
+                        hover := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Actions.choose-reserve(
+                                    CurrencyState.picking-reserve, row.name, row.address);
+                                root.dismiss();
+                            }
+                        }
+
+                        accessible-role: AccessibleRole.button;
+                        accessible-label: row.name + ", " + row.kind
+                            + (row.note == "" ? "" : ", " + row.note);
+                        accessible-action-default => {
+                            Actions.choose-reserve(
+                                CurrencyState.picking-reserve, row.name, row.address);
+                            root.dismiss();
+                        }
+                    }
+                }
+            }
+
+            // Said rather than hidden. A list that stopped at forty without
+            // saying so reads as "that is all there is" while holding back the
+            // currency somebody came here for.
+            if CurrencyState.choices-more > 0: Text {
+                text: CurrencyState.choices-more + " more match. Narrow the search to see them.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                Btn {
+                    text: "Cancel";
+                    variant: "ghost";
+                    clicked => { root.dismiss(); }
+                }
+            }
+        }
+    }
+}
+
+// What a form costs and what it is waiting for, pinned below the scroller.
+//
+// # Why this is not inside the form
+//
+// Because both forms that use it are taller than the window and get taller as
+// they are filled in. Everything that decides whether to go ahead — the fee,
+// what is still blocking, and the button itself — sat under the fold, while the
+// thing that caused the blockage sat at the top. A basket with weights that do
+// not add up showed an amber `70%` beside the bar and nothing else: the
+// sentence explaining it, and the disabled button it explains, were both off
+// screen.
+//
+// So it lives between the scrolling area and the status bar, as a real layout
+// row rather than an overlay. That means no coordinate arithmetic against the
+// nav rail's width, and nothing to keep in step when the window resizes.
+//
+// It knows nothing about either screen. Both pass their own words in, which is
+// what stopped the second one being a copy of the first.
+component ActionBar inherits Rectangle {
+    // What the press will cost, in one line. Never empty: a bar that shows
+    // buttons and no figure invites the press it exists to qualify.
+    in property <string> cost;
+    // Why the button is off, or what it will do when it is on.
+    in property <string> note;
+    // Whether that note is a refusal. Decides its colour, so a screen cannot
+    // say "1 thing to fix" in the tone of an aside.
+    in property <bool> note-bad: false;
+    in property <string> back-text: "Cancel";
+    in property <string> primary-text;
+    in property <bool> primary-enabled: true;
+    callback back();
+    callback primary();
+
+    background: Theme.bg-surface;
+    height: 68px;
+
+    // A hairline, so the bar reads as pinned rather than as the last card
+    // having drifted to the bottom of the page.
+    Rectangle {
+        height: 1px;
+        y: 0;
+        background: Theme.border-subtle;
+    }
+
+    HorizontalLayout {
+        padding-left: Sp.screen-pad;
+        padding-right: Sp.screen-pad;
+        spacing: Sp.s5;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.cost;
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                text: root.note;
+                font-size: Typo.caption;
+                color: root.note-bad ? Theme.negative : Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: Sp.s3;
+            Btn {
+                text: root.back-text;
+                variant: "ghost";
+                y: (parent.height - self.height) / 2;
+                clicked => { root.back(); }
+            }
+            Btn {
+                text: root.primary-text;
+                variant: "primary";
+                y: (parent.height - self.height) / 2;
+                enabled: root.primary-enabled;
+                clicked => { root.primary(); }
+            }
+        }
+    }
+}
+
+// The glyph is `⊙`, and it was chosen by looking rather than by taste.
+//
+// `◈` reads as the obvious currency mark and **is not in Inter**, which this
+// wallet bundles — so it drew nothing at all, exactly the failure `shell.slint`
+// records twice already for `◍` and `☀`. The bundled files were checked
+// directly: `◈`, `◉`, `⬡`, `♦` and `⧫` are all absent, `⊙` is present in every
+// weight. A glyph is only a glyph if the shipped font has it.
+component CurrenciesScreen inherits VerticalLayout {
+    spacing: Sp.s7;
+
+    // Opening the form is three statements, and all three have to happen from
+    // both places that offer it — the button in the corner and the one in the
+    // middle of the empty state. A form reopened later must not resume halfway
+    // through somebody else's answers, and least of all on a review.
+    function open-form() {
+        CurrencyState.form-step = "kind";
+        CurrencyState.new-authority = "";
+        CurrencyState.defining = true;
+        Actions.check-currency();
+    }
+
+    // The list and everything about it steps aside while the form is open.
+    //
+    // It used to stay: the currencies, the heading, the count and the identity
+    // list all sat above and below a form that was itself taller than the
+    // window. Configuring one currency and reading about the others are not the
+    // same task, and putting both on screen made the one being done the harder
+    // of the two to find.
+    if !CurrencyState.defining: HorizontalLayout {
+        spacing: Sp.s5;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Sp.s2;
+            Text {
+                text: CurrencyState.rows.length == 0
+                    ? "No currencies yet"
+                    : CurrencyState.rows.length == 1
+                        ? "1 currency your identities define"
+                        : CurrencyState.rows.length + " currencies your identities define";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        Btn {
+            text: CurrencyState.busy ? "Reading…" : "Refresh";
+            enabled: !CurrencyState.busy;
+            y: (parent.height - self.height) / 2;
+            clicked => { Actions.refresh-currencies(); }
+        }
+        // Hidden when the list is empty, because the empty state carries the
+        // same action in the middle of the card, where somebody reading the
+        // explanation actually is. Two identical primary buttons on one screen
+        // make a reader stop and work out which is which, and the answer is
+        // that there is no difference.
+        if !(CurrencyState.rows.length == 0 && !CurrencyState.busy): Btn {
+            text: "Define a currency";
+            variant: "primary";
+            y: (parent.height - self.height) / 2;
+            clicked => { root.open-form(); }
+        }
+    }
+
+    if !CurrencyState.defining: Card {
+        VerticalLayout {
+            padding: Sp.s3;
+
+            // The action belongs in the empty state, not only in the corner.
+            //
+            // This is the one screen state whose entire content is "there is
+            // nothing here" — and the thing to do about it was a button at the
+            // far top right, past the heading, in the place the eye goes last.
+            // An empty state that explains a feature and does not offer it is a
+            // leaflet.
+            if CurrencyState.rows.length == 0 && !CurrencyState.busy: Rectangle {
+                height: 200px;
+                EmptyState {
+                    glyph: "⊙";
+                    title: "None of your identities defines a currency";
+                    body: "A currency in Verus is a name you already own, wearing a second hat — its address is the identity's. Defining one is permanent, and an identity can do it once.";
+                    action-text: "Define a currency";
+                    action => { root.open-form(); }
+                }
+            }
+
+            for row in CurrencyState.rows: ListRow {
+                glyph: "⊙";
+                glyph-tone: Theme.accent;
+                title: row.name;
+                subtitle: row.address;
+                subtitle-mono: true;
+                interactive: true;
+                clicked => { Actions.open-currency(row.address); }
+
+                HorizontalLayout {
+                    spacing: Sp.s5;
+                    alignment: end;
+
+                    // Fixed, so the pills line up down the column rather than
+                    // following the note beside them — the same reason the
+                    // identity list fixes this width.
+                    VerticalLayout {
+                        width: 300px;
+                        alignment: center;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: Sp.s3;
+                            // Said in words, not by the pill's colour alone.
+                            // Whether the supply can still grow is a different
+                            // promise to whoever holds it, and it is permanent.
+                            if row.mintable: Text {
+                                text: "mintable";
+                                font-size: Typo.micro;
+                                color: Theme.warning;
+                                vertical-alignment: center;
+                            }
+                            StatusPill {
+                                state: row.tone;
+                                text: row.kind;
+                            }
+                        }
+                        // A launch is not instant. Between the definition being
+                        // mined and the start block the currency exists and
+                        // does nothing — and a row that omitted this showed it
+                        // exactly as it shows one that has been running for a
+                        // month. Said only while it is true.
+                        if !row.started: Text {
+                            text: "Starts at block " + row.start-block;
+                            font-size: Typo.caption;
+                            color: Theme.warning;
+                            horizontal-alignment: right;
+                        }
+                        if row.note != "": Text {
+                            text: row.note;
+                            font-size: Typo.caption;
+                            color: Theme.text-tertiary;
+                            horizontal-alignment: right;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // An unfinished currency, said before anything else on this screen.
+    //
+    // It has already cost something — a name claim, or an identity that is
+    // registered and paid for — and the second of those can never be spent on a
+    // different currency. That is not a thing to leave a person to discover.
+    if CurrencyState.pending-identity != "" && !CurrencyState.defining: VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow { text: "UNFINISHED"; }
+        Card {
+            VerticalLayout {
+                padding: Sp.card-pad;
+                spacing: Sp.s4;
+                Text {
+                    text: CurrencyState.pending-identity;
+                    font-family: Typo.mono;
+                    font-size: Typo.title3;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: CurrencyState.pending-note;
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                // The same diagram the form drew as a plan, now saying which of
+                // those steps have actually happened — and which of the ones
+                // that have were paid for.
+                FlowStepper { steps: CurrencyState.pending-steps; }
+                HorizontalLayout {
+                    spacing: Sp.s3;
+                    alignment: end;
+                    Btn {
+                        text: "Abandon";
+                        variant: "ghost";
+                        clicked => { Actions.abandon-launch(); }
+                    }
+                    if CurrencyState.pending-can-continue: Btn {
+                        text: "Define the currency";
+                        variant: "primary";
+                        clicked => { Actions.resume-launch(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // Configuring one. The form is the screen while it is open.
+    if CurrencyState.defining: VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow { text: "DEFINE A CURRENCY"; }
+        // Capped, not stretched. A question at a time does not need a second
+        // column beside it, and a line of body text running the full width of a
+        // 1400px window is a line nobody finishes.
+        //
+        // A fixed width rather than a maximum: `max-width` here is negotiated
+        // against the shared `Flickable`'s viewport, and the viewport's width is
+        // derived from this content's minimum — a loop Slint refuses to compile.
+        // A constant depends on nothing, so there is no loop to close, and 780px
+        // is inside the 880px minimum window this wallet declares.
+        HorizontalLayout {
+            Card {
+                width: 780px;
+                VerticalLayout {
+                    padding: Sp.card-pad;
+                    spacing: Sp.s6;
+
+                    CurrencyForm {}
+
+                    // The buttons are NOT here. They live in the pinned
+                    // `ActionBar`, outside the scroller — see that component.
+                    // What stays is the padding it would otherwise sit on top of.
+                    Rectangle { height: Sp.s8; }
+                }
+            }
+            // Takes the rest, so the card stays at the left edge rather than
+            // being centred by a layout that has one child.
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    // The other half. Every identity, with whether it may still be used —
+    // including the ones that may not, and why.
+    if CurrencyState.eligible.length > 0 && !CurrencyState.defining: VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow { text: "YOUR IDENTITIES"; }
+        Card {
+            VerticalLayout {
+                padding: Sp.s3;
+                for entry in CurrencyState.eligible: ListRow {
+                    glyph: "◇";
+                    glyph-tone: entry.refusal == "" ? Theme.positive : Theme.text-tertiary;
+                    title: entry.name;
+                    subtitle: entry.address;
+                    subtitle-mono: true;
+                    interactive: false;
+
+                    HorizontalLayout {
+                        spacing: Sp.s5;
+                        alignment: end;
+                        VerticalLayout {
+                            width: 420px;
+                            alignment: center;
+                            Text {
+                                text: entry.refusal == ""
+                                    ? "Free to define a currency"
+                                    : entry.refusal;
+                                font-size: Typo.caption;
+                                color: entry.refusal == ""
+                                    ? Theme.text-secondary
+                                    : Theme.text-tertiary;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}
+
 component IdentitiesScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -3431,7 +5943,14 @@ component IdentitiesScreen inherits VerticalLayout {
             text: "Claim a name";
             variant: "primary";
             y: (parent.height - self.height) / 2;
-            clicked => { IdentityState.claiming = true; }
+            clicked => {
+                IdentityState.claiming = true;
+                // From the beginning, every time. Reopening onto somebody's
+                // half-finished answers — above all an authority step already
+                // ticked — is how a considered choice becomes an inherited one.
+                IdentityState.claim-step = "name";
+                IdentityState.claim-authority = "";
+            }
         }
     }
 
@@ -5278,6 +7797,59 @@ component BackupScreen inherits Rectangle {
 
 // ── The window ──────────────────────────────────────────────────────────────
 
+// What a second copy of the wallet shows instead of a wallet.
+//
+// # Why this is a window rather than an exit
+//
+// Because the application was double-clicked. A process that starts, notices
+// another one has the files, and exits silently is indistinguishable from one
+// that crashed on launch — and a wallet that appears to crash is a wallet
+// somebody starts hunting for their money in. It says what happened and closes
+// when acknowledged.
+//
+// It shares the theme and the type scale and nothing else. In particular it
+// touches no `WalletState`: there is no core behind this window, and it must be
+// constructible before anything has been opened.
+export component AlreadyRunning inherits Window {
+    title: "ChainVue";
+    background: Theme.bg-base;
+    default-font-family: Typo.ui;
+    default-font-size: Typo.body;
+    width: 460px;
+    height: 260px;
+
+    callback dismissed();
+
+    VerticalLayout {
+        padding: Sp.s8;
+        spacing: Sp.s5;
+        alignment: center;
+
+        Text {
+            text: "ChainVue is already open";
+            font-size: Typo.title2;
+            font-weight: Typo.w-semibold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Only one copy at a time can use this wallet. Two would each keep their own idea of what has been sent and what is waiting, and the last one to write would win — including for a name registration that has already been paid for.";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Btn {
+                text: "Close";
+                variant: "primary";
+                clicked => { root.dismissed(); }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "ChainVue";
     background: Theme.bg-base;
@@ -5309,9 +7881,6 @@ export component AppWindow inherits Window {
     // at runtime". A wallet must not have one of those. The `changed` callback
     // fires outside layout resolution, so the cycle is broken.
     in-out property <bool> nav-expanded: true;
-    changed width => {
-        root.nav-expanded = root.width > 1000px;
-    }
 
     // Glyphs are restricted to characters the macOS system font actually
     // carries. `◈` and `◌` rendered as empty boxes and `⚙` came out as a
@@ -5325,6 +7894,7 @@ export component AppWindow inherits Window {
         { id: "activity",  label: "Activity",  glyph: "≡", enabled: true, badge: "" },
         { id: "nodes",     label: "Network",   glyph: "○", enabled: true, badge: "" },
         { id: "identities",label: "Identities",glyph: "◇", enabled: true,  badge: "" },
+        { id: "currencies",label: "Currencies",glyph: "⊙", enabled: true,  badge: "" },
         { id: "settings",  label: "Settings",  glyph: "⋯", enabled: true, badge: "" },
     ];
 
@@ -5374,6 +7944,38 @@ export component AppWindow inherits Window {
     // has to offer one.
     public function focus-shortcuts() {
         shortcuts.focus();
+    }
+
+    // How big the window is, remembered.
+    //
+    // Debounced, because a drag produces a resize event per frame and each one
+    // would otherwise be a message to the core and a row written to SQLite.
+    // Half a second after somebody stops dragging is the same answer for a
+    // fraction of the writes.
+    //
+    // Size only, never position. A window restored to coordinates from a
+    // different monitor arrangement opens off-screen, and this application has
+    // no way to ask what monitors exist — so the failure mode is a wallet
+    // nobody can see, in exchange for a convenience nobody asks for.
+    remember := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            Actions.remember-window(root.width / 1px, root.height / 1px);
+        }
+    }
+    changed width => {
+        // Both things a width change means, in one handler because Slint allows
+        // exactly one per property. The rail is decided immediately; the size is
+        // written down once the dragging stops.
+        root.nav-expanded = root.width > 1000px;
+        remember.running = false;
+        remember.running = true;
+    }
+    changed height => {
+        remember.running = false;
+        remember.running = true;
     }
 
     shortcuts := FocusScope {
@@ -5431,6 +8033,7 @@ export component AppWindow inherits Window {
                 if (event.text == "4") { root.go("activity"); return EventResult.accept; }
                 if (event.text == "5") { root.go("nodes"); return EventResult.accept; }
                 if (event.text == "6") { root.go("identities"); return EventResult.accept; }
+                if (event.text == "7") { root.go("currencies"); return EventResult.accept; }
                 if (event.text == ",") { root.go("settings"); return EventResult.accept; }
                 // Slint reports the character produced, and `⌘L` without shift
                 // produces a lower-case `l`.
@@ -5440,6 +8043,14 @@ export component AppWindow inherits Window {
 
             // Escape closes whatever is over the screen, innermost first.
             if (event.text == Key.Escape) {
+                // First of all, because it is opened from a form that Escape
+                // also closes — and shutting the form out from under the picker
+                // would leave the picker writing into a row nobody can see.
+                if (CurrencyState.picking-reserve >= 0) {
+                    CurrencyState.picking-reserve = -1;
+                    CurrencyState.choices-query = "";
+                    return EventResult.accept;
+                }
                 if (TxState.txid != "") {
                     TxState.txid = "";
                     return EventResult.accept;
@@ -5454,6 +8065,22 @@ export component AppWindow inherits Window {
                 // panel is not a form to dismiss, it is a deadline.
                 if (IdentityState.claiming && IdentityState.reg-step == "") {
                     IdentityState.claiming = false;
+                    // Back to the first question, and with the second one
+                    // unanswered. A form reopened later must not start halfway
+                    // through somebody else's answers — and least of all with
+                    // the authority step already ticked.
+                    IdentityState.claim-step = "name";
+                    IdentityState.claim-authority = "";
+                    return EventResult.accept;
+                }
+                if (CurrencyState.defining) {
+                    CurrencyState.defining = false;
+                    // Back to the first question, with the one that has no
+                    // default unanswered. A form reopened later must not start
+                    // halfway through somebody else's answers — and least of all
+                    // on the review.
+                    CurrencyState.form-step = "kind";
+                    CurrencyState.new-authority = "";
                     return EventResult.accept;
                 }
                 if (SendState.step != "form") {
@@ -5497,6 +8124,7 @@ export component AppWindow inherits Window {
                         : root.screen == "settings" ? "Settings"
                         : root.screen == "activity" ? "Activity"
                         : root.screen == "identities" ? "Identities"
+                        : root.screen == "currencies" ? "Currencies"
                         : root.screen;
                     network: NetworkState.effective;
                     node-state: NetworkState.node-state;
@@ -5531,6 +8159,7 @@ export component AppWindow inherits Window {
                             if root.screen == "dashboard": DashboardScreen {}
                             if root.screen == "send": SendScreen {}
                             if root.screen == "identities": IdentitiesScreen {}
+                            if root.screen == "currencies": CurrenciesScreen {}
                             if root.screen == "receive": ReceiveScreen {}
                             if root.screen == "settings": SettingsScreen {
                                 tab <=> root.settings-tab;
@@ -5539,10 +8168,205 @@ export component AppWindow inherits Window {
                             if root.screen != "dashboard" && root.screen != "nodes"
                                 && root.screen != "receive" && root.screen != "send"
                                 && root.screen != "settings" && root.screen != "activity"
-                                && root.screen != "identities": ComingSoon {
+                                && root.screen != "identities"
+                                && root.screen != "currencies": ComingSoon {
                                 title: "Not built yet";
                                 body: "This part of the wallet is still being written.";
                             }
+                        }
+                    }
+                }
+
+                // Pinned under the scroller, above the status bar, and only
+                // while a form that spends money is open. Outside the
+                // `Flickable` on purpose — see `ActionBar`.
+                if root.screen == "currencies" && WalletState.exists && !WalletState.locked
+                    && CurrencyState.defining: ActionBar {
+                    // What it costs, always, on every step — the figure that
+                    // decides whether to go on should not appear only on the
+                    // screen where it is too late to matter. On the path that
+                    // claims a name this is two fees charged by two
+                    // transactions, and naming one of them would understate the
+                    // press by the larger half.
+                    cost: CurrencyState.fee == ""
+                        ? "The fee is not known yet"
+                        : CurrencyState.claiming && CurrencyState.new-name-fee != ""
+                            ? "The name costs " + CurrencyState.new-name-fee + " " + WalletState.ticker
+                                + " and the launch " + CurrencyState.fee + " " + WalletState.ticker
+                            : CurrencyState.fee + " " + WalletState.ticker + " · half of it burned";
+                    // Why the button is off, per step, because per step there is
+                    // exactly one answer missing. Only the last two steps quote a
+                    // count: by then the sentences are on screen beside the
+                    // fields they are about, and repeating one here would put
+                    // half a problem in two places.
+                    note: CurrencyState.form-step == "kind"
+                        ? "Nothing is spent yet."
+                        : CurrencyState.form-step == "under"
+                            ? (CurrencyState.claiming
+                                ? (CurrencyState.new-name == ""
+                                    ? "Type a name to continue"
+                                    : CurrencyState.new-name-problem != ""
+                                        ? CurrencyState.new-name-problem
+                                        : "Nothing is spent yet.")
+                                : CurrencyState.identity == ""
+                                    ? "Choose an identity, or claim a new name."
+                                    : "Nothing is spent yet.")
+                            : CurrencyState.form-step == "authority"
+                                ? (CurrencyState.new-authority == ""
+                                    ? "Choose one. This cannot be changed for free later."
+                                    : CurrencyState.new-authority == "other"
+                                        && CurrencyState.new-recovery == ""
+                                        ? "Name the recovery authority, or choose the other answer."
+                                        : "Nothing is spent yet.")
+                                : CurrencyState.blocking-count > 0
+                                    ? (CurrencyState.blocking-count == 1
+                                        ? "1 thing to fix, above"
+                                        : CurrencyState.blocking-count + " things to fix, above")
+                                    : CurrencyState.form-step == "setup"
+                                        ? "Nothing is spent yet."
+                                        // Not the same sentence on both paths.
+                                        // Under an identity that exists, the
+                                        // next screen is a review and nothing
+                                        // has been spent when it appears.
+                                        // Claiming a name broadcasts a
+                                        // registration on this press — "nothing
+                                        // is blocking it" is true and reads as
+                                        // reassurance, which is the wrong note
+                                        // above a button that spends a hundred
+                                        // coins.
+                                        : CurrencyState.claiming
+                                            ? "This press claims the name and pays for it. The launch is reviewed after."
+                                            : "Nothing is blocking it. The next screen is a review — nothing is spent yet.";
+                    note-bad: CurrencyState.form-step == "under"
+                        ? (CurrencyState.claiming
+                            ? CurrencyState.new-name-problem != ""
+                            : false)
+                        : CurrencyState.form-step == "authority"
+                            ? CurrencyState.new-authority == ""
+                            : CurrencyState.blocking-count > 0;
+                    back-text: CurrencyState.form-step == "kind" ? "Cancel" : "Back";
+                    // Three different last presses, because they commit to
+                    // different things. Under an identity that exists the last
+                    // one signs and shows a review, and nothing has been spent
+                    // when it appears. Claiming a name **broadcasts a
+                    // registration** — real money, immediately. A button that
+                    // said the same word for both would be describing the safe
+                    // one.
+                    primary-text: CurrencyState.form-step != "review"
+                        ? "Next"
+                        : CurrencyState.claiming
+                            ? "Claim the name and start"
+                            : "Review the launch";
+                    // Each step gates on its own answer. The last two gate on
+                    // the core's verdict — warnings do not count, they are
+                    // things to read rather than things to fix.
+                    primary-enabled: CurrencyState.form-step == "kind"
+                        ? true
+                        : CurrencyState.form-step == "under"
+                            ? (CurrencyState.claiming
+                                ? (CurrencyState.new-name != "" && CurrencyState.new-name-problem == "")
+                                : CurrencyState.identity != "")
+                            : CurrencyState.form-step == "authority"
+                                ? (CurrencyState.new-authority == "none"
+                                    || (CurrencyState.new-authority == "other"
+                                        && CurrencyState.new-recovery != ""))
+                                : CurrencyState.ready
+                                    && (!CurrencyState.claiming
+                                        || CurrencyState.new-name-problem == "");
+                    back => {
+                        if (CurrencyState.form-step == "review") {
+                            CurrencyState.form-step = "setup";
+                        } else if (CurrencyState.form-step == "setup") {
+                            CurrencyState.form-step = CurrencyState.claiming ? "authority" : "under";
+                        } else if (CurrencyState.form-step == "authority") {
+                            CurrencyState.form-step = "under";
+                        } else if (CurrencyState.form-step == "under") {
+                            CurrencyState.form-step = "kind";
+                        } else {
+                            CurrencyState.defining = false;
+                            CurrencyState.new-authority = "";
+                        }
+                    }
+                    primary => {
+                        if (CurrencyState.form-step == "kind") {
+                            CurrencyState.form-step = "under";
+                        } else if (CurrencyState.form-step == "under") {
+                            CurrencyState.form-step = CurrencyState.claiming ? "authority" : "setup";
+                        } else if (CurrencyState.form-step == "authority") {
+                            CurrencyState.form-step = "setup";
+                        } else if (CurrencyState.form-step == "setup") {
+                            CurrencyState.form-step = "review";
+                            // The review reads the preview, the fee and the
+                            // transaction list off the last check. Asked again
+                            // on the way in so that a debounce still in flight
+                            // cannot leave a stale figure on the one screen that
+                            // exists to be read.
+                            Actions.check-currency();
+                        } else if (CurrencyState.claiming) {
+                            Actions.start-currency-from-new-name();
+                        } else {
+                            Actions.prepare-launch();
+                        }
+                    }
+                }
+
+                // The same bar, for the other form that spends money. Three
+                // questions, and only the last press costs anything — so the
+                // primary says "Next" until it does not.
+                if root.screen == "identities" && WalletState.exists && !WalletState.locked
+                    && IdentityState.claiming && IdentityState.reg-step == "": ActionBar {
+                    cost: IdentityState.name-fee == ""
+                        ? "The fee is not known yet"
+                        : IdentityState.name-fee + " " + WalletState.ticker + " · in two transactions";
+                    note: IdentityState.claim-step == "name"
+                        ? (IdentityState.name-draft == ""
+                            ? "Type a name to continue"
+                            : IdentityState.name-problem != ""
+                                ? IdentityState.name-problem
+                                : "Nothing is spent yet.")
+                        : IdentityState.claim-step == "authority"
+                            ? (IdentityState.claim-authority == ""
+                                ? "Choose one. This cannot be changed for free later."
+                                : IdentityState.claim-authority == "other"
+                                    && IdentityState.recovery-draft == ""
+                                    ? "Name the recovery authority, or choose the other answer."
+                                    : "Nothing is spent yet.")
+                            : "This press signs and sends the first transaction.";
+                    note-bad: IdentityState.claim-step == "name"
+                        ? IdentityState.name-problem != ""
+                        : IdentityState.claim-step == "authority" && IdentityState.claim-authority == "";
+                    back-text: IdentityState.claim-step == "name" ? "Cancel" : "Back";
+                    primary-text: IdentityState.claim-step == "review"
+                        ? (IdentityState.reg-busy ? "Working…" : "Claim this name")
+                        : "Next";
+                    primary-enabled: IdentityState.claim-step == "name"
+                        ? (IdentityState.name-draft != "" && IdentityState.name-problem == "")
+                        : IdentityState.claim-step == "authority"
+                            ? (IdentityState.claim-authority == "none"
+                                || (IdentityState.claim-authority == "other"
+                                    && IdentityState.recovery-draft != ""))
+                            : !IdentityState.reg-busy;
+                    back => {
+                        if (IdentityState.claim-step == "review") {
+                            IdentityState.claim-step = "authority";
+                        } else if (IdentityState.claim-step == "authority") {
+                            IdentityState.claim-step = "name";
+                        } else {
+                            IdentityState.claiming = false;
+                            IdentityState.claim-authority = "";
+                        }
+                    }
+                    primary => {
+                        if (IdentityState.claim-step == "name") {
+                            IdentityState.claim-step = "authority";
+                        } else if (IdentityState.claim-step == "authority") {
+                            IdentityState.claim-step = "review";
+                        } else {
+                            Actions.start-registration(
+                                IdentityState.name-draft,
+                                IdentityState.revocation-draft,
+                                IdentityState.recovery-draft,
+                            );
                         }
                     }
                 }
@@ -5573,6 +8397,14 @@ export component AppWindow inherits Window {
         // Above the sheet: the last moment before something irreversible.
         if WalletState.exists && !WalletState.locked && IdentityState.change-ticket != 0:
             IdentityChangeReview {}
+
+        if WalletState.exists && !WalletState.locked && CurrencyState.launch-ticket != 0:
+            LaunchReview {}
+
+        // Above the form it writes into, and below nothing: it is opened from
+        // the form and it is the only thing being decided while it is up.
+        if WalletState.exists && !WalletState.locked && CurrencyState.picking-reserve >= 0:
+            ReservePicker {}
 
         // Above even the phrase screen. A recovery phrase being on screen does
         // not make a rejected payment less worth knowing about, and the toast

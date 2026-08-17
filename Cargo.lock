@@ -900,6 +900,7 @@ dependencies = [
  "chainvue-chain",
  "chainvue-chart",
  "chainvue-keystore",
+ "chainvue-mock",
  "chainvue-protocol",
  "chainvue-store",
  "chrono",

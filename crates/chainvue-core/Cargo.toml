@@ -44,6 +44,11 @@ zeroize = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
 tempfile = "3"
 verus-flows = { workspace = true }
+# The scripted chain, by name. `chainvue-chain` already carries it and
+# `Chain::mock` already builds one, but a test that has to prove nothing was
+# broadcast needs the handle itself to ask — and adds nothing to the graph that
+# was not already in it.
+chainvue-mock = { path = "../chainvue-mock" }
 # Capturing what the application logs, so `tests/log_hygiene.rs` can grep it for
 # key material. Dev-only: the core itself emits through `tracing` and has no
 # opinion about where that goes.

@@ -69,10 +69,23 @@ fn apply(ui: &AppWindow, event: Event) {
         Event::Appearance {
             dark,
             reduce_motion,
+            window,
         } => {
             ui.global::<chainvue_ui::Theme>().set_dark(dark);
             ui.global::<chainvue_ui::Motion>()
                 .set_enabled(!reduce_motion);
+            // Logical pixels, which is what the window reported when it was
+            // written down — so a wallet moved between a Retina display and an
+            // ordinary one comes back the same size in inches rather than in
+            // device pixels.
+            if let Some((width, height)) = window {
+                // Exact for every window size a display can have: an `f32` holds
+                // integers up to 2^24 without loss, and the core refuses
+                // anything below 880 x 620 on the way in.
+                #[allow(clippy::cast_precision_loss)]
+                ui.window()
+                    .set_size(slint::LogicalSize::new(width as f32, height as f32));
+            }
         }
 
         Event::Locked { reason } => {
@@ -161,6 +174,78 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Identities { yours, looked_up } => apply_identities(ui, &yours, &looked_up),
 
+        Event::Currencies { yours, eligible } => apply_currencies(ui, &yours, &eligible),
+
+        Event::CurrencyDraftChecked(vm) => apply_currency_draft(ui, &vm),
+
+        Event::CurrencyChoices(vm) => {
+            let state = ui.global::<chainvue_ui::CurrencyState>();
+            let rows: Vec<chainvue_ui::CurrencyPick> = vm
+                .rows
+                .iter()
+                .map(|row| chainvue_ui::CurrencyPick {
+                    name: row.name.clone().into(),
+                    address: row.address.clone().into(),
+                    kind: row.kind.clone().into(),
+                    note: row.note.clone().into(),
+                })
+                .collect();
+            state.set_choices(ModelRc::from(Rc::new(VecModel::from(rows))));
+            state.set_choices_more(i32::try_from(vm.more).unwrap_or(i32::MAX));
+            state.set_choices_busy(vm.loading);
+            state.set_choices_problem(vm.problem.clone().into());
+        }
+
+        Event::LaunchPending(pending) => {
+            let state = ui.global::<chainvue_ui::CurrencyState>();
+            match pending {
+                Some(vm) => {
+                    state.set_pending_note(vm.note.clone().into());
+                    state.set_pending_can_continue(vm.can_continue);
+                    state.set_pending_steps(steps_of(&vm.steps));
+                    // The form has been submitted, so it closes — which puts
+                    // the panel that says what is now unfinished on screen
+                    // instead. Leaving the form up would invite a second press
+                    // on a decision that has already claimed a name; core
+                    // refuses that, and a screen should not be offering it.
+                    close_currency_form(ui);
+                    // Last, because a non-empty identity is what opens it.
+                    state.set_pending_identity(vm.identity.clone().into());
+                }
+                None => state.set_pending_identity(SharedString::new()),
+            }
+        }
+
+        Event::LaunchPrepared(review) => {
+            let state = ui.global::<chainvue_ui::CurrencyState>();
+            state.set_launch_busy(false);
+            match review {
+                Some(vm) => {
+                    state.set_launch_name(vm.name.clone().into());
+                    state.set_launch_description(vm.description.clone().into());
+                    state.set_launch_fee(vm.fee_display.clone().into());
+                    state.set_launch_deposit(vm.deposit_display.clone().into());
+                    state.set_launch_burned(vm.burned_display.clone().into());
+                    state.set_launch_start_block(vm.start_block.clone().into());
+                    // Last, because a non-zero ticket is what opens the review.
+                    state.set_launch_ticket(i32::try_from(vm.ticket).unwrap_or(i32::MAX));
+                }
+                // Zero closes it. One field decides, so the overlay and the
+                // ticket cannot disagree about whether there is a launch.
+                None => state.set_launch_ticket(0),
+            }
+        }
+
+        Event::LaunchDone(done) => {
+            tracing::info!(txid = %done.txid, "a currency launch was sent");
+            let state = ui.global::<chainvue_ui::CurrencyState>();
+            state.set_launch_busy(false);
+            state.set_launch_ticket(0);
+            // The form has done its job. Closing it puts the fresh list back on
+            // screen, which is where the new currency appears.
+            close_currency_form(ui);
+        }
+
         Event::IdentityChangePrepared {
             ticket,
             description,
@@ -188,13 +273,27 @@ fn apply(ui: &AppWindow, event: Event) {
         }
 
         Event::NameChecked {
+            name,
             problem,
             fee_display,
-            ..
         } => {
-            let state = ui.global::<IdentityState>();
-            state.set_name_problem(problem.into());
-            state.set_name_fee(fee_display.into());
+            // Two screens ask this question — the identity form and the
+            // currency form, which claims a name as part of a launch — and the
+            // core answers one at a time. The answer goes to whichever of them
+            // is still holding the name it is about, which is what the `name`
+            // field is carried for: a reply that arrives after the field moved
+            // on describes something nobody is looking at.
+            let currency = ui.global::<chainvue_ui::CurrencyState>();
+            if currency.get_new_name().as_str() == name {
+                currency.set_new_name_problem(problem.clone().into());
+                currency.set_new_name_fee(fee_display.clone().into());
+            }
+
+            let identity = ui.global::<IdentityState>();
+            if identity.get_name_draft().as_str() == name {
+                identity.set_name_problem(problem.into());
+                identity.set_name_fee(fee_display.into());
+            }
         }
 
         Event::Registration(claim) => apply_registration(ui, claim.as_deref()),
@@ -421,6 +520,11 @@ fn apply_registration(ui: &AppWindow, claim: Option<&chainvue_protocol::Registra
         state.set_recovery_draft(SharedString::new());
         state.set_name_fee(SharedString::new());
         state.set_reg_busy(false);
+        // And the wizard, back to its first question with the second one
+        // unanswered — the same reset Escape and Cancel do. A claim that just
+        // finished must not leave the form ready to press through again.
+        state.set_claim_step("name".into());
+        state.set_claim_authority(SharedString::new());
         return;
     };
 
@@ -431,6 +535,7 @@ fn apply_registration(ui: &AppWindow, claim: Option<&chainvue_protocol::Registra
     state.set_reg_address(vm.address.clone().into());
     state.set_reg_busy(vm.busy);
     state.set_reg_cannot_be_revoked(vm.cannot_be_revoked);
+    state.set_reg_steps(steps_of(&vm.steps));
     state.set_reg_step(vm.step.clone().into());
 }
 
@@ -447,6 +552,139 @@ fn apply_identities(ui: &AppWindow, yours: &[IdentityVm], looked_up: &[IdentityV
     let state = ui.global::<IdentityState>();
     state.set_rows(identity_rows(yours));
     state.set_looked_up(identity_rows(looked_up));
+}
+
+/// Shut the define form and put it back on its first question.
+///
+/// Three statements rather than one, and all three matter: a form reopened after
+/// a launch has been sent must not resume on the review it was left on, and the
+/// authority answer has no safe default — leaving it set would carry one
+/// launch's decision into the next one silently.
+fn close_currency_form(ui: &AppWindow) {
+    let state = ui.global::<chainvue_ui::CurrencyState>();
+    state.set_defining(false);
+    state.set_form_step("kind".into());
+    state.set_new_authority(SharedString::new());
+}
+
+/// Both halves of the currency walk, from one event.
+///
+/// Written together because they arrive together — see `Event::Currencies`. Two
+/// separate handlers would let the list and the picker be repainted a frame
+/// apart, describing wallets a second apart.
+fn apply_currencies(
+    ui: &AppWindow,
+    yours: &[chainvue_protocol::CurrencyVm],
+    eligible: &[chainvue_protocol::EligibleIdentityVm],
+) {
+    let state = ui.global::<chainvue_ui::CurrencyState>();
+
+    let rows: Vec<chainvue_ui::CurrencyRow> = yours
+        .iter()
+        .map(|row| chainvue_ui::CurrencyRow {
+            name: row.name.clone().into(),
+            address: row.address.clone().into(),
+            kind: row.kind.clone().into(),
+            tone: row.tone.clone().into(),
+            note: row.note.clone().into(),
+            mintable: row.mintable,
+            start_block: row.start_block.clone().into(),
+            started: row.started,
+        })
+        .collect();
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+
+    let picker: Vec<chainvue_ui::EligibleIdentity> = eligible
+        .iter()
+        .map(|entry| chainvue_ui::EligibleIdentity {
+            name: entry.name.clone().into(),
+            address: entry.address.clone().into(),
+            refusal: entry.refusal.clone().into(),
+        })
+        .collect();
+    state.set_eligible(ModelRc::from(Rc::new(VecModel::from(picker))));
+
+    // The walk is finished by the time this arrives — it is what the walk
+    // produced. Nothing else clears the flag.
+    state.set_busy(false);
+}
+
+/// The verdict on a draft, and everything the picture is drawn from.
+///
+/// Every figure here arrived finished. Nothing in this function divides
+/// anything — the bars, the captions beside them and the preview are three
+/// renderings of one arithmetic that happened in `currency::check`, and a
+/// second division here is how a bar and its own caption end up disagreeing.
+fn apply_currency_draft(ui: &AppWindow, vm: &chainvue_protocol::CurrencyDraftVm) {
+    let state = ui.global::<chainvue_ui::CurrencyState>();
+
+    let problems: Vec<chainvue_ui::CurrencyProblem> = vm
+        .problems
+        .iter()
+        .map(|problem| chainvue_ui::CurrencyProblem {
+            blocking: problem.blocking,
+            text: problem.text.clone().into(),
+        })
+        .collect();
+    let blocking = vm
+        .problems
+        .iter()
+        .filter(|problem| problem.blocking)
+        .count();
+    state.set_problems(ModelRc::from(Rc::new(VecModel::from(problems))));
+    state.set_blocking_count(i32::try_from(blocking).unwrap_or(i32::MAX));
+
+    state.set_slices(slices_of(&vm.slices));
+    state.set_supply_slices(slices_of(&vm.supply_slices));
+    state.set_weights_total(vm.weights_total.clone().into());
+    state.set_supply_total(vm.supply_total.clone().into());
+    state.set_start_block(vm.start_block.clone().into());
+    state.set_fee(vm.fee_display.clone().into());
+
+    let preview: Vec<chainvue_ui::CurrencyField> = vm
+        .preview
+        .iter()
+        .map(|field| chainvue_ui::CurrencyField {
+            label: field.label.clone().into(),
+            value: field.value.clone().into(),
+            permanent: field.permanent,
+        })
+        .collect();
+    state.set_preview(ModelRc::from(Rc::new(VecModel::from(preview))));
+    state.set_steps(steps_of(&vm.steps));
+
+    // Last, because this is what turns the Review button on.
+    state.set_ready(vm.ready);
+}
+
+/// The launch diagram, as the interface's own struct.
+///
+/// Shared by the plan on the form and the progress in the unfinished panel, so
+/// the two cannot render the same steps differently.
+fn steps_of(steps: &[chainvue_protocol::FlowStepVm]) -> ModelRc<chainvue_ui::FlowStep> {
+    let rows: Vec<chainvue_ui::FlowStep> = steps
+        .iter()
+        .map(|step| chainvue_ui::FlowStep {
+            label: step.label.clone().into(),
+            state: step.state.clone().into(),
+            costs: step.costs,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
+fn slices_of(slices: &[chainvue_protocol::CurrencySliceVm]) -> ModelRc<chainvue_ui::CurrencySlice> {
+    let rows: Vec<chainvue_ui::CurrencySlice> = slices
+        .iter()
+        .map(|slice| chainvue_ui::CurrencySlice {
+            label: slice.label.clone().into(),
+            percent: slice.percent,
+            offset_percent: slice.offset_percent,
+            percent_display: slice.percent_display.clone().into(),
+            tone: slice.tone.clone().into(),
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
 fn identity_rows(rows: &[IdentityVm]) -> ModelRc<IdentityRow> {

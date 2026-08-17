@@ -1,4 +1,4 @@
-import { Theme, Sp, R, Typo, Motion } from "../theme/theme.slint";
+import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
 import { StatusPill } from "base.slint";
 import { NavItem } from "../vm/structs.slint";
 
@@ -193,9 +193,18 @@ export component TitleBar inherits Rectangle {
                 mouse-cursor: root.busy ? MouseCursor.default : MouseCursor.pointer;
                 clicked => { root.refresh(); }
             }
-            Rectangle {
-                border-radius: R.sm;
-                border-width: refreshfocus.has-focus ? 2px : 0px;
+            // The ring: outside the shape, and only while the keyboard is
+            // driving — the rule `Btn` states and these three did not follow.
+            // Drawn on the control's own bounds it sat on top of the label and
+            // the hover surface, and shown on mouse focus it stayed lit after
+            // every click, which is what read as a smeared glow.
+            if refreshfocus.has-focus && InputMode.keyboard: Rectangle {
+                x: -3px;
+                y: -3px;
+                width: parent.width + 6px;
+                height: parent.height + 6px;
+                border-radius: R.sm + 3px;
+                border-width: 2px;
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;
@@ -245,9 +254,18 @@ export component TitleBar inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { root.lock(); }
             }
-            Rectangle {
-                border-radius: R.sm;
-                border-width: lockfocus.has-focus ? 2px : 0px;
+            // The ring: outside the shape, and only while the keyboard is
+            // driving — the rule `Btn` states and these three did not follow.
+            // Drawn on the control's own bounds it sat on top of the label and
+            // the hover surface, and shown on mouse focus it stayed lit after
+            // every click, which is what read as a smeared glow.
+            if lockfocus.has-focus && InputMode.keyboard: Rectangle {
+                x: -3px;
+                y: -3px;
+                width: parent.width + 6px;
+                height: parent.height + 6px;
+                border-radius: R.sm + 3px;
+                border-width: 2px;
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;
@@ -286,9 +304,18 @@ export component TitleBar inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { root.toggle-theme(); }
             }
-            Rectangle {
-                border-radius: R.sm;
-                border-width: themefocus.has-focus ? 2px : 0px;
+            // The ring: outside the shape, and only while the keyboard is
+            // driving — the rule `Btn` states and these three did not follow.
+            // Drawn on the control's own bounds it sat on top of the label and
+            // the hover surface, and shown on mouse focus it stayed lit after
+            // every click, which is what read as a smeared glow.
+            if themefocus.has-focus && InputMode.keyboard: Rectangle {
+                x: -3px;
+                y: -3px;
+                width: parent.width + 6px;
+                height: parent.height + 6px;
+                border-radius: R.sm + 3px;
+                border-width: 2px;
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;

@@ -740,13 +740,64 @@ pub fn name_problem(name: &str) -> Option<String> {
     None
 }
 
-/// What a registration in progress looks like on screen.
+/// The three transactions a claim is made of, and how far it has got.
 ///
-/// The deadline is the part worth the trouble. A commitment expires roughly
-/// twenty blocks after it is signed, the expiry is inside the bytes the
-/// signature covers so it cannot be extended, and missing it spends the fee for
-/// nothing. A progress spinner that does not say that is hiding the only fact
-/// somebody could act on.
+/// # Why the middle one is a step rather than a spinner
+///
+/// Because it has a deadline. The commitment expires about twenty blocks after
+/// it is signed, the expiry is inside the bytes the signature covers so it
+/// cannot be extended, and missing it spends the fee for nothing. A wait with a
+/// clock on it is a step somebody may have to act on.
+///
+/// `step` is [`chainvue_protocol::RegistrationVm::step`]. An empty string means
+/// nothing has been sent — which is what the review draws, as a plan.
+///
+/// # Why a failed claim gets no diagram
+///
+/// `expired` and `lost` are not positions along this journey; they are the
+/// journey stopping. Marking the last reached step `failed` and the rest
+/// `later` would draw a path somebody might still walk. The note above it
+/// already says the fee is spent and the name was not registered, which is the
+/// whole of what is true.
+pub fn progress(step: &str) -> Vec<chainvue_protocol::FlowStepVm> {
+    const STEPS: [(&str, bool); 3] = [
+        ("Claim the name", true),
+        ("Wait for it to confirm", false),
+        ("Register it", true),
+    ];
+
+    // How many are behind us, and whether the one we are on has been reached at
+    // all. `reserved` is signed and not sent, so nothing is done yet.
+    let reached: usize = match step {
+        "" | "reserved" => 0,
+        "committed" | "waiting" => 1,
+        "ready" | "registering" => 2,
+        "done" => 3,
+        // Terminal without finishing.
+        _ => return Vec::new(),
+    };
+
+    // Nothing sent at all: every step is ahead, which is what a review shows.
+    let pending = step.is_empty();
+
+    STEPS
+        .iter()
+        .enumerate()
+        .map(|(index, (label, costs))| {
+            let state = if pending {
+                "later"
+            } else {
+                match index.cmp(&reached) {
+                    std::cmp::Ordering::Less => "done",
+                    std::cmp::Ordering::Equal => "now",
+                    std::cmp::Ordering::Greater => "later",
+                }
+            };
+            chainvue_protocol::FlowStepVm::new(label, state, *costs)
+        })
+        .collect()
+}
+
 pub fn registration_view(
     record: &crate::registration::Record,
     status: Option<&verus_sdk::network::CommitmentStatus>,
@@ -823,12 +874,56 @@ pub fn registration_view(
         address: String::new(),
         busy,
         cannot_be_revoked: record.pending.recovery_authority.is_none(),
+        steps: progress(step),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chain's steps: three transactions, two of which are paid for.
+    #[test]
+    fn a_claim_is_three_transactions_and_two_fees() {
+        let planned = progress("");
+        assert_eq!(planned.len(), 3);
+        assert!(
+            planned.iter().all(|step| step.state == "later"),
+            "a review drew a transaction as though it had happened",
+        );
+        assert_eq!(
+            planned.iter().filter(|step| step.costs).count(),
+            2,
+            "the diagram did not say which of the three cost money",
+        );
+
+        // Signed and written down, not sent: still nothing done.
+        assert_eq!(progress("reserved")[0].state, "now");
+        assert_eq!(
+            progress("reserved")
+                .iter()
+                .filter(|s| s.state == "done")
+                .count(),
+            0,
+        );
+
+        assert_eq!(progress("committed")[1].state, "now");
+        assert_eq!(progress("waiting")[1].state, "now");
+        assert_eq!(progress("ready")[2].state, "now");
+        assert!(progress("done").iter().all(|step| step.state == "done"));
+    }
+
+    /// A claim that ended without finishing is not a claim in progress.
+    ///
+    /// `expired` and `lost` are the two ways this flow ends with the fee spent
+    /// and no name. Drawing them as a step along the way — done, now or later —
+    /// would be untrue in all three spellings, and "later" in particular would
+    /// suggest waiting is still worth something.
+    #[test]
+    fn a_claim_that_died_draws_no_journey() {
+        assert!(progress("expired").is_empty());
+        assert!(progress("lost").is_empty());
+    }
 
     fn record(flags: u32, timelock: u32) -> IdentityAtAddress {
         IdentityAtAddress {

@@ -40,6 +40,18 @@ fn address(scalar: u8) -> String {
 
 const COIN: i64 = 100_000_000;
 
+/// How many identities the scripted chain gives this wallet.
+///
+/// `demo@`, `vault@`, `gone@` and `maker@` — three states the Identities screen
+/// needs, and one that a currency can actually be launched from. `stranger@` is
+/// on the chain too and is deliberately not counted: it is somebody else's, and
+/// keeping it out of this number is half of what these tests are about.
+///
+/// Named rather than written out at each of the five places that check it,
+/// because it was `3` in all of them and adding the fourth identity broke a
+/// test about screen navigation with a message about a count.
+const OWNED: usize = 4;
+
 #[test]
 fn the_demo_chain_fills_a_dashboard_with_no_network() {
     let funded = address(11);
@@ -345,8 +357,8 @@ async fn a_looked_up_identity_is_never_counted_as_one_of_yours() {
     });
     dispatcher.send(chainvue_protocol::Command::RefreshIdentities);
 
-    // The scripted chain gives this wallet three identities of its own.
-    let (yours, looked_up) = identities(&mut events, |yours, _| yours.len() >= 3).await;
+    // The scripted chain gives this wallet four identities of its own.
+    let (yours, looked_up) = identities(&mut events, |yours, _| yours.len() >= OWNED).await;
     assert!(looked_up.is_empty(), "nothing has been looked up yet");
     assert!(
         yours.iter().all(|row| row.mine),
@@ -641,8 +653,8 @@ async fn arriving_at_the_screen_re_reads_a_list_that_is_already_full() {
     dispatcher.send(chainvue_protocol::Command::ScreenEntered(
         chainvue_protocol::ScreenId::Identities,
     ));
-    let (yours, _) = identities(&mut events, |yours, _| yours.len() >= 3).await;
-    assert_eq!(yours.len(), 3);
+    let (yours, _) = identities(&mut events, |yours, _| yours.len() >= OWNED).await;
+    assert_eq!(yours.len(), OWNED);
 
     // Leave, come back. The list is not empty, and it must be re-read anyway —
     // the chain may have gained the identity that was mid-registration when it
@@ -657,7 +669,7 @@ async fn arriving_at_the_screen_re_reads_a_list_that_is_already_full() {
     let again = tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             if let Some(chainvue_protocol::Event::Identities { yours, .. }) = events.recv().await {
-                if yours.len() >= 3 {
+                if yours.len() >= OWNED {
                     break yours;
                 }
             }
@@ -665,7 +677,7 @@ async fn arriving_at_the_screen_re_reads_a_list_that_is_already_full() {
     })
     .await
     .expect("arriving at the screen asked the chain again");
-    assert_eq!(again.len(), 3);
+    assert_eq!(again.len(), OWNED);
 }
 
 /// A wallet with no keys yet asks the chain nothing and is not an error.

@@ -116,7 +116,19 @@ async fn no_secret_reaches_the_log() {
     // A reservation on disk before the core starts, so it is picked up exactly
     // as a resumed registration would be. Without this the salt would never
     // exist and the assertions about it at the bottom would pass on nothing.
-    plant_a_reservation(dir.path());
+    //
+    // **Where** matters as much as what, and this test used to get it wrong: it
+    // wrote `registration.json` at the top of the home directory, which is
+    // where it lived before `Paths` gave each chain its own folder. The core
+    // has read `<home>/<chain>/registration.json` since, so nothing was picked
+    // up, the salt never entered the running application, and the assertions at
+    // the bottom passed against a log that had never been near one — the exact
+    // failure the comment above warns about. The layout is asked, never
+    // assumed.
+    let paths =
+        chainvue_core::paths::Paths::new(dir.path().to_path_buf(), &Network::Testnet, false);
+    plant_a_reservation(&paths.registration());
+    plant_a_launch(&paths.launch());
 
     let handle = tokio::runtime::Handle::current();
     let (dispatcher, mut events) = start(
@@ -284,12 +296,46 @@ async fn no_secret_reaches_the_log() {
     );
 }
 
+/// Write a currency waiting to be defined, so the resume path runs.
+///
+/// # What is being checked, given the record holds no secret
+///
+/// That it stays that way. The record carries a **key label**, not a key —
+/// which is the design, and a design nothing enforces: the launch it resumes is
+/// signed with the key that label names, and the obvious convenience of holding
+/// the key alongside the decision would put private material into a file that
+/// is written on a best-effort path, and into every `Debug` of it.
+///
+/// So this plants one, lets the core open it and report it, and the assertions
+/// at the bottom read the log for the key material that is in the same wallet.
+fn plant_a_launch(path: &std::path::Path) {
+    let record = chainvue_core::launch::Record {
+        identity: "hygiene@".to_string(),
+        key_label: "main".to_string(),
+        step: chainvue_core::launch::Step::ReadyToDefine,
+        draft: chainvue_protocol::CurrencyDraft {
+            kind: "token".to_string(),
+            identity: String::new(),
+            new_name: "hygiene".to_string(),
+            mintable: true,
+            start_delay: "20".to_string(),
+            reserves: Vec::new(),
+            preallocations: Vec::new(),
+        },
+    };
+    std::fs::write(
+        path,
+        serde_json::to_string(&record).expect("serialize the launch record"),
+    )
+    .expect("write the launch record");
+}
+
 /// Write a name reservation carrying [`SALT`] into the wallet directory.
 ///
 /// Built through the SDK rather than hand-assembled, so what lands on disk is
 /// the real shape — including whatever fields a future version adds, which is
 /// precisely what a hand-written fixture would stop covering.
-fn plant_a_reservation(dir: &std::path::Path) {
+fn plant_a_reservation(path: &std::path::Path) {
     use verus_flows::testing::ScriptedReader;
     use verus_sdk::verus_keys::PrivateKey;
 
@@ -325,11 +371,7 @@ fn plant_a_reservation(dir: &std::path::Path) {
         step: chainvue_core::registration::Step::Committed,
         pending,
     };
-    std::fs::write(
-        dir.join("registration.json"),
-        serde_json::to_string(&record).expect("serialize"),
-    )
-    .expect("write");
+    std::fs::write(path, serde_json::to_string(&record).expect("serialize")).expect("write");
 }
 
 async fn wait_for_notice(events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) {

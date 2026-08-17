@@ -249,6 +249,12 @@ pub struct RegistrationVm {
     /// Set when this identity was registered as its own recovery authority, so
     /// the screen can offer the fix while somebody is still looking at it.
     pub cannot_be_revoked: bool,
+    /// The three transactions a claim is made of, and how far it has got.
+    ///
+    /// Empty when the claim ended without finishing — see
+    /// [`crate::FlowStepVm::state`]; the note says what happened, and a diagram
+    /// of a journey nobody is on any more is worse than none.
+    pub steps: Vec<FlowStepVm>,
 }
 
 /// One VerusID, as a row in the list.
@@ -270,6 +276,360 @@ pub struct IdentityVm {
     /// actions are offered, and is a fact about this wallet rather than about
     /// the identity.
     pub mine: bool,
+}
+
+/// One currency, as a row in the list.
+///
+/// # A currency is an identity wearing a second hat
+///
+/// The currency's i-address **is** the identity's — defining a currency flips a
+/// flag on the identity of the same name rather than creating a separate thing.
+/// That is why this carries the identity's address and why the list is derived
+/// from the identity list rather than fetched on its own.
+///
+/// It is also why the wallet can say "this identity has no currency yet" with
+/// certainty: the flag is on the identity object it already reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyVm {
+    /// The name, as the chain spells it. **No trailing `@`** — that suffix is
+    /// the identity convention and no currency on VRSCTEST carries one.
+    pub name: String,
+    /// The i-address, shared with the identity that defines it.
+    pub address: String,
+    /// "Token" · "Basket" · "NFT", read off the options bitfield rather than
+    /// guessed from which fields happen to be set.
+    pub kind: String,
+    /// The pill colour, in the vocabulary the node list already uses.
+    pub tone: String,
+    /// What this currency is, in a sentence somebody who did not define it can
+    /// read. Empty when the kind alone says it.
+    pub note: String,
+    /// Whether it has reached its start block.
+    ///
+    /// False for the window between the definition being mined and the currency
+    /// beginning, which is where a freshly launched one sits for twenty-odd
+    /// minutes doing nothing at all. Without this the list shows it exactly as
+    /// it shows one that has been running for a month.
+    pub started: bool,
+    /// Whether the supply can still grow. A fixed-supply currency and a
+    /// mintable one are different promises to whoever holds it, and the
+    /// difference is permanent.
+    pub mintable: bool,
+    /// The block it starts at, formatted. A currency defined ahead of the tip
+    /// exists before it does anything.
+    pub start_block: String,
+}
+
+/// An identity that could define a currency but has not.
+///
+/// The picker's rows. Separate from [`IdentityVm`] because the question is not
+/// "what is this identity" but "may it still be used for this" — and the answer
+/// is a fact about a flag that cannot be unset.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EligibleIdentityVm {
+    pub name: String,
+    pub address: String,
+    /// Empty when it may be used. Otherwise why it may not, in a sentence —
+    /// an identity already carrying a currency, or one this wallet cannot sign
+    /// for. Shown rather than hidden: a name missing from a list with no
+    /// explanation reads as a bug.
+    pub refusal: String,
+}
+
+/// One reserve of a basket, as typed.
+///
+/// The weight is a percentage string rather than a number because the whole
+/// draft crosses as text and because the constraint on it is a *sum*: consensus
+/// wants the weights to add to exactly one coin, so a value rounded on the way
+/// through would move the total off by a satoshi and the launch would build a
+/// market nobody asked for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReserveDraft {
+    /// The reserve's **i-address**, which is what the definition carries.
+    ///
+    /// # Why not the name somebody typed
+    ///
+    /// Because `currency::definition` parses this field as an address and
+    /// refuses anything else — a reserve written as `VRSCTEST` failed the build
+    /// after the launch had already been agreed to, with a message about
+    /// i-addresses that nothing on the form had ever mentioned. It is chosen
+    /// from a list now, and a chosen reserve carries the value consensus wants.
+    pub currency: String,
+    /// The name that address belongs to, fully qualified, for reading.
+    ///
+    /// Carried beside the address rather than looked up again: the picker
+    /// already had it, and an i-address is not something anybody can check by
+    /// eye against the currency they meant. Empty only for a draft that came
+    /// from somewhere other than the picker.
+    pub name: String,
+    /// The share of the basket, in per cent.
+    pub weight: String,
+}
+
+/// One preallocation, as typed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreallocationDraft {
+    /// The identity that receives it — `name@` or an i-address. It must already
+    /// exist: consensus pays a preallocation to an identity, not to an address.
+    pub recipient: String,
+    /// In coins, as typed.
+    pub amount: String,
+}
+
+/// A currency being configured. Sent to core on every edit; core owns the
+/// verdict, because every rule here is a consensus rule.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyDraft {
+    /// "token" | "basket" | "nft".
+    pub kind: String,
+    /// The i-address of the identity that will define it. Empty until one is
+    /// chosen — and one of this and [`Self::new_name`] must be, because a
+    /// currency cannot exist without an identity.
+    pub identity: String,
+    /// The name being claimed, when this launch starts by registering one.
+    ///
+    /// # Why this is not just `identity` holding a name
+    ///
+    /// Because they are answers to different questions and one of them has no
+    /// address yet. An identity that exists is named by its i-address, which is
+    /// the thing that never changes and the thing every later step uses. A name
+    /// being claimed has no address until the registration is mined — it cannot
+    /// be computed early without duplicating consensus arithmetic, and a field
+    /// that means "an address, unless it is a name" is a field every reader has
+    /// to check the mode of first.
+    ///
+    /// Exactly one of the two is set. Both empty is a draft with nothing to
+    /// define under; both filled is two answers to one question, and
+    /// `currency::problems` refuses each by name.
+    pub new_name: String,
+    /// Whether the supply can grow later. Permanent either way.
+    pub mintable: bool,
+    /// Blocks after the current tip at which the currency begins.
+    pub start_delay: String,
+    pub reserves: Vec<ReserveDraft>,
+    pub preallocations: Vec<PreallocationDraft>,
+}
+
+/// Something wrong with a draft, or something about to happen that is
+/// permanent.
+///
+/// Two severities, not one. A refusal is the chain saying no; a warning is the
+/// chain saying yes to something that cannot be undone — and a form that
+/// rendered those the same either blocks a legal currency or waves through the
+/// one mistake that has no second attempt.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyProblemVm {
+    /// True when this stops the launch, false when it only has to be read.
+    pub blocking: bool,
+    /// What is wrong, in a sentence somebody can act on.
+    pub text: String,
+}
+
+/// What core makes of a draft: the problems, and the numbers the picture is
+/// drawn from.
+// `Eq` is absent: a slice carries an `f32` proportion, and a proportion is
+// not a value anybody compares for exact equality.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CurrencyDraftVm {
+    pub problems: Vec<CurrencyProblemVm>,
+    /// Nothing blocking. The Review button is gated on this and on nothing else.
+    pub ready: bool,
+    /// The reserve weights as parts of one whole, already normalised into
+    /// percentages for the bar. Empty for anything that is not a basket.
+    ///
+    /// **Pre-computed here rather than in the interface** for the reason every
+    /// figure in this protocol is: the bar's slices have to agree with the
+    /// numbers printed beside them, and two places dividing the same totals
+    /// will one day disagree.
+    pub slices: Vec<CurrencySliceVm>,
+    /// Whether the weights add to exactly one whole. The bar draws short when
+    /// they do not, and this is what says so in words.
+    pub weights_total: String,
+    /// The supply this launch would create, formatted, and how it splits.
+    pub supply_total: String,
+    pub supply_slices: Vec<CurrencySliceVm>,
+    /// The block it would start at, formatted.
+    pub start_block: String,
+    /// What it would cost, assembled — see `currency::cost`.
+    pub fee_display: String,
+    /// Label/value pairs of what would go on chain, in the order a definition
+    /// is read. The preview panel renders exactly this.
+    pub preview: Vec<CurrencyFieldVm>,
+    /// What this launch will involve, as a diagram. Two steps under an identity
+    /// that already exists; four when a name is claimed first.
+    ///
+    /// A **plan**, not progress — nothing here has happened yet. The same
+    /// diagram appears on [`LaunchPendingVm`] once one has, and that one is
+    /// progress.
+    pub steps: Vec<FlowStepVm>,
+}
+
+/// One currency somebody could pick as a reserve.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyPickVm {
+    /// Fully qualified, the way the chain spells it — `Bridge.vETH`, not
+    /// `Bridge`. Two currencies can share a last component.
+    pub name: String,
+    /// Its i-address, which is what a definition carries.
+    pub address: String,
+    /// "Token" | "Basket" | "NFT", read off the options bitfield.
+    pub kind: String,
+    /// Something worth knowing before it is used as a reserve, or empty.
+    /// Currently only "has not started yet".
+    pub note: String,
+}
+
+/// The answer to one search of the currency list.
+///
+/// # Why the whole list is not simply handed over
+///
+/// `listcurrencies` is one reply with no pagination — 464KB and 290 currencies
+/// on VRSCTEST, measured, and it grows with the chain. It is fetched once and
+/// kept in the core; what crosses to the interface is the answer to a question.
+/// Slint cannot filter a model in a binding, so a screen holding all of them
+/// could not narrow them anyway.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyChoicesVm {
+    /// The matches, best first, capped — see [`Self::more`].
+    pub rows: Vec<CurrencyPickVm>,
+    /// How many matched beyond the ones carried. Zero when the list is
+    /// complete; a screen that silently truncated would read as "that is all
+    /// there is" while hiding the currency somebody was looking for.
+    pub more: usize,
+    /// Whether the chain is still being asked. True only for the first search
+    /// of a session, which is the one that fetches the list.
+    pub loading: bool,
+    /// Why there is nothing to choose from, or empty. A node that could not be
+    /// asked is not the same as a chain with no currencies on it.
+    pub problem: String,
+}
+
+/// One slice of a proportional bar.
+// `Eq` is absent: a slice carries an `f32` proportion, and a proportion is
+// not a value anybody compares for exact equality.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CurrencySliceVm {
+    pub label: String,
+    /// Its share of the bar, 0–100, as a number the layout can multiply by.
+    /// The one place in this protocol where a figure crosses as a number rather
+    /// than a string, because it is a *proportion* and not an amount — nobody
+    /// reads it, the layout divides by it.
+    pub percent: f32,
+    /// Where the slice starts along the bar, 0–100, for the same reason and
+    /// with the same caveat: a coordinate, not a figure anybody reads.
+    ///
+    /// Carried rather than accumulated by the interface, because the running
+    /// total and the share it belongs to are one piece of arithmetic. Two of
+    /// them, in two languages, is two chances to disagree about where a slice
+    /// begins — and the bar exists to be checked by eye against the numbers
+    /// beside it.
+    pub offset_percent: f32,
+    /// The same share written out, which is what somebody actually reads.
+    pub percent_display: String,
+    /// The tone to draw it in, cycled so adjacent slices differ.
+    pub tone: String,
+}
+
+/// One step of the launch, as the diagram draws it.
+///
+/// # Why the steps are built in core and not laid out in the interface
+///
+/// Because how many there are is a fact about which path a launch is on, and
+/// which of them cost money is a fact about the chain. A launch under an
+/// identity that already exists is one transaction; one that starts from a name
+/// is three, two of which are paid for. An interface that decided that for
+/// itself would be a second opinion about what is about to be spent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowStepVm {
+    pub label: String,
+    /// "done" | "now" | "later" | "failed".
+    ///
+    /// `failed` exists because one of these flows can end without finishing: a
+    /// name claim expires about twenty blocks after it is signed, and the fee
+    /// is spent either way. A diagram that could only say done, now or later
+    /// would have to draw that as one of the three, and all three of them are
+    /// untrue.
+    pub state: String,
+    /// Whether reaching this step spends money. Marked, because not all of them
+    /// do and a diagram that treats them alike has lied about the one somebody
+    /// wanted to stop before.
+    pub costs: bool,
+}
+
+impl FlowStepVm {
+    /// One step. Here rather than in each caller because two modules in the
+    /// core build these lists and a third would otherwise copy the shape.
+    pub fn new(label: &str, state: &str, costs: bool) -> Self {
+        Self {
+            label: label.to_string(),
+            state: state.to_string(),
+            costs,
+        }
+    }
+}
+
+/// One line of the definition preview.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrencyFieldVm {
+    pub label: String,
+    pub value: String,
+    /// True for the fields that cannot be changed after the launch. The preview
+    /// marks them, because "permanent" is the only property of this screen
+    /// worth interrupting somebody for.
+    pub permanent: bool,
+}
+
+/// A launch, built and signed, waiting for a yes.
+///
+/// Read back off what was built rather than echoed from the form — the same
+/// rule the send review follows, and for the same reason: between the form and
+/// the signature sit coin selection, a fee read from chain policy and the
+/// identity's own output, and a review that replays the form cannot show a
+/// mistake in any of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchReviewVm {
+    pub ticket: u64,
+    /// The currency's name, off the definition that was signed.
+    pub name: String,
+    /// What it will be, in a sentence.
+    pub description: String,
+    /// What chain policy charges, and the two halves it splits into. Both are
+    /// funded; only one of them comes back as an output.
+    pub fee_display: String,
+    pub deposit_display: String,
+    pub burned_display: String,
+    /// The block it begins at.
+    pub start_block: String,
+}
+
+/// A currency that has been decided on but not made.
+///
+/// Two waits, and they are not the same. Waiting for a name may still be
+/// abandoned for nothing; waiting to define under a name that already exists
+/// means an identity has been registered and paid for with nothing made under
+/// it — and that identity can never be used for a different currency.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchPendingVm {
+    /// The identity it is for, as a name.
+    pub identity: String,
+    /// "awaiting-identity" | "ready".
+    pub step: String,
+    /// What is happening, in a sentence somebody can act on.
+    pub note: String,
+    /// Whether the wallet is waiting on a press rather than on the chain.
+    pub can_continue: bool,
+    /// How far along it is, as the same diagram the form drew as a plan.
+    pub steps: Vec<FlowStepVm>,
+}
+
+/// A launch that reached the network.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchDoneVm {
+    pub txid: String,
+    /// The new currency's i-address, which is its identity's.
+    pub address: String,
+    pub name: String,
+    pub start_block: String,
 }
 
 /// Everything the detail sheet shows about one identity.
@@ -587,6 +947,10 @@ pub enum ScreenId {
     /// what justifies the requests it makes: finding them costs one call per
     /// key, and nothing else on any other screen reads the answer.
     Identities,
+    /// The currencies those identities define. Same justification again, and
+    /// one more request per identity on top: a currency is read by asking about
+    /// the identity that defines it.
+    Currencies,
     Settings,
     CreateWallet,
     ImportWallet,

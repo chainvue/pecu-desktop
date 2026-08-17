@@ -24,7 +24,7 @@
 //! That is not key material in any useful sense, and wrapping it would blur what
 //! [`Secret`] means everywhere else.
 
-use crate::models::{ScreenId, SendDraft};
+use crate::models::{CurrencyDraft, ScreenId, SendDraft};
 use crate::secret::Secret;
 
 /// How a key is being brought into the wallet.
@@ -322,6 +322,73 @@ pub enum Command {
     /// no inverse, and this is the only direction that exists.
     DeriveContentKey(String),
 
+    // ── Currencies ──────────────────────────────────────────────────────
+    /// Find the currencies this wallet's identities define, and which of those
+    /// identities could still define one.
+    ///
+    /// Both answers come out of the same walk — a currency is a flag on an
+    /// identity — so asking for them separately would be two passes over the
+    /// same reads disagreeing about a wallet that changed in between.
+    RefreshCurrencies,
+    /// Open one, by i-address.
+    OpenCurrency(String),
+    /// Check a draft. Runs on every edit, so it touches nothing but memory —
+    /// every rule it applies is arithmetic over what was typed, plus the tip
+    /// the wallet already has.
+    ///
+    /// The whole draft rather than the field that changed: a basket's weights
+    /// are only wrong *together*, and a validator handed one weight cannot say
+    /// whether the set adds up.
+    ValidateCurrency(CurrencyDraft),
+    /// Narrow the chain's currency list to what somebody is looking for.
+    ///
+    /// The first of these fetches `listcurrencies` and keeps it; the rest are
+    /// answered from memory. See [`crate::models::CurrencyChoicesVm`] for why
+    /// the list does not simply cross to the interface once.
+    SearchCurrencies {
+        /// Matched against the name and the i-address, ignoring case. Empty
+        /// asks for the start of the whole list.
+        query: String,
+        /// i-addresses already used as reserves in the draft. Left out of the
+        /// answer, because consensus reads a repeated reserve as two entries
+        /// and the wallet refuses the draft either way — offering one is
+        /// offering a mistake.
+        exclude: Vec<String>,
+    },
+    /// Build and sign the launch. Nothing is sent — the review that follows is
+    /// decoded from the transaction this produced.
+    PrepareLaunch(CurrencyDraft),
+    /// Claim a name and then define a currency under it, without being asked
+    /// again in between.
+    ///
+    /// One command rather than two for the reason `StartRegistration` gives
+    /// about its three steps: the decision is one decision. The currency is
+    /// written down *before* the registration is broadcast, so a wallet that
+    /// dies in the middle knows what the identity it just paid for was for.
+    ///
+    /// The name is inside the draft, as `new_name`, rather than beside it: it
+    /// is part of what was configured, it is what gets written down before the
+    /// registration is paid for, and two copies of it would be two things to
+    /// keep in step.
+    StartCurrencyFromNewName {
+        revocation_authority: String,
+        recovery_authority: String,
+        draft: CurrencyDraft,
+    },
+    /// Pick up a currency whose identity landed while the wallet was closed.
+    ResumeLaunch,
+    /// Forget it. The identity stays — it is registered and paid for — but the
+    /// wallet stops offering to define anything under it.
+    AbandonLaunch,
+    /// Send the launch behind this ticket.
+    ConfirmLaunch {
+        ticket: u64,
+    },
+    /// Throw it away unsent. The bytes go with it.
+    CancelLaunch {
+        ticket: u64,
+    },
+
     // ── Shell ───────────────────────────────────────────────────────────
     /// Entering a screen. Core uses this to start screen-scoped polling.
     ScreenEntered(ScreenId),
@@ -329,5 +396,16 @@ pub enum Command {
     ScreenLeft(ScreenId),
     /// Any user input at all, for the auto-lock idle timer.
     UserActivity,
+    /// How big the window is now, in logical pixels.
+    ///
+    /// Debounced by the interface — a drag produces one of these per frame
+    /// otherwise, and each is a row written to SQLite. Size only, never
+    /// position: a window restored to coordinates from a different monitor
+    /// arrangement opens off-screen, and nothing here can ask what monitors
+    /// exist.
+    RememberWindow {
+        width: u32,
+        height: u32,
+    },
     Shutdown,
 }

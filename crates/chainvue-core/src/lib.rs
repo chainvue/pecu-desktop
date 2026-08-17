@@ -33,7 +33,9 @@
 //! zeroization. That is a security regression dressed as a modernisation, so
 //! `spawn_blocking` it is.
 
+pub mod currency;
 pub mod identity;
+pub mod launch;
 pub mod paths;
 pub mod pending;
 pub mod portfolio;
@@ -124,6 +126,13 @@ pub fn start(
         resolving: None,
         last_draft: chainvue_protocol::SendDraft::default(),
         identities: std::collections::BTreeMap::new(),
+        currencies: Vec::new(),
+        eligible: Vec::new(),
+        launch_fees: None,
+        currency_catalog: Catalog::Unasked,
+        pending_currency_search: None,
+        launches: std::collections::HashMap::new(),
+        intent: launch::Intent::open(paths.launch()),
         looked_up: Vec::new(),
         reservation: registration::Reservation::open(paths.registration()),
         identity_changes: std::collections::HashMap::new(),
@@ -139,6 +148,56 @@ pub fn start(
 
     runtime.spawn(core.run(command_rx, work_rx));
     (Dispatcher(command_tx), event_rx)
+}
+
+/// Turn each preallocation recipient into the 20 bytes consensus wants.
+///
+/// A preallocation pays an **identity**, not an address. An i-address carries
+/// the hash and would decode offline; a `name@` does not. Both go through the
+/// same lookup here rather than branching, because the answer that matters is
+/// the identity's own `identity_address` — asking is what makes a name and its
+/// i-address the same answer instead of two code paths that can disagree.
+///
+/// Off the actor, in the blocking job, so `currency::definition` stays pure and
+/// testable without a chain.
+fn resolve_recipients(
+    chain: &Chain,
+    draft: &chainvue_protocol::CurrencyDraft,
+) -> Result<std::collections::BTreeMap<String, [u8; 20]>, String> {
+    use verus_sdk::network::ChainReader;
+
+    let mut resolved = std::collections::BTreeMap::new();
+    for allocation in &draft.preallocations {
+        let typed = allocation.recipient.trim().to_string();
+        if typed.is_empty() {
+            continue;
+        }
+        let record = chain
+            .identity(&typed)
+            .map_err(|error| format!("{typed}: {error}"))?;
+        let address = record
+            .identity_address
+            .parse::<verus_sdk::verus_keys::Address>()
+            .map_err(|error| format!("{typed}: {error}"))?;
+        resolved.insert(typed, address.hash());
+    }
+    Ok(resolved)
+}
+
+/// The smallest window `AppWindow` declares it can be laid out at.
+///
+/// Written here as well as in the `.slint` file, which is a duplicate and is
+/// worth it: this is the only side that can refuse a stored size, and a core
+/// that trusted whatever was in the database could hand back a window nothing
+/// fits in. If the two ever disagree, the interface is right — it is the one
+/// doing the layout.
+const MIN_WINDOW: (u32, u32) = (880, 620);
+
+/// The size the window was last left at, if it is usable.
+fn remembered_window(store: &chainvue_store::Store) -> Option<(u32, u32)> {
+    let read = |key: &str| store.setting(key)?.parse::<u32>().ok();
+    let (width, height) = (read("window_width")?, read("window_height")?);
+    (width >= MIN_WINDOW.0 && height >= MIN_WINDOW.1).then_some((width, height))
 }
 
 /// Open the wallet database for one chain, or carry on without one.
@@ -167,6 +226,31 @@ struct Core {
     /// active node changes. `Arc` because a refresh runs on a blocking thread
     /// and must not borrow from the actor.
     chain: Option<Arc<Chain>>,
+    /// The currencies this wallet's identities define, and every identity with
+    /// whether it could still define one.
+    ///
+    /// Two lists from one walk — see `refresh_currencies`. Held rather than
+    /// re-read on every emission because the walk costs one request per
+    /// identity.
+    currencies: Vec<chainvue_protocol::CurrencyVm>,
+    eligible: Vec<chainvue_protocol::EligibleIdentityVm>,
+    /// What a launch costs on this chain, once it has been asked. See
+    /// `ensure_launch_fees`.
+    launch_fees: Option<(verus_sdk::money::Amount, verus_sdk::money::Amount)>,
+    /// Every currency the chain knows about — see [`Catalog`].
+    currency_catalog: Catalog,
+    /// A search that arrived while the catalog was still being fetched, to be
+    /// answered when it lands. One, not a queue: they are keystrokes, and only
+    /// the last one is still being waited on.
+    pending_currency_search: Option<(String, Vec<String>)>,
+    /// Launches built and signed, by ticket. Same shape as `prepared` and
+    /// `identity_changes`: the bytes stay here and the interface holds a
+    /// number. The permit rides along because it was taken before the
+    /// signature.
+    launches: std::collections::HashMap<u64, (currency::Prepared, chainvue_chain::SpendPermit)>,
+    /// A currency somebody decided to make, held across the identity
+    /// registration it is waiting on. See `launch::Intent`.
+    intent: launch::Intent,
     /// Which addresses the scripted chain was built to answer for. See
     /// [`Core::scripted_chain`] — the script is generated from the wallet's own
     /// keys, so the chain built before it unlocked answers for nobody.
@@ -429,6 +513,24 @@ struct HistoryScan {
 /// The work happens on a blocking thread; the **mutation** still happens in one
 /// place, in a defined order, because the answer comes back as a message the
 /// actor selects on alongside commands.
+/// Every currency the chain knows about, and how far getting it has got.
+///
+/// One value rather than a list beside a flag, so "not asked yet", "on its way"
+/// and "here" cannot be in two states at once — the first keystroke in the
+/// picker starts the fetch and the ones behind it must not each start another.
+///
+/// `listcurrencies` is a single reply with no pagination — 464KB and 290
+/// currencies on VRSCTEST, measured by the SDK, and it grows with the chain — so
+/// it is asked for once per session and every search after that is answered from
+/// memory. Reset to `Unasked` on a chain switch: a picker offering VRSCTEST's
+/// currencies on mainnet would be offering reserves that do not exist.
+#[derive(Debug, PartialEq, Eq)]
+enum Catalog {
+    Unasked,
+    Fetching,
+    Ready(Vec<verus_sdk::network::CurrencySummary>),
+}
+
 enum Work {
     Portfolio(Box<portfolio::Reading>),
     /// A payment was built and signed, or the attempt failed.
@@ -523,6 +625,38 @@ enum Work {
     Identities(
         Box<Result<Vec<verus_sdk::network::IdentityAtAddress>, verus_sdk::network::RpcError>>,
     ),
+    /// A launch built and signed, with the permit that was taken before the
+    /// signature. **The bytes never leave here** — the interface holds a ticket
+    /// and a decoded summary.
+    LaunchPrepared {
+        ticket: u64,
+        #[allow(clippy::type_complexity)]
+        result: Box<Result<(Box<currency::Prepared>, Box<chainvue_chain::SpendPermit>), String>>,
+    },
+    /// It was handed to a node, one way or another.
+    LaunchSent(Box<Result<currency::Launch, String>>),
+    /// What a launch costs, from chain policy: the currency registration fee
+    /// and the identity import fee, in that order. Which one applies depends on
+    /// the kind — and on VRSCTEST they are four orders of magnitude apart.
+    LaunchFees(
+        Box<
+            Result<
+                (verus_sdk::money::Amount, verus_sdk::money::Amount),
+                verus_sdk::network::RpcError,
+            >,
+        >,
+    ),
+    /// One answer per identity: its name, its i-address, whether this wallet
+    /// can sign for it, its status, and what the chain said about a currency
+    /// under it.
+    ///
+    /// Not a `Result`, deliberately. Each identity is asked separately and one
+    /// unanswered read must not discard the others — so the failure is carried
+    /// per row, in `Lookup::Unknown`, rather than for the whole walk.
+    Currencies(Vec<(String, String, bool, String, currency::Lookup)>),
+    /// Every currency on the chain, or why it could not be asked. Fetched once
+    /// per session — see `Core::currency_catalog`.
+    CurrencyCatalog(Box<Result<Vec<verus_sdk::network::CurrencySummary>, String>>),
     /// One identity looked up by name or i-address, with everything the detail
     /// sheet needs.
     IdentityDetail {
@@ -552,6 +686,11 @@ impl Core {
         // A name claim the last run left unfinished. It has a deadline, so it is
         // worth saying before anything else on that screen.
         self.emit_registration(None);
+        // And a currency waiting for a name, or waiting to be defined under one
+        // that already landed. Said before anything else on that screen for the
+        // same reason a claim is: it is unfinished and it has already cost
+        // something.
+        self.emit_launch_pending();
         // A payment left unresolved by a previous run is the first thing worth
         // saying — it is money whose fate nobody knows.
         self.emit_pending();
@@ -937,6 +1076,13 @@ impl Core {
             Work::CommitmentPolled(result) => self.finish_poll(*result),
             Work::Registered(result) => self.finish_registered(*result),
             Work::Identities(result) => self.finish_identities(*result),
+            Work::Currencies(read) => self.finish_currencies(read),
+            Work::CurrencyCatalog(result) => self.finish_currency_catalog(*result),
+            Work::LaunchFees(result) => self.finish_launch_fees(*result),
+            Work::LaunchPrepared { ticket, result } => {
+                self.finish_launch_prepared(ticket, *result);
+            }
+            Work::LaunchSent(result) => self.finish_launch_sent(*result),
             Work::IdentityDetail {
                 typed,
                 open,
@@ -1059,7 +1205,15 @@ impl Core {
             Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
 
             // ── Send ─────────────────────────────────────────────────
-            Command::RefreshIdentities => self.refresh_identities(),
+            // A currency is an identity wearing a second hat, so asking for
+            // the currencies *is* asking for the identities — the currency walk
+            // chains off the end of that one, in `finish_identities`.
+            //
+            // Merged rather than written twice with the same body: two arms
+            // that happen to agree invite somebody to change one of them, and
+            // the day they diverge is the day the currency list is built from a
+            // stale identity list.
+            Command::RefreshIdentities | Command::RefreshCurrencies => self.refresh_identities(),
             Command::LookUpIdentity(typed) => self.look_up_identity(&typed),
             Command::SetIdentityAuthorities {
                 address,
@@ -1108,8 +1262,40 @@ impl Core {
             Command::AbandonRegistration => self.abandon_registration(),
             Command::ClearLookups => self.clear_lookups(),
             Command::UnwatchIdentity(address) => self.unwatch_identity(&address),
-            Command::OpenIdentity(address) => self.look_up_identity(&address),
+            // Same object, so the same read. Opening a currency opens the
+            // identity that defines it, because that is what it is — and the
+            // detail sheet already says everything an owner needs.
+            Command::OpenIdentity(address) | Command::OpenCurrency(address) => {
+                self.look_up_identity(&address);
+            }
             Command::DeriveContentKey(uri) => self.derive_content_key(&uri),
+            Command::ValidateCurrency(draft) => self.validate_currency(&draft),
+            Command::SearchCurrencies { query, exclude } => {
+                self.search_currencies(query, exclude);
+            }
+            Command::PrepareLaunch(draft) => self.prepare_launch(&draft),
+            Command::StartCurrencyFromNewName {
+                revocation_authority,
+                recovery_authority,
+                draft,
+            } => {
+                self.start_currency_from_new_name(
+                    &revocation_authority,
+                    &recovery_authority,
+                    draft,
+                );
+            }
+            Command::ResumeLaunch => self.resume_launch(),
+            Command::AbandonLaunch => {
+                self.intent.finish();
+                self.emit_launch_pending();
+            }
+            Command::ConfirmLaunch { ticket } => self.confirm_launch(ticket),
+            Command::CancelLaunch { ticket } => {
+                // Dropping the value drops the signed bytes with it.
+                self.launches.remove(&ticket);
+                let _ = self.events.send(Event::LaunchPrepared(None));
+            }
             Command::ValidateDraft(draft) => self.validate_draft(&draft),
             Command::PrepareSend(draft) => self.prepare_send(draft),
             Command::ConfirmSend { ticket } => self.confirm_send(ticket),
@@ -1202,6 +1388,7 @@ impl Core {
             Command::ResolvePending { id, action } => self.resolve_pending(id, action),
             Command::ScreenEntered(screen) => self.enter_screen(screen),
             Command::UserActivity => self.wallet.touch(),
+            Command::RememberWindow { width, height } => self.remember_window(width, height),
             Command::Shutdown => return false,
             // Nothing to do, and named rather than swept up by a wildcard.
             //
@@ -1460,6 +1647,7 @@ impl Core {
         let _ = self.events.send(Event::Appearance {
             dark: store.setting("theme").as_deref() != Some("light"),
             reduce_motion: store.setting("reduce_motion").as_deref() == Some("1"),
+            window: remembered_window(store),
         });
 
         // The two caches that make the next refresh cheap: the chain's own
@@ -1963,6 +2151,14 @@ impl Core {
         self.last_draft = chainvue_protocol::SendDraft::default();
         self.identities.clear();
         self.looked_up.clear();
+        // All three are per-chain facts that were being kept across a switch.
+        // The registration fee especially: VRSCTEST charges 200 and VRSC does
+        // not, and the cached figure was the one the launch form printed.
+        self.launch_fees = None;
+        self.currencies.clear();
+        self.eligible.clear();
+        self.currency_catalog = Catalog::Unasked;
+        self.pending_currency_search = None;
         self.open_identity.clear();
         self.open_content_keys.clear();
         // Derived by hashing the chain's name, so a table built for VRSCTEST
@@ -2120,6 +2316,18 @@ impl Core {
         // as a stale list.
         if screen == chainvue_protocol::ScreenId::Identities {
             self.refresh_identities();
+        }
+
+        // And the currencies, which are read *through* the identities — so this
+        // asks only for the identities and lets `finish_identities` chain into
+        // the currency walk when it has them.
+        //
+        // Not both here. `refresh_identities` dispatches and returns; the list
+        // it fills is not there yet, so a currency walk started on this line
+        // would ask about whatever the previous screen left behind.
+        if screen == chainvue_protocol::ScreenId::Currencies {
+            self.refresh_identities();
+            self.ensure_launch_fees();
         }
     }
 
@@ -2470,6 +2678,26 @@ impl Core {
         };
         store.set_setting("theme", if dark { "dark" } else { "light" });
         store.set_setting("reduce_motion", if reduce_motion { "1" } else { "0" });
+    }
+
+    /// Remember how big the window was left.
+    ///
+    /// Refused below the window's own declared minimum. A stored size smaller
+    /// than that could only come from a truncated write or a hand-edited
+    /// database, and restoring it would open a wallet whose layout has nowhere
+    /// to go — so the wrong value is dropped here rather than handed back at the
+    /// next start.
+    ///
+    /// Size only, never position. See [`chainvue_protocol::Command`].
+    fn remember_window(&self, width: u32, height: u32) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if width < MIN_WINDOW.0 || height < MIN_WINDOW.1 {
+            return;
+        }
+        store.set_setting("window_width", &width.to_string());
+        store.set_setting("window_height", &height.to_string());
     }
 
     fn set_auto_lock(&mut self, minutes: Option<u32>) {
@@ -3050,6 +3278,7 @@ impl Core {
                     registered.identity_address,
                 )
                 .to_string();
+                let registered_address = address.clone();
                 tracing::info!(
                     name = %registered.name,
                     %address,
@@ -3075,11 +3304,17 @@ impl Core {
                         address,
                         busy: false,
                         cannot_be_revoked,
+                        steps: identity::progress("done"),
                     },
                 ))));
 
                 // It is one of yours now.
                 self.refresh_identities();
+
+                // And if a currency has been waiting for this name, carry on
+                // without making somebody navigate back and fill the form in
+                // again. That is what "created in the background" means.
+                self.continue_after_identity(&registered_address);
             }
             Err(reason) => {
                 // The claim is still on disk and may still be inside its
@@ -3157,6 +3392,23 @@ impl Core {
         }
 
         let name = name.trim().to_string();
+
+        // The local rule, applied where the money is rather than only where the
+        // typing was.
+        //
+        // The screen gates its own button on this — but on the answer to a
+        // question asked a moment ago, and since that question waits for a
+        // pause in typing there is a window in which the button is live and the
+        // answer is about a shorter name. The same reasoning `prepare_launch`
+        // gives: the checks are the core's, and this is where they bind.
+        if let Some(problem) = identity::name_problem(&name) {
+            self.notice_warning("registration_name", "That name cannot be claimed", &problem);
+            return;
+        }
+        if name.is_empty() {
+            return;
+        }
+
         let Some(label) = self.wallet.active_key.clone() else {
             return;
         };
@@ -3283,6 +3535,697 @@ impl Core {
         }
 
         self.emit_identities();
+
+        // A currency is a flag on an identity, so the currency walk can only
+        // start once this one has finished. Chained here rather than at
+        // `enter_screen`, which dispatches this and returns before the list
+        // exists.
+        //
+        // Gated on the screen so the extra request per identity is only made
+        // where somebody is looking at the answer.
+        if self.polling.screen == chainvue_protocol::ScreenId::Currencies {
+            self.refresh_currencies();
+        }
+    }
+
+    // ── Currencies ──────────────────────────────────────────────────────────
+
+    /// Ask, for each identity this wallet controls, whether it defines a
+    /// currency.
+    ///
+    /// # Why by i-address and not by name
+    ///
+    /// `getcurrency` takes either. A currency's fully qualified name is dotted
+    /// and carries no trailing `@`, while an identity's carries one — so asking
+    /// by name means converting between two spellings of the same thing and
+    /// being wrong about a sub-identity. The i-address is the same string for
+    /// both, because they *are* the same thing, and it is already in hand.
+    ///
+    /// One request per identity, on the screen whose being open is what
+    /// justifies them. No node is asked anything until somebody navigates here.
+    fn refresh_currencies(&mut self) {
+        // The status travels with the name because the picker has to state a
+        // refusal a revoked or timelocked identity would otherwise only learn
+        // about from a failed build. See `currency::refusal`.
+        let mine: Vec<(String, String, bool, String)> = self
+            .identities
+            .values()
+            .map(|row| {
+                (
+                    row.name.clone(),
+                    row.address.clone(),
+                    row.mine,
+                    row.status.clone(),
+                )
+            })
+            .collect();
+
+        if mine.is_empty() {
+            // Nothing to ask about, but the screen still has to be told —
+            // otherwise it sits on whatever the last chain's answer was.
+            self.currencies.clear();
+            self.eligible.clear();
+            self.emit_currencies();
+            return;
+        }
+
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.busy(TaskKind::RefreshingBalance, true);
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                let read = mine
+                    .into_iter()
+                    .map(|(name, address, mine, status)| {
+                        let lookup = currency::classify(chain.currency_definition(&address));
+                        (name, address, mine, status, lookup)
+                    })
+                    .collect();
+                Work::Currencies(read)
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_currencies(&mut self, read: Vec<(String, String, bool, String, currency::Lookup)>) {
+        self.busy(TaskKind::RefreshingBalance, false);
+
+        // Rebuilt rather than merged, for the reason the identity list is: a
+        // currency that has left this wallet's control has to leave the list,
+        // and merging would keep it there for the life of the process.
+        self.currencies.clear();
+        self.eligible.clear();
+
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+
+        for (name, address, mine, status, lookup) in read {
+            if let currency::Lookup::Unknown(detail) = &lookup {
+                // Not a notice: one identity out of five going unanswered is
+                // not a failure of the screen, and a toast per identity would
+                // bury the four that worked. The row says so itself.
+                tracing::info!(%address, %detail, "a currency read went unanswered");
+            }
+
+            if let currency::Lookup::Defines(summary) = &lookup {
+                self.currencies.push(currency::row(summary, tip));
+            }
+
+            let refusal = currency::refusal(&lookup, mine, &status);
+            self.eligible.push(chainvue_protocol::EligibleIdentityVm {
+                name,
+                address,
+                refusal,
+            });
+        }
+
+        self.emit_currencies();
+    }
+
+    /// Check a draft and hand back everything the configure screen draws.
+    ///
+    /// Runs on every keystroke, so it touches nothing but memory: every rule is
+    /// arithmetic over what was typed, plus the tip and the launch fee the
+    /// wallet is already holding. No node is asked anything.
+    /// Answer the reserve picker, fetching the chain's currency list if this is
+    /// the first search of the session.
+    ///
+    /// # Why the list is fetched here rather than when the screen opens
+    ///
+    /// Because it is half a megabyte and most sessions never open the picker.
+    /// A basket is one of three kinds and the reserve list is one step inside
+    /// it; paying for that on the way past the Currencies screen would be a
+    /// request nobody asked for. The first search pays, and it is the one
+    /// moment somebody is waiting for exactly this answer.
+    fn search_currencies(&mut self, query: String, exclude: Vec<String>) {
+        if let Catalog::Ready(all) = &self.currency_catalog {
+            let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+            let view = currency::choices(all, &query, &exclude, tip);
+            let _ = self.events.send(Event::CurrencyChoices(Box::new(view)));
+            return;
+        }
+
+        // Remembered rather than queued. These are keystrokes and the only
+        // answer worth sending is the one to the last of them.
+        self.pending_currency_search = Some((query, exclude));
+
+        if self.currency_catalog == Catalog::Fetching {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            let _ = self.events.send(Event::CurrencyChoices(Box::new(
+                chainvue_protocol::CurrencyChoicesVm {
+                    problem: "No node is connected, so the chain's currencies cannot be listed."
+                        .to_string(),
+                    ..Default::default()
+                },
+            )));
+            return;
+        };
+
+        // Said before the request goes out, because the request is the slow one
+        // in this wallet and a picker that opened to an empty list would read
+        // as a chain with nothing on it.
+        let _ = self.events.send(Event::CurrencyChoices(Box::new(
+            chainvue_protocol::CurrencyChoicesVm {
+                loading: true,
+                ..Default::default()
+            },
+        )));
+
+        self.currency_catalog = Catalog::Fetching;
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                Work::CurrencyCatalog(Box::new(
+                    chain.list_currencies().map_err(|error| error.to_string()),
+                ))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_currency_catalog(
+        &mut self,
+        result: Result<Vec<verus_sdk::network::CurrencySummary>, String>,
+    ) {
+        let waiting = self.pending_currency_search.take();
+
+        match result {
+            Ok(all) => {
+                tracing::info!(count = all.len(), "the chain's currency list arrived");
+                self.currency_catalog = Catalog::Ready(all);
+                // Only if somebody is still looking. A picker closed while the
+                // list was in flight has nothing to be told, and the list stays
+                // for the next time it opens.
+                if let Some((query, exclude)) = waiting {
+                    self.search_currencies(query, exclude);
+                }
+            }
+            Err(error) => {
+                // Back to unasked rather than left as failed: the picker offers
+                // a retry, and a state that remembered the failure would refuse
+                // to try again.
+                self.currency_catalog = Catalog::Unasked;
+                tracing::warn!(%error, "the chain's currency list could not be read");
+                // Not a toast. The failure belongs to the panel that asked for
+                // it, where there is a Retry — a toast would put it over a form
+                // whose other steps are unaffected.
+                let _ = self.events.send(Event::CurrencyChoices(Box::new(
+                    chainvue_protocol::CurrencyChoicesVm {
+                        problem: format!("The chain's currencies could not be listed. {error}"),
+                        ..Default::default()
+                    },
+                )));
+            }
+        }
+    }
+
+    fn validate_currency(&mut self, draft: &chainvue_protocol::CurrencyDraft) {
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        let ticker = self.nodes.requested().map_or_else(
+            || "VRSC".to_string(),
+            |network| network.ticker().to_string(),
+        );
+
+        // The fee depends on the kind: a token or a basket pays the chain's
+        // currency registration fee, an NFT pays its identity import fee — and
+        // on VRSCTEST those are 200 and 0.02. Reading the wrong one is not a
+        // rounding error.
+        let fee = self.launch_fees.as_ref().map(|fees| {
+            if currency::Kind::named(&draft.kind) == currency::Kind::Nft {
+                fees.1
+            } else {
+                fees.0
+            }
+        });
+
+        // The name the picker showed, looked up from the list core already
+        // holds. The draft carries an i-address — which is the right thing for
+        // it to carry — but the preview is read against what somebody chose,
+        // and nobody chose an address.
+        let identity_name = self
+            .eligible
+            .iter()
+            .find(|row| row.address == draft.identity)
+            .map_or("", |row| row.name.as_str());
+
+        let view = currency::check(draft, tip, fee, &ticker, identity_name);
+        let _ = self
+            .events
+            .send(Event::CurrencyDraftChecked(Box::new(view)));
+    }
+
+    /// Build and sign a launch. Nothing is sent.
+    ///
+    /// The permit is taken **before** the work, the way registration does it: a
+    /// launch that could not be broadcast should refuse before it costs a
+    /// signature, not after.
+    fn prepare_launch(&mut self, draft: &chainvue_protocol::CurrencyDraft) {
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        if currency::problems(draft, tip).iter().any(|p| p.blocking) {
+            // The interface gates its own button on this, so arriving here
+            // means a second interface or a stale draft. Refused rather than
+            // trusted: the checks are the core's, and this is where they bind.
+            self.notice_warning(
+                "currency_launch",
+                "That currency cannot be launched yet",
+                "Something in the definition is still wrong.",
+            );
+            return;
+        }
+
+        let Some(row) = self
+            .eligible
+            .iter()
+            .find(|row| row.address == draft.identity)
+            .cloned()
+        else {
+            self.notice_warning(
+                "currency_launch",
+                "That identity is not in this wallet",
+                "Choose one of your own identities to define it under.",
+            );
+            return;
+        };
+
+        self.prepare_launch_under(draft, &row.address, &row.name);
+    }
+
+    /// Build and sign a launch under a named identity.
+    ///
+    /// Split out because there are two ways to arrive here and only one of them
+    /// has an entry in `eligible`: choosing an identity from the picker, and
+    /// the wallet continuing by itself the moment a name it just registered
+    /// lands. The second has the name and the address in hand and no list to
+    /// look them up in.
+    fn prepare_launch_under(
+        &mut self,
+        draft: &chainvue_protocol::CurrencyDraft,
+        identity_address: &str,
+        identity_name: &str,
+    ) {
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+
+        // The chain's own currency, which every definition is parented to. It
+        // arrives from the first refresh and is cached; without it the parent
+        // would have to be guessed, and a definition under the wrong parent is
+        // a different currency with the same name.
+        let Some(parent) = self.cached.native else {
+            self.notice_warning(
+                "currency_launch",
+                "The chain has not said what its own currency is",
+                "Refresh and try again.",
+            );
+            return;
+        };
+
+        let Some(label) = self.wallet.view().active_key else {
+            return;
+        };
+        let Some(vault) = self.wallet.vault() else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                self.notice_warning(
+                    "spend_refused",
+                    &refusal_title(&refused),
+                    "ChainVue will not sign against a chain you did not choose.",
+                );
+                return;
+            }
+        };
+
+        // The bare name: the identity is `demo.VRSCTEST@` and the currency is
+        // `demo` under the chain's own currency. Splitting rather than trimming
+        // the suffix, because a sub-identity carries its parents in the same
+        // string and only the first part is the name.
+        let name = identity_name
+            .trim_end_matches('@')
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+
+        let delay: u32 = draft.start_delay.trim().parse().unwrap_or(0);
+        let start = u64::from(tip.saturating_add(delay));
+
+        self.tickets += 1;
+        let ticket = self.tickets;
+        let draft = draft.clone();
+        let identity = identity_address.to_string();
+
+        self.busy(TaskKind::PreparingSend, true);
+        self.blocking.dispatch(
+            move || {
+                let resolved = match resolve_recipients(&chain, &draft) {
+                    Ok(resolved) => resolved,
+                    Err(reason) => {
+                        return Work::LaunchPrepared {
+                            ticket,
+                            result: Box::new(Err(reason)),
+                        };
+                    }
+                };
+
+                let built = match currency::definition(&draft, &name, parent, start, &resolved) {
+                    Ok(built) => built,
+                    Err(reason) => {
+                        return Work::LaunchPrepared {
+                            ticket,
+                            result: Box::new(Err(reason)),
+                        };
+                    }
+                };
+
+                Work::LaunchPrepared {
+                    ticket,
+                    result: Box::new(
+                        currency::prepare(&chain, &vault, &label, &identity, &built)
+                            .map(|prepared| (Box::new(prepared), Box::new(permit))),
+                    ),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn finish_launch_prepared(
+        &mut self,
+        ticket: u64,
+        result: Result<(Box<currency::Prepared>, Box<chainvue_chain::SpendPermit>), String>,
+    ) {
+        self.busy(TaskKind::PreparingSend, false);
+
+        match result {
+            Ok((prepared, permit)) => {
+                let fee = prepared.launch_fee();
+                let split = currency::cost(fee);
+                let view = chainvue_protocol::LaunchReviewVm {
+                    ticket,
+                    name: prepared.name.clone(),
+                    description: format!(
+                        "Defines {} under this identity. An identity can define one currency, and only once — this cannot be undone or repeated.",
+                        prepared.name,
+                    ),
+                    fee_display: portfolio::coins(split.launch_fee),
+                    deposit_display: portfolio::coins(split.deposit),
+                    burned_display: portfolio::coins(split.burned),
+                    // Off the signed outcome, not off the form. A launch is not
+                    // instant, and the review is the last screen that can say
+                    // when it begins.
+                    start_block: currency::thousands(prepared.start_block()),
+                };
+                self.launches.insert(ticket, (*prepared, *permit));
+                let _ = self
+                    .events
+                    .send(Event::LaunchPrepared(Some(Box::new(view))));
+            }
+            Err(reason) => {
+                self.notice_warning("currency_launch", "Could not build that launch", &reason);
+            }
+        }
+    }
+
+    /// Send it. The permit was taken before the signature and is carried
+    /// through rather than re-taken — one that has since lapsed should not
+    /// silently become a different one.
+    fn confirm_launch(&mut self, ticket: u64) {
+        let Some((prepared, permit)) = self.launches.remove(&ticket) else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            // Put it back. Rebuilding would produce different bytes, and the
+            // ones already signed are the only ones anybody agreed to.
+            self.launches.insert(ticket, (prepared, permit));
+            return;
+        };
+
+        self.busy(TaskKind::Broadcasting, true);
+        self.blocking.dispatch(
+            move || {
+                Work::LaunchSent(Box::new(
+                    prepared
+                        .broadcast(&chain.broadcaster(&permit))
+                        .map_err(|error| error.to_string()),
+                ))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_launch_sent(&mut self, result: Result<currency::Launch, String>) {
+        self.busy(TaskKind::Broadcasting, false);
+
+        match result {
+            Ok(done) => {
+                tracing::info!(txid = %done.txid, address = %done.address, "a currency was launched");
+                // Said out loud, because this is the one action in the wallet
+                // that spends two hundred coins and cannot be repeated. The
+                // review closes and the list refreshes either way; without
+                // this, the only difference between a launch that went and one
+                // that was cancelled is a row appearing some minutes later.
+                //
+                // The height is in it because a launched currency does nothing
+                // until it arrives, and somebody who reads "done" and then finds
+                // a currency that converts nothing has been told half of it.
+                let _ = self
+                    .events
+                    .send(Event::Notice(chainvue_protocol::UiError::simple(
+                        "currency_launched",
+                        format!("{} is on its way", done.name),
+                        format!(
+                            "It begins at block {}. Until then it exists and does nothing.",
+                            currency::thousands(done.start_block),
+                        ),
+                        chainvue_protocol::Severity::Info,
+                    )));
+                // The decision has been carried out. This is the only place the
+                // file is removed by success; the other is somebody saying stop.
+                self.intent.finish();
+                self.emit_launch_pending();
+                let _ = self.events.send(Event::LaunchDone(Box::new(
+                    chainvue_protocol::LaunchDoneVm {
+                        txid: done.txid,
+                        address: done.address,
+                        name: done.name,
+                        start_block: currency::thousands(done.start_block),
+                    },
+                )));
+                // The identity now carries a currency, so both halves of the
+                // screen are stale.
+                self.refresh_identities();
+            }
+            Err(reason) => {
+                self.notice_warning("currency_launch", "The launch was not accepted", &reason);
+            }
+        }
+    }
+
+    /// Claim a name, then define a currency under it.
+    ///
+    /// # Why the currency is written down before the name is claimed
+    ///
+    /// The registration is what costs money. If the process dies between paying
+    /// for a name and recording what it was for, somebody is left with an
+    /// identity that exists for no reason — and that identity can never be used
+    /// for a different currency. Writing first costs nothing and is the only
+    /// ordering where a crash is recoverable.
+    ///
+    /// Unlike the salt, this write is best-effort: it must not stop a
+    /// registration somebody is waiting on. See `launch::Intent::begin`.
+    fn start_currency_from_new_name(
+        &mut self,
+        revocation: &str,
+        recovery: &str,
+        draft: chainvue_protocol::CurrencyDraft,
+    ) {
+        let name = draft.new_name.trim().to_string();
+        if name.is_empty() {
+            // Not a notice: the interface gates its own button on the same
+            // check, so arriving here is a second interface or a stale draft,
+            // and there is nothing to say to somebody who did not press
+            // anything.
+            return;
+        }
+        if self.intent.in_progress() {
+            self.notice_warning(
+                "currency_launch",
+                "A currency is already being made",
+                "Finish or abandon that one first — each carries a name claim with its own deadline.",
+            );
+            return;
+        }
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+        if currency::problems(&draft, tip).iter().any(|p| p.blocking) {
+            self.notice_warning(
+                "currency_launch",
+                "That currency cannot be launched yet",
+                "Something in the definition is still wrong.",
+            );
+            return;
+        }
+        let Some(label) = self.wallet.view().active_key else {
+            return;
+        };
+
+        // The identity is spelled with its `@`, which is how it will be looked
+        // up when the launch is built.
+        self.intent.begin(&format!("{name}@"), &label, draft);
+        self.emit_launch_pending();
+
+        self.start_registration(&name, revocation, recovery);
+    }
+
+    /// Pick up a currency whose identity landed while the wallet was closed.
+    ///
+    /// **Never automatic at startup.** Within a session the wallet carries on by
+    /// itself the moment the name lands, because somebody is sitting there
+    /// watching it happen. Across a restart nobody is — and signing a two
+    /// hundred coin launch because an application was opened is not something
+    /// to do on somebody's behalf. So a resumed launch waits for a press.
+    fn resume_launch(&mut self) {
+        let Some(record) = self.intent.current().cloned() else {
+            return;
+        };
+        if record.step != launch::Step::ReadyToDefine {
+            return;
+        }
+
+        // The address is not in the record — it did not exist when the form was
+        // filled in — so the identity list is where it comes from. It is there:
+        // this wallet registered the name.
+        let Some(row) = self
+            .identities
+            .values()
+            .find(|row| row.name.eq_ignore_ascii_case(&record.identity))
+            .cloned()
+        else {
+            self.notice_warning(
+                "currency_launch",
+                "That identity is not in this wallet yet",
+                "Refresh the identities and try again.",
+            );
+            return;
+        };
+
+        let mut draft = record.draft;
+        draft.identity.clone_from(&row.address);
+        self.prepare_launch_under(&draft, &row.address, &row.name);
+    }
+
+    fn emit_launch_pending(&self) {
+        let view = self.intent.current().map(|record| {
+            let ready = record.step == launch::Step::ReadyToDefine;
+            Box::new(chainvue_protocol::LaunchPendingVm {
+                identity: record.identity.clone(),
+                step: if ready { "ready" } else { "awaiting-identity" }.to_string(),
+                note: if ready {
+                    format!(
+                        "{} exists and nothing has been defined under it. It can never be used for a different currency.",
+                        record.identity,
+                    )
+                } else {
+                    format!(
+                        "Claiming {} first. The currency is defined once the name is on the chain.",
+                        record.identity,
+                    )
+                },
+                can_continue: ready,
+                steps: currency::progress(record.step),
+            })
+        });
+        let _ = self.events.send(Event::LaunchPending(view));
+    }
+
+    /// A name this wallet just registered has landed. If a currency was waiting
+    /// for it, build and sign that launch now.
+    ///
+    /// # Why this signs but does not send
+    ///
+    /// Signing costs nothing and can be undone by throwing the bytes away.
+    /// Broadcasting spends two hundred coins and cannot. So the automatic part
+    /// stops at the review — the screen where somebody says yes — rather than
+    /// at the transaction. "In the background" means not having to navigate
+    /// back and retype a form, not money moving unattended.
+    fn continue_after_identity(&mut self, address: &str) {
+        let Some(record) = self.intent.current().cloned() else {
+            return;
+        };
+        if record.step != launch::Step::AwaitingIdentity {
+            return;
+        }
+
+        tracing::info!(identity = %record.identity, "a currency was waiting for this name");
+        self.intent.identity_exists();
+        self.emit_launch_pending();
+
+        let mut draft = record.draft;
+        // The address did not exist when the form was filled in. It does now.
+        draft.identity = address.to_string();
+        self.prepare_launch_under(&draft, address, &record.identity);
+    }
+
+    /// Read what a launch costs, once, when the screen that needs it opens.
+    ///
+    /// Chain policy rather than arithmetic — `verus-flows` reads exactly these
+    /// two figures and this wallet must show the same ones. Cached because the
+    /// draft is re-checked on every keystroke and a policy read per keystroke
+    /// would be a request storm against a public node.
+    fn ensure_launch_fees(&mut self) {
+        if self.launch_fees.is_some() {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let asked = self.nodes.requested().map_or_else(
+            || "VRSC".to_string(),
+            |network| network.chain_name().to_string(),
+        );
+
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                Work::LaunchFees(Box::new(
+                    chain
+                        .currency(&asked)
+                        .map(|policy| (policy.currency_registration_fee, policy.id_import_fee)),
+                ))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_launch_fees(
+        &mut self,
+        result: Result<
+            (verus_sdk::money::Amount, verus_sdk::money::Amount),
+            verus_sdk::network::RpcError,
+        >,
+    ) {
+        match result {
+            Ok(fees) => self.launch_fees = Some(fees),
+            // Not a notice. The figure is missing from one panel; the screen
+            // still works, and a toast about a fee nobody asked for yet would
+            // be the wallet complaining about its own housekeeping.
+            Err(error) => tracing::info!(%error, "the launch fee could not be read"),
+        }
+    }
+
+    fn emit_currencies(&self) {
+        let _ = self.events.send(Event::Currencies {
+            yours: self.currencies.clone(),
+            eligible: self.eligible.clone(),
+        });
     }
 
     /// Look one up and show it — anyone's, by `name@` or i-address.
