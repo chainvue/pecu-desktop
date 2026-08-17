@@ -1,5 +1,6 @@
 import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
 import { StatusPill } from "base.slint";
+import { Icon } from "icons.slint";
 import { NavItem } from "../vm/structs.slint";
 
 // The left rail.
@@ -43,12 +44,11 @@ export component NavRail inherits Rectangle {
                 padding-right: Sp.s4;
                 spacing: Sp.s4;
 
-                Text {
-                    text: item.glyph;
-                    font-family: Typo.mono;
-                    font-size: 15px;
-                    vertical-alignment: center;
-                    color: !item.enabled ? Theme.text-disabled
+                Icon {
+                    name: item.icon;
+                    size: 18px;
+                    y: (parent.height - self.height) / 2;
+                    tone: !item.enabled ? Theme.text-disabled
                         : root.active == item.id ? Theme.accent
                         : Theme.text-secondary;
                 }

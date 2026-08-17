@@ -7907,14 +7907,14 @@ export component AppWindow inherits Window {
     // A real icon set (Path commands) replaces these later; until then the rule
     // is: nothing here that has ever rendered as a box.
     property <[NavItem]> nav: [
-        { id: "dashboard", label: "Dashboard", glyph: "◆", enabled: true, badge: "" },
-        { id: "send",      label: "Send",      glyph: "↑", enabled: true, badge: "" },
-        { id: "receive",   label: "Receive",   glyph: "↓", enabled: true, badge: "" },
-        { id: "activity",  label: "Activity",  glyph: "≡", enabled: true, badge: "" },
-        { id: "nodes",     label: "Network",   glyph: "○", enabled: true, badge: "" },
-        { id: "identities",label: "Identities",glyph: "◇", enabled: true,  badge: "" },
-        { id: "currencies",label: "Currencies",glyph: "⊙", enabled: true,  badge: "" },
-        { id: "settings",  label: "Settings",  glyph: "⋯", enabled: true, badge: "" },
+        { id: "dashboard", label: "Dashboard", icon: "wallet",     enabled: true, badge: "" },
+        { id: "send",      label: "Send",      icon: "send",       enabled: true, badge: "" },
+        { id: "receive",   label: "Receive",   icon: "receive",    enabled: true, badge: "" },
+        { id: "activity",  label: "Activity",  icon: "history",    enabled: true, badge: "" },
+        { id: "nodes",     label: "Network",   icon: "network",    enabled: true, badge: "" },
+        { id: "identities",label: "Identities",icon: "profile",    enabled: true, badge: "" },
+        { id: "currencies",label: "Currencies",icon: "currency",   enabled: true, badge: "" },
+        { id: "settings",  label: "Settings",  icon: "settings",   enabled: true, badge: "" },
     ];
 
     // Before anything else: if there is no wallet, or it is locked, that is the
