@@ -5,32 +5,64 @@ Both are bundled rather than assumed, and both are compiled into the binary by
 
 ## Why they are here at all
 
-Before this, the interface named **Menlo** for every amount, address, txid and
-block height. Menlo ships with macOS and exists nowhere else, so on Linux and
-Windows every one of those rendered in whatever monospace face the system
-happened to offer. That is a fork in the design that is invisible from a Mac,
-which is exactly the kind that survives to a release.
-
-The UI face was the platform default — SF Pro here, Segoe there, something else
-again on Linux — for the same reason and with the same consequence.
+A face named but not shipped is a face that exists on the machine the design was
+drawn on and nowhere else. The interface then renders in whatever the system
+happens to offer — a fork in the design that is invisible from the developer's
+own screen, which is exactly the kind that survives to a release.
 
 ## What is here
 
 | File | Family | Weight | Used for |
 |---|---|---|---|
-| `Inter-Regular.ttf` | Inter | 400 | body text |
-| `Inter-Medium.ttf` | Inter | 500 | labels, active nav, emphasis |
-| `Inter-SemiBold.ttf` | Inter | 600 | headings |
-| `IBMPlexMono-Regular.ttf` | IBM Plex Mono | 400 | money, addresses, txids, heights |
-| `IBMPlexMono-Medium.ttf` | IBM Plex Mono | 500 | the same, emphasised |
+| `SpaceGrotesk-Regular.ttf` | Space Grotesk | 400 | body text |
+| `SpaceGrotesk-Medium.ttf` | Space Grotesk | 500 | labels, active nav, emphasis |
+| `SpaceGrotesk-Bold.ttf` | Space Grotesk | 700 | headings, buttons |
+| `JetBrainsMonoNL-Regular.ttf` | JetBrains Mono NL | 400 | addresses, txids, heights |
+| `JetBrainsMonoNL-Medium.ttf` | JetBrains Mono NL | 500 | the same, emphasised |
+| `JetBrainsMonoNL-Bold.ttf` | JetBrains Mono NL | 700 | amounts, the wordmark |
 
-Static instances rather than the variable fonts: Slint's font matching picks a
-family and a weight, and the static files carry the typographic family name that
-makes `font-weight: 500` resolve to Medium. Five files at roughly 1.5 MB total,
-which is the price of the interface looking the same everywhere.
+Roughly 980 KB in total.
+
+Static instances rather than the variable fonts. Slint's font matching picks a
+family and a weight, and `fontdb` reads the **typographic** family name (name ID
+16) in preference to the basic one (ID 1) — which matters here, because
+`SpaceGrotesk-Medium.ttf` calls itself "Space Grotesk Medium" in ID 1 and "Space
+Grotesk" / "Medium" in IDs 16 and 17. Without that preference `font-weight: 500`
+would find nothing and fall back to Regular. It was checked in the fontdb source
+rather than assumed.
+
+There is **no 600**. The design asks for 400/500/700, Space Grotesk ships no
+SemiBold cut, and a request for 600 is silently resolved to a neighbour by the
+matcher. `Typo` therefore offers `w-regular`, `w-medium` and `w-bold` and no
+name that would invite one.
 
 Italics are deliberately absent. Nothing in this interface is italic, and a face
 nobody asks for is a megabyte in every copy of the binary.
+
+## Why the "NL" cut of JetBrains Mono
+
+`NL` is the no-ligature cut, and taking it is a correctness decision rather than
+a stylistic one.
+
+The default cut carries the code ligatures the typeface is known for. They live
+in a `calt` feature — contextual alternates — with a 25 KB `GSUB` table, and
+`calt` is enabled by default in the shaper, so they are not something the
+application opts into. `JetBrainsMono NL` has no `GSUB` table at all. Both were
+read out of the files rather than taken from the documentation:
+
+```
+JetBrainsMono-Regular.ttf     GSUB 25108 bytes   features: calt, ccmp, ss01…
+JetBrainsMonoNL-Regular.ttf   GSUB     0 bytes   features: none
+```
+
+This interface prints node URLs, receive addresses, transaction ids and amounts
+in mono and asks people to check them character by character. `//` and `://` are
+among the sequences the default cut merges into a single glyph. A wallet that
+draws two characters as one, in the field somebody is verifying, has made the
+single mistake that bundling a monospace face was meant to prevent.
+
+Nothing else is lost. The ligatures only fire on runs of symbols, so digits,
+base58 and hex are the same drawing in either cut.
 
 ## Why a monospace family for money at all
 
@@ -44,10 +76,11 @@ asked for.
 
 Both are **SIL Open Font License 1.1**, and both licences are in this directory:
 
-- `Inter-LICENSE.txt` — Inter 4.1, © 2016 The Inter Project Authors,
-  from <https://github.com/rsms/inter/releases/tag/v4.1>
-- `IBMPlexMono-LICENSE.txt` — IBM Plex Mono 2.3, © 2017 IBM Corp,
-  reserved font name "Plex", from `google/fonts`
+- `JetBrainsMono-LICENSE.txt` — JetBrains Mono 2.304, © 2020 The JetBrains Mono
+  Project Authors, from
+  <https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304>
+- `SpaceGrotesk-LICENSE.txt` — Space Grotesk 2.0.0, © 2020 Florian Karsten,
+  from <https://github.com/floriankarsten/space-grotesk/releases/tag/2.0.0>
 
 The OFL permits bundling and redistribution, including inside a binary, and
 requires the licence and copyright notice to travel with the font. Because these
@@ -56,4 +89,4 @@ Settings → About names both faces and their licence. Removing that line does n
 make the obligation go away.
 
 Neither font is modified. If one ever is, note that the OFL's Reserved Font Name
-clause means the result may not be called Inter or Plex.
+clause means the result may not be called JetBrains Mono or Space Grotesk.

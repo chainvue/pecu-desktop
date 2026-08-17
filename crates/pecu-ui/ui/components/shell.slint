@@ -45,6 +45,7 @@ export component NavRail inherits Rectangle {
 
                 Text {
                     text: item.glyph;
+                    font-family: Typo.mono;
                     font-size: 15px;
                     vertical-alignment: center;
                     color: !item.enabled ? Theme.text-disabled
@@ -121,7 +122,7 @@ export component TitleBar inherits Rectangle {
         Text {
             text: root.title;
             font-size: Typo.title3;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -138,7 +139,7 @@ export component TitleBar inherits Rectangle {
             mocklabel := Text {
                 text: "MOCK DATA";
                 font-size: Typo.micro;
-                font-weight: Typo.w-semibold;
+                font-weight: Typo.w-bold;
                 letter-spacing: 0.6px;
                 color: Theme.warning;
             }

@@ -330,7 +330,7 @@ export component Money inherits HorizontalLayout {
     // Monospace keeps a column of amounts aligned and stops the balance
     // jittering as it counts up — but at hero size Menlo's slashed zero reads
     // as a terminal rather than a wallet. So the big number opts out until a
-    // proper text face with tabular figures (IBM Plex Mono) is bundled, and
+    // proper text face with tabular figures (JetBrains Mono NL) is bundled, and
     // every amount in a list keeps it, where alignment matters more than
     // character.
     in property <bool> mono: true;
@@ -429,6 +429,11 @@ export component EmptyState inherits VerticalLayout {
     // goes without.
     if root.glyph != "": Text {
         text: root.glyph;
+        // Mono, and not for looks: these marks are absent from Space Grotesk and
+        // present in JetBrains Mono NL. Left to the UI face they fall through to
+        // whatever the system offers, which is the per-platform fork that
+        // bundling fonts exists to prevent.
+        font-family: Typo.mono;
         font-size: 32px;
         color: Theme.text-tertiary;
         opacity: 0.5;
@@ -438,7 +443,7 @@ export component EmptyState inherits VerticalLayout {
     Text {
         text: root.title;
         font-size: Typo.title3;
-        font-weight: Typo.w-semibold;
+        font-weight: Typo.w-bold;
         color: Theme.text-primary;
         horizontal-alignment: center;
     }
@@ -503,6 +508,7 @@ export component ListRow inherits Rectangle {
             background: Theme.bg-inset;
             Text {
                 text: root.glyph;
+                font-family: Typo.mono;
                 font-size: 15px;
                 color: root.glyph-tone;
             }

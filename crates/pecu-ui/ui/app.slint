@@ -848,7 +848,7 @@ component PassphraseForm inherits VerticalLayout {
         Text {
             text: root.mode == "create" ? "Set up Pecu" : "Welcome back";
             font-size: Typo.title1;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -993,7 +993,7 @@ component RestoreForm inherits VerticalLayout {
         Text {
             text: "Restore your wallet";
             font-size: Typo.title1;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -1481,7 +1481,7 @@ component DashboardScreen inherits VerticalLayout {
                     Text {
                         text: "!";
                         font-size: 15px;
-                        font-weight: Typo.w-semibold;
+                        font-weight: Typo.w-bold;
                         color: Theme.warning;
                     }
                 }
@@ -1731,7 +1731,7 @@ component DashboardScreen inherits VerticalLayout {
                 }
 
                 for tx in WalletState.activity: ListRow {
-                    glyph: tx.direction == "in" ? "↓" : tx.direction == "out" ? "↑" : "⇄";
+                    glyph: tx.direction == "in" ? "↓" : tx.direction == "out" ? "↑" : "↔";
                     glyph-tone: tx.direction == "in" ? Theme.positive
                         : tx.direction == "out" ? Theme.negative
                         : Theme.text-secondary;
@@ -2203,7 +2203,7 @@ component SendScreen inherits VerticalLayout {
                     Text {
                         text: "Check this payment";
                         font-size: Typo.title2;
-                        font-weight: Typo.w-semibold;
+                        font-weight: Typo.w-bold;
                         color: Theme.text-primary;
                     }
                     Text {
@@ -2434,7 +2434,7 @@ component SendScreen inherits VerticalLayout {
                 Text {
                     text: SendState.step == "sent" ? "Payment sent" : "We could not confirm your payment was sent";
                     font-size: Typo.title2;
-                    font-weight: Typo.w-semibold;
+                    font-weight: Typo.w-bold;
                     color: SendState.step == "sent" ? Theme.positive : Theme.warning;
                     wrap: word-wrap;
                 }
@@ -3179,7 +3179,7 @@ component SettingsScreen inherits VerticalLayout {
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: "Inter and IBM Plex Mono · SIL OFL 1.1";
+                    text: "Space Grotesk and JetBrains Mono NL · SIL OFL 1.1";
                     font-size: Typo.caption;
                     color: Theme.text-tertiary;
                 }
@@ -3240,7 +3240,7 @@ component ActivityRowItem inherits VerticalLayout {
     }
 
     ListRow {
-        glyph: root.entry.direction == "in" ? "↓" : root.entry.direction == "out" ? "↑" : "⇄";
+        glyph: root.entry.direction == "in" ? "↓" : root.entry.direction == "out" ? "↑" : "↔";
         glyph-tone: root.entry.direction == "in" ? Theme.positive
             : root.entry.direction == "out" ? Theme.negative
             : Theme.text-secondary;
@@ -3399,13 +3399,19 @@ component FlowStepper inherits HorizontalLayout {
                     border-color: Theme.border-default;
                     Text {
                         // A tick, a dot, an exclamation, or the step's number.
-                        // All four are in Inter — checked, because a glyph the
-                        // shipped font lacks draws nothing at all and this file
-                        // has been caught by that three times.
+                        //
+                        // Mono, because `✓` and `●` are in JetBrains Mono NL and
+                        // in **none** of the three Space Grotesk weights — read
+                        // out of the `cmap` tables, not assumed. Drawn in the UI
+                        // face they fall through to whatever the system has,
+                        // which is the per-platform fork the bundled fonts
+                        // exist to prevent. This file has been caught by a
+                        // missing glyph three times; this is the fourth.
                         text: step.state == "done" ? "✓"
                             : step.state == "now" ? "●"
                             : step.state == "failed" ? "!"
                             : (i + 1);
+                        font-family: Typo.mono;
                         font-size: Typo.micro;
                         font-weight: Typo.w-medium;
                         color: step.state == "later" ? Theme.text-tertiary : Theme.text-on-accent;
@@ -4004,7 +4010,7 @@ component StepHead inherits VerticalLayout {
     Text {
         text: root.title;
         font-size: Typo.title3;
-        font-weight: Typo.w-semibold;
+        font-weight: Typo.w-bold;
         color: Theme.text-primary;
         wrap: word-wrap;
     }
@@ -4674,6 +4680,7 @@ component CurrencyForm inherits VerticalLayout {
                         }
                         Text {
                             text: "▾";
+                            font-family: Typo.mono;
                             font-size: Typo.caption;
                             color: Theme.text-tertiary;
                             vertical-alignment: center;
@@ -5174,7 +5181,7 @@ component LaunchReview inherits Rectangle {
                 Text {
                     text: "Launch this currency";
                     font-size: Typo.title2;
-                    font-weight: Typo.w-semibold;
+                    font-weight: Typo.w-bold;
                     color: Theme.text-primary;
                 }
                 Text {
@@ -5376,7 +5383,7 @@ component ReservePicker inherits Rectangle {
                 Text {
                     text: "Choose a reserve";
                     font-size: Typo.title2;
-                    font-weight: Typo.w-semibold;
+                    font-weight: Typo.w-bold;
                     color: Theme.text-primary;
                 }
                 Text {
@@ -5634,11 +5641,17 @@ component ActionBar inherits Rectangle {
 
 // The glyph is `⊙`, and it was chosen by looking rather than by taste.
 //
-// `◈` reads as the obvious currency mark and **is not in Inter**, which this
-// wallet bundles — so it drew nothing at all, exactly the failure `shell.slint`
-// records twice already for `◍` and `☀`. The bundled files were checked
-// directly: `◈`, `◉`, `⬡`, `♦` and `⧫` are all absent, `⊙` is present in every
-// weight. A glyph is only a glyph if the shipped font has it.
+// Under the previous pair of fonts `◈` — the obvious currency mark — was absent
+// and drew nothing at all, so `⊙` was picked as the nearest thing that existed.
+// With Space Grotesk and JetBrains Mono NL the coverage is different: `◈`, `◉`
+// and `⊙` are all present in the mono face and **none of them** is in any Space
+// Grotesk weight, so the family matters more than the character now. `⬡`, `♦`
+// and `⧫` are still in neither.
+//
+// `⊙` is kept rather than swapped back to `◈`, because `◈` is what the design
+// reserves for shielded items and giving it a second meaning here would spend
+// it. A glyph is only a glyph if the shipped font has it, and only useful if it
+// means one thing.
 component CurrenciesScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -6387,7 +6400,7 @@ component IdentityChangeReview inherits Rectangle {
                 Text {
                     text: "Check this change";
                     font-size: Typo.title2;
-                    font-weight: Typo.w-semibold;
+                    font-weight: Typo.w-bold;
                     color: Theme.text-primary;
                 }
                 // Which identity. The sheet behind this one names it, and the
@@ -6531,7 +6544,7 @@ component IdentitySheet inherits Rectangle {
                         Text {
                             text: IdentityState.name;
                             font-size: Typo.title2;
-                            font-weight: Typo.w-semibold;
+                            font-weight: Typo.w-bold;
                             color: Theme.text-primary;
                             wrap: word-wrap;
                         }
@@ -6906,7 +6919,7 @@ component TxSheet inherits Rectangle {
                                 : TxState.direction == "out" ? "Sent"
                                 : "Moved between your own addresses";
                             font-size: Typo.title2;
-                            font-weight: Typo.w-semibold;
+                            font-weight: Typo.w-bold;
                             color: Theme.text-primary;
                         }
                         Text {
@@ -7321,7 +7334,7 @@ component ComingSoon inherits VerticalLayout {
     in property <string> body;
     alignment: center;
     EmptyState {
-        glyph: "◷";
+        glyph: "◔";
         title: root.title;
         body: root.body;
     }
@@ -7353,6 +7366,7 @@ component Onboarding inherits Rectangle {
             alignment: center;
             Text {
                 text: "◆";
+                font-family: Typo.mono;
                 font-size: 34px;
                 color: Theme.accent;
             }
@@ -7473,7 +7487,7 @@ component BackupPassphrase inherits VerticalLayout {
         Text {
             text: "Show your recovery phrase";
             font-size: Typo.title1;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -7557,7 +7571,7 @@ component BackupPhrase inherits VerticalLayout {
         Text {
             text: "Write down your recovery phrase";
             font-size: Typo.title1;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -7679,7 +7693,7 @@ component BackupVerify inherits VerticalLayout {
         Text {
             text: "Check your copy";
             font-size: Typo.title1;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -7828,7 +7842,7 @@ export component AlreadyRunning inherits Window {
         Text {
             text: "Pecu is already open";
             font-size: Typo.title2;
-            font-weight: Typo.w-semibold;
+            font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
@@ -7857,10 +7871,15 @@ export component AppWindow inherits Window {
     // bundled face rather than whatever the platform happens to have.
     default-font-family: Typo.ui;
     default-font-size: Typo.body;
-    min-width: 880px;
-    min-height: 620px;
-    preferred-width: 1180px;
-    preferred-height: 760px;
+    // The design names 960×600 as the floor and 1060×640 as its reference. The
+    // floor is taken as given; the default is larger, because the reference was
+    // drawn with a phone's type scale in it and this interface uses a desktop
+    // one — see `Typo`. Below the floor the layout is meant to fall back to the
+    // two-column arrangement, which is not built yet.
+    min-width: 960px;
+    min-height: 600px;
+    preferred-width: 1240px;
+    preferred-height: 800px;
 
     in-out property <string> screen: "dashboard";
 

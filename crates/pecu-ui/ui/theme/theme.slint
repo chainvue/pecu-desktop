@@ -3,24 +3,56 @@
 //
 // `import "…ttf"` compiles the file into the binary and registers the family
 // globally, so there is nothing to install and nothing to be missing. That is
-// the whole point: the previous arrangement named "Menlo", which ships with
-// macOS and exists nowhere else, so the design quietly forked per platform and
-// nobody on this machine could ever see it happen.
+// the whole point: naming a face that ships with one operating system and
+// nowhere else forks the design per platform, and the fork is invisible from
+// the machine the design was drawn on.
 //
 // Both are SIL OFL 1.1 and redistributable. The licences sit beside them in
 // `ui/fonts/` — the OFL requires them to travel with the fonts, and a licence
 // somebody has to go and find is one that will not be there in the next copy.
-import "../fonts/Inter-Regular.ttf";
-import "../fonts/Inter-Medium.ttf";
-import "../fonts/Inter-SemiBold.ttf";
-import "../fonts/IBMPlexMono-Regular.ttf";
-import "../fonts/IBMPlexMono-Medium.ttf";
+//
+// # Why the monospace is the "NL" cut
+//
+// JetBrains Mono ships two cuts. The default one carries the code ligatures the
+// typeface is known for, in a `calt` feature with a 25 KB `GSUB` table — and
+// `calt` is on by default in the shaper, so they are not opt-in. `JetBrainsMono
+// NL` has **no `GSUB` table at all**; that was measured, not assumed.
+//
+// This interface prints node URLs, addresses, transaction ids and amounts in
+// mono, and asks people to check them character by character. `://` and `//`
+// are among the sequences the default cut contextually merges into a single
+// glyph. A wallet that draws two characters as one, in the field somebody is
+// verifying, has made the one mistake this typeface choice existed to avoid.
+//
+// Nothing else changes: the ligatures only fire on symbol runs, so digits,
+// base58 and hex are the same drawing in both cuts.
+import "../fonts/JetBrainsMonoNL-Regular.ttf";
+import "../fonts/JetBrainsMonoNL-Medium.ttf";
+import "../fonts/JetBrainsMonoNL-Bold.ttf";
+import "../fonts/SpaceGrotesk-Regular.ttf";
+import "../fonts/SpaceGrotesk-Medium.ttf";
+import "../fonts/SpaceGrotesk-Bold.ttf";
 
 // Design tokens. No call site anywhere else writes a raw hex value or a pixel
-// constant — if you find yourself typing `#1A1D22` in a screen, add a token.
+// constant — if you find yourself typing `#14181D` in a screen, add a token.
 //
 // Named `Theme`, not `Palette`: `Palette` is already exported by
 // `std-widgets.slint` and the two collide.
+//
+// # Where these come from, and where they depart
+//
+// The values are `docs/design/pecu-tokens.json`. The dark set is taken as
+// delivered — it was measured and every role clears WCAG AA. The light set is
+// not: four of its colours fall under 4.5:1, and the worst of them is the label
+// on the primary button. Each of those four is darkened along its own hue until
+// it clears, and no further, so it is the same colour rather than a new one.
+// The measurements are written beside the values; `docs/design/REVIEW.md` has
+// the originals.
+//
+// Every ratio below was computed against the **worst** surface the colour
+// actually sits on, which is not the same one in both themes: in dark that is
+// the raised surface (lighter than the base), in light it is the base (darker
+// than the surface).
 
 export global Theme {
     // The only switch. Everything below derives from it, so a theme change is
@@ -28,88 +60,107 @@ export global Theme {
     in-out property <bool> dark: true;
 
     // ── Surfaces ────────────────────────────────────────────────────────
-    // A three-step ladder, not a flat plane. `#0B0C0E` rather than pure black:
-    // black kills the perception of soft radii and makes shadows invisible, so
-    // a "premium dark" UI painted on #000 reads as cheap.
-    out property <brush> bg-base:    dark ? #0B0C0E : #FBFBFC;
-    out property <brush> bg-sunken:  dark ? #08090A : #F4F5F7;
-    out property <brush> bg-surface: dark ? #121316 : #FFFFFF;
-    out property <brush> bg-raised:  dark ? #17191D : #FFFFFF;
-    out property <brush> bg-hover:   dark ? #1B1E22 : #F4F5F7;
-    out property <brush> bg-active:  dark ? #212429 : #EDEEF1;
-    out property <brush> bg-inset:   dark ? #0E0F12 : #F7F8F9;
+    // Ink, and a short ladder above it. The rail sits on the base rather than
+    // below it — in this design it is separated by a hairline, not by a
+    // different plane.
+    out property <brush> bg-base:    dark ? #0B0D10 : #F4F6F8;
+    out property <brush> bg-sunken:  dark ? #0B0D10 : #EEF1F4;
+    out property <brush> bg-surface: dark ? #14181D : #FFFFFF;
+    out property <brush> bg-raised:  dark ? #191E24 : #FFFFFF;
+    out property <brush> bg-hover:   dark ? #1C222A : #EEF1F4;
+    out property <brush> bg-active:  dark ? #232A32 : #E4E8EF;
+    out property <brush> bg-inset:   dark ? #0F1216 : #EEF1F4;
 
-    // Dark leans on hairlines, light leans on shadow. Using both in both
-    // themes is what makes a UI look muddy.
-    out property <brush> border-subtle:  dark ? #1F2227 : #EBECEF;
-    out property <brush> border-default: dark ? #2A2E35 : #DDDFE4;
-    out property <brush> border-strong:  dark ? #3A3F48 : #C3C7CE;
-    out property <bool>  card-shadow: !dark;
+    out property <brush> border-subtle:  dark ? #1A1F26 : #EDF0F4;
+    out property <brush> border-default: dark ? #232A32 : #E4E8EF;
+    out property <brush> border-strong:  dark ? #333C47 : #CDD4DE;
+
+    // The design is explicit: "no shadows inside app UI; separation via surface
+    // color + hairline borders only". The previous theme used shadow in light
+    // and hairlines in dark; this one uses hairlines in both, so `card-shadow`
+    // is false rather than `!dark`. Kept as a property because the overlay
+    // scrim still asks the question.
+    out property <bool> card-shadow: false;
 
     // ── Text ────────────────────────────────────────────────────────────
-    // Never pure white on dark — #F2F3F5 is the ceiling. `tertiary` is the
-    // contrast floor; nothing dimmer than it carries text.
     //
-    // # The floor is measured now, not asserted
+    // `primary` is pure white on dark, which the previous theme deliberately
+    // avoided. That was a defensible call and this is the design's, taken
+    // knowingly: it measures 19.46:1 and the wordmark it sits beside is drawn
+    // in the same white.
     //
-    // This comment used to claim "roughly 4.6:1" for `tertiary`. It was not
-    // true in either theme, and it was materially worse in light: the old
-    // `#878D97` on `#FBFBFC` measures **3.27:1**, well under the 4.5:1 that
-    // WCAG AA asks of normal text — and `tertiary` is not a rare colour here.
-    // It carries the address under every list row, the whole status bar, and
-    // most captions.
+    // `secondary` is the design's `textSub`, unchanged in both themes.
+    // `tertiary` is the contrast floor — the dimmest thing that still carries
+    // text, and it carries the address under every list row and most of the
+    // status bar, so it is measured against the surface it is worst on:
     //
-    // Recomputed against each theme's own base, both now just over 4.6:1:
+    //   dark   #7A838F on #14181D → 4.64:1   (on the base it is 5.07:1)
+    //   light  #66707E on #F4F6F8 → 4.63:1   (on a card it is 5.02:1)
     //
-    //   dark   #757B86 on #0B0C0E → 4.60:1
-    //   light  #6E747E on #FBFBFC → 4.63:1
+    //   dark   #8B95A3 on #14181D → 5.88:1
+    //   light  #5B6470 on #F4F6F8 → 5.54:1
     //
     // `disabled` is deliberately below the floor and stays there — it is the
     // one role WCAG exempts, and raising it would make an inert control look
     // live.
-    out property <brush> text-primary:   dark ? #F2F3F5 : #101114;
-    out property <brush> text-secondary: dark ? #A0A5AE : #5C626C;
-    out property <brush> text-tertiary:  dark ? #757B86 : #6E747E;
-    out property <brush> text-disabled:  dark ? #4A4F58 : #AEB3BB;
-    out property <brush> text-on-accent: #FFFFFF;
+    out property <brush> text-primary:   dark ? #FFFFFF : #0B0D10;
+    out property <brush> text-secondary: dark ? #8B95A3 : #5B6470;
+    out property <brush> text-tertiary:  dark ? #7A838F : #66707E;
+    out property <brush> text-disabled:  dark ? #4A525E : #A9AFB8;
+
+    // What sits ON the accent, and it is not white in both themes. Neon mint
+    // is bright enough that white on it measures 1.6:1; the design puts deep
+    // ink there instead, at 8.28:1.
+    out property <brush> text-on-accent: dark ? #062A24 : #FFFFFF;
 
     // ── Accent ──────────────────────────────────────────────────────────
-    // One accent, used sparingly. Tuned per theme: the same blue that reads
-    // well on near-black is too pale on white.
-    out property <brush> accent:        dark ? #4D7CFE : #2D62E8;
-    out property <brush> accent-hover:  dark ? #6A92FF : #1F51D4;
-    out property <brush> accent-active: dark ? #3C68E0 : #1A46B8;
-    out property <brush> accent-soft:   dark ? #4D7CFE1F : #2D62E814;
-    out property <brush> accent-ring:   dark ? #4D7CFE73 : #2D62E866;
+    //
+    // Neon mint on dark, taken as delivered at 10.47:1 on the base and 9.59:1
+    // on a card.
+    //
+    // The light accent is the one value in this file that had to satisfy two
+    // requirements at once, and the design's #0FA38A satisfied neither: it is
+    // the fill under a white button label **and** the colour of accent text on
+    // a light background. Darkened along its own hue (170°, 91% saturation)
+    // until both clear:
+    //
+    //   #0C7E6B on #F4F6F8 → 4.60:1     white on #0C7E6B → 4.99:1
+    //   (#0FA38A was 2.93:1 and 3.17:1)
+    out property <brush> accent:        dark ? #12D6B4 : #0C7E6B;
+    out property <brush> accent-hover:  dark ? #3AE0C4 : #0A6E5D;
+    out property <brush> accent-active: dark ? #0FBCA0 : #085B4D;
+    out property <brush> accent-soft:   dark ? #12D6B41F : #0C7E6B14;
+    out property <brush> accent-ring:   dark ? #12D6B473 : #0C7E6B66;
 
     // ── Semantic ────────────────────────────────────────────────────────
-    // Deliberately desaturated. #35C083 reads as information; #00FF88 reads as
-    // a trading terminal, which is the thing this wallet is not.
     //
-    // The dark set measures 6:1 to 9:1 and was always fine. The light set was
-    // tuned by eye against a dark-first design and all three fell short of
-    // 4.5:1 on white — warning worst at 3.7:1, which is the colour the maturing
-    // balance is printed in. Darkened until each clears it:
+    // `positive` is the accent, and that is the design's call rather than an
+    // oversight: a gain and the primary action are the same mint. The dark set
+    // is delivered and clears comfortably (negative 6.54:1, warning 11.68:1).
     //
-    //   positive #0F7B50 → 5.17:1   negative #C9333F → 5.09:1
-    //   warning  #9F6413 → 4.77:1
+    // Light was tuned by eye against a dark-first design and both fell short.
+    // Each darkened along its own hue to the first value that clears, and no
+    // further, so the coral is still coral and the amber is still amber:
+    //
+    //   negative #E5484D → #C73E43   3.61:1 → 4.62:1
+    //   warning  #B98900 → #8E6900   2.92:1 → 4.65:1
     //
     // The `-soft` fills are backgrounds, not text, and keep their hue.
-    out property <brush> positive:      dark ? #35C083 : #0F7B50;
-    out property <brush> positive-soft: dark ? #35C0831F : #0F7B5014;
-    out property <brush> negative:      dark ? #F0616D : #C9333F;
-    out property <brush> negative-soft: dark ? #F0616D1F : #C9333F14;
-    out property <brush> warning:       dark ? #E5A544 : #9F6413;
-    out property <brush> warning-soft:  dark ? #E5A5441F : #9F641314;
+    out property <brush> positive:      dark ? #12D6B4 : #0C7E6B;
+    out property <brush> positive-soft: dark ? #12D6B41F : #0C7E6B14;
+    out property <brush> negative:      dark ? #FF5C7A : #C73E43;
+    out property <brush> negative-soft: dark ? #FF5C7A1F : #C73E4314;
+    out property <brush> warning:       dark ? #FDBE3B : #8E6900;
+    out property <brush> warning-soft:  dark ? #FDBE3B1F : #8E690014;
 
     // ── The chart ───────────────────────────────────────────────────────
     // A `color`, not a `brush`, and that is load-bearing: `.with-alpha()` is a
     // method on `color`, and the area under the line is the accent faded to
     // nothing. A `brush` here would compile and then fail at the gradient.
-    out property <color> chart-line: dark ? #4D7CFE : #2D62E8;
+    out property <color> chart-line: dark ? #12D6B4 : #0C7E6B;
     // The line has to stay readable against the fill directly beneath it, so
     // the fill never gets close to the stroke's own weight.
-    out property <color> chart-grid: dark ? #FFFFFF : #101114;
+    out property <color> chart-grid: dark ? #FFFFFF : #0B0D10;
 }
 
 // 4px grid. If a value is not on it, it is a mistake or it needs a name.
@@ -127,27 +178,37 @@ export global Sp {
     out property <length> s11: 64px;
 
     out property <length> card-pad:    20px;
-    out property <length> screen-pad:  32px;
-    out property <length> section-gap: 32px;
+    out property <length> screen-pad:  24px;
+    out property <length> section-gap: 28px;
     // Caps line length on a wide display. Cards that stretch to 2000px are
     // what make an app read as a "dashboard" rather than a product.
     out property <length> content-max: 1160px;
 }
 
+// The design's radius ladder. Kept under size names rather than role names
+// (`button`, `input`, `card`, `sheet`) because the roles do not partition the
+// 45 places these are used, and renaming would have meant judging each one —
+// a large, silent opportunity to put the wrong corner on something. The values
+// are the design's:
+//
+//   sm  9px   buttons
+//   md  10px  inputs
+//   lg  12px  cards
+//   xl  16px  sheets and modals
+//
+// `xs` and `xxl` are gone. Nothing used them, and the design has no step there.
 export global R {
-    out property <length> xs:  4px;
-    out property <length> sm:  6px;
-    out property <length> md:  10px;
-    out property <length> lg:  14px;
-    out property <length> xl:  20px;
-    out property <length> xxl: 28px;
+    out property <length> sm:   9px;
+    out property <length> md:   10px;
+    out property <length> lg:   12px;
+    out property <length> xl:   16px;
     out property <length> full: 999px;
 }
 
 export global Typo {
     // The UI face. Bundled, so the interface is the same drawing on every
     // platform rather than SF Pro here and something else there.
-    out property <string> ui: "Inter";
+    out property <string> ui: "Space Grotesk";
 
     // Money, addresses, txids and block heights are set in a MONOSPACE family,
     // and that is not decoration. Slint exposes no OpenType feature control, so
@@ -155,17 +216,25 @@ export global Typo {
     // proportional digits the balance jitters as it changes and amounts do not
     // line up in a column. A mono family solves both structurally.
     //
-    // This said "Menlo" until the fonts were bundled. Menlo ships with macOS
-    // and exists nowhere else, so every amount in this wallet rendered in some
-    // other face on Linux and Windows — a difference invisible from here, which
-    // is exactly the kind that survives to a release.
-    out property <string> mono: "IBM Plex Mono";
+    // "NL" is the no-ligature cut. See the note above the font imports: it is a
+    // correctness choice about addresses, not a stylistic one.
+    out property <string> mono: "JetBrains Mono NL";
 
-    out property <length> hero:    44px;   // dashboard balance
-    out property <length> title1:  28px;
-    out property <length> title2:  22px;
-    out property <length> title3:  17px;
-    out property <length> body-lg: 16px;
+    // # Why these are not the design's numbers
+    //
+    // `pecu-tokens.json` asks for body 12.5, labels 10 and section headers 9,
+    // against a 1060×640 reference. That is a phone scale that was placed in a
+    // desktop window: at 9px on a display without HiDPI — which is most Windows
+    // and Linux machines — a label is guessed at rather than read.
+    //
+    // The proportions are the design's; the absolute sizes are moved up one
+    // step and the window moved with them. Premium on a desktop comes from
+    // whitespace and stillness, not from small type.
+    out property <length> hero:    40px;   // dashboard balance
+    out property <length> title1:  24px;
+    out property <length> title2:  19px;
+    out property <length> title3:  16px;
+    out property <length> body-lg: 15px;
     out property <length> body:    14px;
     out property <length> caption: 12px;
     out property <length> micro:   11px;
@@ -174,9 +243,16 @@ export global Typo {
     out property <length> num:    14px;
     out property <length> num-sm: 12px;
 
-    out property <int> w-regular:  400;
-    out property <int> w-medium:   500;
-    out property <int> w-semibold: 600;
+    // Section headers are mono, uppercase and tracked out. 0.08em of 11px is
+    // where this number comes from.
+    out property <length> tracking-wide: 0.88px;
+
+    // 400 / 500 / 700, and there is no 600 — the design asks for 700 and the
+    // bundled Space Grotesk has no SemiBold cut, so a request for 600 would be
+    // silently rounded to one of its neighbours by the font matcher.
+    out property <int> w-regular: 400;
+    out property <int> w-medium:  500;
+    out property <int> w-bold:    700;
 }
 
 // How the person in front of the window is driving it.
@@ -202,10 +278,11 @@ export global Motion {
     // the whole mechanism: one line per animation, no duplicate code paths.
     in-out property <bool> enabled: true;
 
+    // The design's four durations and two curves.
     out property <duration> instant: 80ms;    // press
-    out property <duration> fast:    140ms;   // hover, focus ring
+    out property <duration> fast:    150ms;   // hover, focus ring
     out property <duration> base:    220ms;   // state change
     out property <duration> slow:    320ms;   // sheets, modals
-    out property <duration> count:   900ms;   // balance count-up
-    out property <duration> draw:    1100ms;  // chart draw-in
+    out property <duration> count:   400ms;   // balance count-up
+    out property <duration> draw:    600ms;   // chart draw-in
 }

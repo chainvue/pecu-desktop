@@ -37,8 +37,8 @@ use crate::AppWindow;
 /// Fixed so a reference image stays comparable. Wide enough that the nav rail
 /// is expanded — the collapsed state is a separate case worth its own snapshot
 /// once it matters.
-pub const WIDTH: u32 = 1280;
-pub const HEIGHT: u32 = 820;
+pub const WIDTH: u32 = 1240;
+pub const HEIGHT: u32 = 800;
 
 /// One rendered frame: `WIDTH * HEIGHT * 3` bytes, RGB, row-major.
 pub struct Frame {

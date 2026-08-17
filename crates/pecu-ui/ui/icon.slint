@@ -11,12 +11,17 @@
 //
 // # The mark
 //
-// A ring with a centre: `⊙`, the glyph this wallet already uses for a currency.
-// It was chosen there by checking that the bundled font actually has it — `◈`,
-// `◉`, `⬡`, `♦` and `⧫` are all absent from Inter and drew nothing at all — and
-// reusing it means the icon in the dock and the mark beside a currency are the
-// same shape. Drawn as rectangles rather than as text, because a glyph
-// rasterised at 1024px is at the mercy of the font's hinting.
+// A ring with a centre: `⊙`, the glyph this wallet already uses for a currency,
+// so the icon in the dock and the mark beside a currency are the same shape.
+// Drawn as rectangles rather than as text, because a glyph rasterised at 1024px
+// is at the mercy of the font's hinting — which is also why the font swap under
+// it changed nothing here.
+//
+// This is still the old mark. The Pecu icon is `@` with a cursor, and replacing
+// it is its own commit: it needs the outlined path (the delivered `master.svg`
+// draws the `@` as a `<text>` element and so renders the wrong glyph on any
+// machine without JetBrains Mono) and a macOS shape that is not a hard square.
+// See `docs/design/REVIEW.md`.
 //
 // # The geometry is Apple's, not a guess
 //
