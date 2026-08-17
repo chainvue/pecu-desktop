@@ -82,6 +82,21 @@ pub fn render(
     seed: impl FnOnce(&AppWindow),
 ) -> Result<Frame, Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
+
+    // A reference image is in English, whatever machine renders it.
+    //
+    // Slint selects a bundled translation from the **system locale** when the
+    // first component is built, and there is a `de` catalogue in the tree. On a
+    // German machine — this one — every reference frame would otherwise come
+    // out with a German navigation and an English everything else, and would
+    // then differ from the same frame rendered anywhere else. An image that
+    // depends on who rendered it is not a reference.
+    //
+    // After `AppWindow::new()`, because the bundle attaches to the context the
+    // first component creates. Ignored rather than propagated: a build with no
+    // catalogues at all is already English and has nothing to select.
+    let _ = slint::select_bundled_translation("en");
+
     // The chart's callbacks compute its geometry from the element's own size,
     // so they have to be wired before the window is laid out — and installing
     // resets the chart, which is what keeps one case's readings from turning up

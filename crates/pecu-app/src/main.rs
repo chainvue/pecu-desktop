@@ -146,6 +146,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // delivery loop. The scope focuses itself on `init`, but that runs when the
     // component is built and the backend sets focus up when the window is
     // shown, which is later.
+    // English, on purpose, and not because it is the default.
+    //
+    // Slint picks a bundled translation from the **system locale** when the
+    // first component is built. There is a `de` catalogue in the tree — eight
+    // navigation labels, a fixture that exists so `tests/translation.rs` can
+    // prove the machinery works — so without this line a wallet started on a
+    // German system comes up with a German rail and an English everything else.
+    //
+    // The language is going to be a setting. Until it is one, and until there
+    // is a catalogue somebody has actually translated, the honest behaviour is
+    // one language rather than a random half of two. `select_bundled_translation`
+    // has to run after the first component exists, which is why it is here and
+    // not at the top of `main`.
+    if let Err(error) = slint::select_bundled_translation("en") {
+        tracing::warn!(?error, "could not pin the interface language to English");
+    }
+
     ui.show()?;
     ui.invoke_focus_shortcuts();
 

@@ -7907,15 +7907,30 @@ export component AppWindow inherits Window {
     // A real icon set (Path commands) replaces these later; until then the rule
     // is: nothing here that has ever rendered as a box.
     property <[NavItem]> nav: [
-        { id: "dashboard", label: "Dashboard", icon: "wallet",     enabled: true, badge: "" },
-        { id: "send",      label: "Send",      icon: "send",       enabled: true, badge: "" },
-        { id: "receive",   label: "Receive",   icon: "receive",    enabled: true, badge: "" },
-        { id: "activity",  label: "Activity",  icon: "history",    enabled: true, badge: "" },
-        { id: "nodes",     label: "Network",   icon: "network",    enabled: true, badge: "" },
-        { id: "identities",label: "Identities",icon: "profile",    enabled: true, badge: "" },
-        { id: "currencies",label: "Currencies",icon: "currency",   enabled: true, badge: "" },
-        { id: "settings",  label: "Settings",  icon: "settings",   enabled: true, badge: "" },
+        // `id` and `icon` are names the code matches on and must never be
+        // translated. `label` is the only thing here a person reads.
+        { id: "dashboard", label: @tr("Dashboard"),  icon: "wallet",   enabled: true, badge: "" },
+        { id: "send",      label: @tr("Send"),       icon: "send",     enabled: true, badge: "" },
+        { id: "receive",   label: @tr("Receive"),    icon: "receive",  enabled: true, badge: "" },
+        { id: "activity",  label: @tr("Activity"),   icon: "history",  enabled: true, badge: "" },
+        { id: "nodes",     label: @tr("Network"),    icon: "network",  enabled: true, badge: "" },
+        { id: "identities",label: @tr("Identities"), icon: "profile",  enabled: true, badge: "" },
+        { id: "currencies",label: @tr("Currencies"), icon: "currency", enabled: true, badge: "" },
+        { id: "settings",  label: @tr("Settings"),   icon: "settings", enabled: true, badge: "" },
     ];
+
+    // Which entry of `nav` the current screen is, or -1 for a screen that has
+    // no rail entry of its own. Only ids appear here; see `TitleBar`'s `title`.
+    property <int> nav-index:
+          root.screen == "dashboard"  ? 0
+        : root.screen == "send"       ? 1
+        : root.screen == "receive"    ? 2
+        : root.screen == "activity"   ? 3
+        : root.screen == "nodes"      ? 4
+        : root.screen == "identities" ? 5
+        : root.screen == "currencies" ? 6
+        : root.screen == "settings"   ? 7
+        : -1;
 
     // Before anything else: if there is no wallet, or it is locked, that is the
     // only thing on screen. A dashboard behind a lock screen is a dashboard
@@ -8136,14 +8151,18 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 TitleBar {
-                    title: root.screen == "dashboard" ? "Dashboard"
-                        : root.screen == "nodes" ? "Network"
-                        : root.screen == "receive" ? "Receive"
-                        : root.screen == "send" ? "Send"
-                        : root.screen == "settings" ? "Settings"
-                        : root.screen == "activity" ? "Activity"
-                        : root.screen == "identities" ? "Identities"
-                        : root.screen == "currencies" ? "Currencies"
+                    // Read out of `nav` rather than repeated.
+                    //
+                    // This was its own eight-way chain of the same eight words,
+                    // which is two places to write every screen name and two
+                    // places for them to drift. Translating the rail and not
+                    // this is exactly how it was found: the navigation went
+                    // German and the title bar stayed English.
+                    //
+                    // Slint has no way to search an array in an expression, so
+                    // the *ids* are still listed here — but an id is matched by
+                    // code and never translated, and the words now exist once.
+                    title: root.nav-index >= 0 ? root.nav[root.nav-index].label
                         : root.screen;
                     network: NetworkState.effective;
                     node-state: NetworkState.node-state;

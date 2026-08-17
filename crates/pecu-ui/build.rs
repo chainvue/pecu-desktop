@@ -19,10 +19,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // One compile root. Everything else is imported from it, so there is a
     // single place where the component tree starts.
-    slint_build::compile_with_config(
-        "ui/app.slint",
-        slint_build::CompilerConfiguration::new().with_debug_info(debug),
-    )?;
+    //
+    // # Translations are bundled, not loaded
+    //
+    // `with_bundled_translations` compiles every `translations/<lang>/
+    // LC_MESSAGES/pecu-ui.po` **into the binary**, and
+    // `slint::select_bundled_translation` switches between them at runtime.
+    //
+    // The alternative is Slint's `gettext` feature, which resolves against the
+    // system catalogue at runtime through `gettext-rs` — a C dependency, which
+    // on Windows is a build problem rather than a line in a manifest. It would
+    // also mean a wallet that reads its own interface text out of files beside
+    // the executable, and there is no reason to give an installer that surface.
+    //
+    // The cost is that adding a language is a rebuild. For an application that
+    // ships as a signed bundle, it was going to be one anyway.
+    let config = slint_build::CompilerConfiguration::new()
+        .with_debug_info(debug)
+        .with_bundled_translations("translations")
+        // Slint defaults the gettext context to the enclosing component's name,
+        // which means every `msgctxt` in every `.po` has to track the name of
+        // the component the string happens to sit in — so moving a `Text` from
+        // one component to another silently drops its translation. Off, and the
+        // extractor is invoked with `--no-default-translation-context` to
+        // match. See `translations/README.md`.
+        .with_default_translation_context(slint_build::DefaultTranslationContext::None);
+
+    slint_build::compile_with_config("ui/app.slint", config)?;
     println!("cargo:rerun-if-changed=ui");
+    println!("cargo:rerun-if-changed=translations");
     Ok(())
 }

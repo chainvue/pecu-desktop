@@ -1,0 +1,38 @@
+# German translation for Pecu.
+#
+# Partial and deliberately so: this file exists to prove the bundling works
+# end-to-end, and it is checked by `tests/translation.rs`. The rest of the
+# interface is still English at runtime, which is what an untranslated msgid
+# does — falls back to itself rather than to a blank.
+msgid ""
+msgstr ""
+"Project-Id-Version: pecu-ui\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Dashboard"
+msgstr "Übersicht"
+
+msgid "Send"
+msgstr "Senden"
+
+msgid "Receive"
+msgstr "Empfangen"
+
+msgid "Activity"
+msgstr "Aktivität"
+
+msgid "Network"
+msgstr "Netzwerk"
+
+msgid "Identities"
+msgstr "Identitäten"
+
+msgid "Currencies"
+msgstr "Währungen"
+
+msgid "Settings"
+msgstr "Einstellungen"
