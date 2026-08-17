@@ -12,7 +12,7 @@ allow-panic-in-tests = true
 # `tokio::spawn` is a task nothing owns and nothing can stop — which is how a
 # closed Send screen keeps fetching fee estimates forever.
 #
-# `chainvue-core/src/runtime.rs` is the one file that legitimately calls these,
+# `pecu-core/src/runtime.rs` is the one file that legitimately calls these,
 # and carries a module-level allow. One file, reviewable.
 disallowed-methods = [
     { path = "tokio::spawn", reason = "use TaskRegistry::spawn — an untracked task outlives its screen" },

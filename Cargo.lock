@@ -862,123 +862,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chainvue-app"
-version = "0.1.0"
-dependencies = [
- "chainvue-chain",
- "chainvue-core",
- "chainvue-protocol",
- "chainvue-ui",
- "slint",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "chainvue-chain"
-version = "0.1.0"
-dependencies = [
- "chainvue-mock",
- "chainvue-protocol",
- "serde_json",
- "thiserror 2.0.20",
- "tracing",
- "verus-sdk",
-]
-
-[[package]]
-name = "chainvue-chart"
-version = "0.1.0"
-
-[[package]]
-name = "chainvue-core"
-version = "0.1.0"
-dependencies = [
- "chainvue-chain",
- "chainvue-chart",
- "chainvue-keystore",
- "chainvue-mock",
- "chainvue-protocol",
- "chainvue-store",
- "chrono",
- "hex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "verus-flows",
- "verus-sdk",
- "zeroize",
-]
-
-[[package]]
-name = "chainvue-keystore"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "chacha20poly1305",
- "chainvue-protocol",
- "getrandom 0.3.4",
- "hex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "verus-sdk",
- "zeroize",
-]
-
-[[package]]
-name = "chainvue-mock"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "verus-rpc",
- "verus-sdk",
-]
-
-[[package]]
-name = "chainvue-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.20",
- "zeroize",
-]
-
-[[package]]
-name = "chainvue-store"
-version = "0.1.0"
-dependencies = [
- "chainvue-protocol",
- "rusqlite",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
-name = "chainvue-ui"
-version = "0.1.0"
-dependencies = [
- "chainvue-chart",
- "chainvue-protocol",
- "chrono",
- "i-slint-backend-testing",
- "image",
- "qrcode",
- "slint",
- "slint-build",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3955,6 +3838,123 @@ checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
 dependencies = [
  "digest",
  "hmac",
+]
+
+[[package]]
+name = "pecu-app"
+version = "0.1.0"
+dependencies = [
+ "pecu-chain",
+ "pecu-core",
+ "pecu-protocol",
+ "pecu-ui",
+ "slint",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pecu-chain"
+version = "0.1.0"
+dependencies = [
+ "pecu-mock",
+ "pecu-protocol",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tracing",
+ "verus-sdk",
+]
+
+[[package]]
+name = "pecu-chart"
+version = "0.1.0"
+
+[[package]]
+name = "pecu-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "pecu-chain",
+ "pecu-chart",
+ "pecu-keystore",
+ "pecu-mock",
+ "pecu-protocol",
+ "pecu-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "verus-flows",
+ "verus-sdk",
+ "zeroize",
+]
+
+[[package]]
+name = "pecu-keystore"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "getrandom 0.3.4",
+ "hex",
+ "pecu-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "verus-sdk",
+ "zeroize",
+]
+
+[[package]]
+name = "pecu-mock"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "verus-rpc",
+ "verus-sdk",
+]
+
+[[package]]
+name = "pecu-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "pecu-store"
+version = "0.1.0"
+dependencies = [
+ "pecu-protocol",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "pecu-ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "i-slint-backend-testing",
+ "image",
+ "pecu-chart",
+ "pecu-protocol",
+ "qrcode",
+ "slint",
+ "slint-build",
 ]
 
 [[package]]

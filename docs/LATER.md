@@ -51,7 +51,7 @@ Three things it does **not** do:
    both chains, so a wallet on VRSC still lists `api.verustest.net` and marks
    it `WrongNetwork` once it answers. Correct, and untidy. Making
    `BUILTIN_NODES` a function of the network means moving the table out of
-   `chainvue-app` — it is chain knowledge, not shell knowledge — and deciding
+   `pecu-app` — it is chain knowledge, not shell knowledge — and deciding
    what the demo build's one scripted entry does with it.
 2. **Theme, reduce-motion and the auto-lock timer are per chain.** They are
    application preferences living in a per-chain database because that is the
@@ -168,7 +168,7 @@ overwrite-then-clear, no copy button, the verify step returning one bool.
 **Status:** the mechanical half is done and enforced; the half that needs ears
 is not.
 
-`crates/chainvue-ui/tests/accessibility.rs` walks the live element tree on seven
+`crates/pecu-ui/tests/accessibility.rs` walks the live element tree on seven
 seeded screens and fails if any control a screen reader can reach has no name,
 if any text input is left unnamed, or if the receive address is not exposed in
 speakable groups. That is the failure mode that actually ships — a button
@@ -327,10 +327,10 @@ The last row is the one with a real use today, and it is also the smallest.
 **Status:** the bundle is built and runs. Signing and notarisation are not done,
 and cannot be done from here.
 
-`scripts/bundle.sh` produces `target/ChainVue.app` — icon, `Info.plist`, the
+`scripts/bundle.sh` produces `target/Pecu.app` — icon, `Info.plist`, the
 release binary — out of macOS built-ins only (`sips`, `iconutil`, `plutil`,
 `codesign`). The icon is rendered from `ui/icon.slint` by
-`cargo run -p chainvue-ui --example render_icon`, so it follows the palette
+`cargo run -p pecu-ui --example render_icon`, so it follows the palette
 rather than being a bitmap nothing keeps in step.
 
 **Measured**, on this machine (M-series, `--release`, `lto = "thin"`,

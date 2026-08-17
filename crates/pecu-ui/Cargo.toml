@@ -1,0 +1,92 @@
+[package]
+name = "pecu-ui"
+description = "The Slint interface. Holds no keys, and cannot name the types that carry them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Deliberately NOT `workspace = true`, and this is the only crate that departs.
+#
+# The workspace sets `unsafe_code = "forbid"`. Slint's generated component tree
+# contains `unsafe` (the vtable statics) and carries its own
+# `#[allow(unsafe_code)]` — but `forbid` cannot be overridden by an inner
+# `allow`, so the generated file fails to compile with E0453.
+#
+# So this crate uses `deny` instead: hand-written `unsafe` here is still a hard
+# error, and the only thing that gets through is code `slint-build` generated.
+# Every crate that actually touches key material — keystore, chain, core,
+# protocol — keeps `forbid`. Cargo does not allow mixing `workspace = true`
+# with per-crate lints, which is why the rest are repeated here rather than
+# inherited.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "allow"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+pedantic = { level = "warn", priority = -1 }
+doc_markdown = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+
+# This list is the security boundary.
+#
+# There is no `verus-sdk`, no `pecu-keystore`, and no `pecu-core` here.
+# Rust will not resolve a type from a crate that is not listed, so this crate
+# **cannot name** `PrivateKey`, `Vault` or `RpcClient` — not "is discouraged
+# from", cannot. `tests/dependency_boundary.rs` fails the build if that changes.
+#
+# Everything crossing the boundary is a plain view model from
+# `pecu-protocol`, whose own dependency list is three crates long.
+[dependencies]
+pecu-protocol = { path = "../pecu-protocol" }
+# `renderer-software` is what makes offscreen rendering possible: the UI can be
+# drawn into a plain pixel buffer with no window, no compositor and no screen.
+# That is how `examples/render_shots.rs` produces reviewable images, and it is
+# the only capture method that CANNOT accidentally photograph something else.
+slint = { version = "1.17", features = ["renderer-software"] }
+# QR codes for the receive address. `default-features = false` drops its `image`,
+# `svg` and `pic` back-ends — none of them is wanted, and the `image` one would
+# put a PNG encoder in the shipped binary. What is left is the matrix itself:
+# `to_colors()` and `width()`, which is everything a renderer needs.
+qrcode = { version = "0.14", default-features = false }
+# Chart geometry. Pure arithmetic with no dependencies of its own, so it cannot
+# widen the boundary above — and it is here rather than in the core because the
+# only thing that knows how big the chart element is, is the chart element.
+# Plotting in the core would need the size reported back through the actor on
+# every resize and would still be a frame behind.
+pecu-chart = { path = "../pecu-chart" }
+# Calendar arithmetic for the chart's cursor label. Already in the tree —
+# `i-slint-core` depends on it — so this adds a name, not a download.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+# PNG encoding for the offscreen renders. Dev-only: the wallet itself ships no
+# image codec.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Slint's own element-inspection backend, dev-only. It is the only way to read
+# back what this interface actually exposes to an assistive technology — the
+# `accessible-role`, `accessible-label` and `accessible-value` the compiler
+# attached to each live element, rather than what the `.slint` source appears
+# to say.
+#
+# Justified rather than convenient: the alternative is a person with a screen
+# reader, and a person cannot run in CI. This checks the mechanical half —
+# that nothing interactive is nameless — which is where the failures are.
+# Whether it makes sense *heard* still needs ears; see `tests/accessibility.rs`.
+i-slint-backend-testing = "1.17"
+
+[build-dependencies]
+# `slint-build` rather than the `slint!` macro: every struct declared in
+# `ui/vm/structs.slint` becomes a generated Rust type, so a view model that
+# drifts from its Slint counterpart is a compile error rather than a runtime
+# surprise. It also keeps the LSP and `slint-viewer` working on real files.
+slint-build = "1.17"

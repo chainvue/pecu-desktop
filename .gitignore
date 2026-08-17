@@ -3,10 +3,10 @@
 
 # Snapshot diffs, written beside the references when the visual test fails.
 # The references themselves ARE committed — they are the test's expectations.
-crates/chainvue-ui/tests/snapshots/*.diff.png
+crates/pecu-ui/tests/snapshots/*.diff.png
 
 # Wallet data never lives here — it is under
-# ~/Library/Application Support/com.chainvue.wallet — but a vault or a pending
+# ~/Library/Application Support/com.pecu.wallet — but a vault or a pending
 # broadcast that ends up in the tree by accident must not be committable.
 vault.json
 vault.json.*

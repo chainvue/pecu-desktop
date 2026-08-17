@@ -1,0 +1,40 @@
+[package]
+name = "pecu-app"
+description = "The Pecu desktop wallet binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "pecu"
+path = "src/main.rs"
+
+[features]
+default = []
+# Runs against a scripted chain instead of a node. Off by default, so a release
+# build does not contain the mock backend at all.
+mock = ["pecu-chain/mock", "pecu-core/mock"]
+
+[dependencies]
+pecu-protocol = { path = "../pecu-protocol" }
+pecu-chain = { path = "../pecu-chain" }
+pecu-core = { path = "../pecu-core" }
+pecu-ui = { path = "../pecu-ui" }
+slint = "1.17"
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Log rotation. A desktop wallet started from the Finder has no terminal, so
+# stderr goes nowhere and the log has to be a file — and a file with no rotation
+# is a wallet that eventually fills somebody's disk. Writing that by hand is a
+# day-boundary calculation and a rename race; this is the tokio project's, it is
+# small, and it pulls in nothing that was not already here.
+tracing-appender = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

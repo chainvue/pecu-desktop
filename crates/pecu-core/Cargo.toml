@@ -1,0 +1,56 @@
+[package]
+name = "pecu-core"
+description = "The wallet actor: owns all state, does all I/O, and is free of any UI toolkit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+mock = ["pecu-chain/mock"]
+
+# No `slint` here, deliberately. The whole application layer is therefore
+# testable with `#[tokio::test]` on a headless runner — no windowing system, no
+# main-thread requirement.
+[dependencies]
+pecu-protocol = { path = "../pecu-protocol" }
+pecu-chain = { path = "../pecu-chain" }
+# Pure geometry and series arithmetic, with no dependencies of its own. The
+# "walk backwards from the balance we know" rule lives there because that is
+# where it can be checked against a golden value.
+pecu-chart = { path = "../pecu-chart" }
+pecu-keystore = { path = "../pecu-keystore" }
+pecu-store = { path = "../pecu-store" }
+verus-sdk = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+# Already in the tree — `i-slint-core` depends on it — so this adds no download
+# and no new supply-chain surface. Used for one thing: turning a block timestamp
+# into a calendar day in the user's own timezone, which is the difference
+# between "5 days ago" and a date somebody can match against a bank statement.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = "3"
+verus-flows = { workspace = true }
+# The scripted chain, by name. `pecu-chain` already carries it and
+# `Chain::mock` already builds one, but a test that has to prove nothing was
+# broadcast needs the handle itself to ask — and adds nothing to the graph that
+# was not already in it.
+pecu-mock = { path = "../pecu-mock" }
+# Capturing what the application logs, so `tests/log_hygiene.rs` can grep it for
+# key material. Dev-only: the core itself emits through `tracing` and has no
+# opinion about where that goes.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+pecu-store = { path = "../pecu-store" }

@@ -1,0 +1,25 @@
+[package]
+name = "pecu-chain"
+description = "Talking to a Verus node: the client, node health, and the permit that gates spending."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Swaps a `MockChain` variant into `Chain`. Off in release builds, so the
+# variant does not exist in a shipped binary at all.
+mock = ["dep:pecu-mock"]
+
+[dependencies]
+pecu-protocol = { path = "../pecu-protocol" }
+pecu-mock = { path = "../pecu-mock", optional = true }
+verus-sdk = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

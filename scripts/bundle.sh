@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build ChainVue.app.
+# Build Pecu.app.
 #
 #   scripts/bundle.sh                       # unsigned, for this machine only
 #   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)" scripts/bundle.sh
 #
-# Produces target/ChainVue.app.
+# Produces target/Pecu.app.
 #
 # ── What this does and does not do ───────────────────────────────────────────
 #
@@ -30,19 +30,19 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-name="ChainVue"
-bundle_id="com.chainvue.wallet"
+name="Pecu"
+bundle_id="com.pecu.wallet"
 app="target/${name}.app"
-iconset_src="crates/chainvue-app/assets/ChainVue.iconset"
+iconset_src="crates/pecu-app/assets/Pecu.iconset"
 
 version="$(awk -F'"' '/^version/ { print $2; exit }' Cargo.toml)"
 [ -n "$version" ] || { echo "could not read version from Cargo.toml" >&2; exit 1; }
 
 echo "==> building ${name} ${version}"
-cargo build --release -p chainvue-app
+cargo build --release -p pecu-app
 
 [ -d "$iconset_src" ] || {
-  echo "missing $iconset_src — run: cargo run -p chainvue-ui --example render_icon" >&2
+  echo "missing $iconset_src — run: cargo run -p pecu-ui --example render_icon" >&2
   exit 1
 }
 
@@ -57,7 +57,7 @@ mkdir -p "${app}/Contents/MacOS" "${app}/Contents/Resources"
 iconutil -c icns "$iconset_src" -o "${app}/Contents/Resources/AppIcon.icns"
 
 echo "==> bundle"
-cp target/release/chainvue "${app}/Contents/MacOS/${name}"
+cp target/release/pecu "${app}/Contents/MacOS/${name}"
 
 cat > "${app}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -103,11 +103,11 @@ echo
 cat <<'NEXT'
 To notarise — needs an App Store Connect API key, and cannot be done from here:
 
-  ditto -c -k --keepParent target/ChainVue.app /tmp/ChainVue.zip
-  xcrun notarytool submit /tmp/ChainVue.zip \
+  ditto -c -k --keepParent target/Pecu.app /tmp/Pecu.zip
+  xcrun notarytool submit /tmp/Pecu.zip \
       --key /path/to/AuthKey_XXXX.p8 --key-id XXXX --issuer <uuid> --wait
-  xcrun stapler staple target/ChainVue.app
-  spctl -a -vvv -t install target/ChainVue.app     # should say: accepted
+  xcrun stapler staple target/Pecu.app
+  spctl -a -vvv -t install target/Pecu.app     # should say: accepted
 
 Until that is done the bundle runs only on the machine that built it.
 NEXT
