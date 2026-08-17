@@ -3,25 +3,37 @@
 // # Why it is a Slint component and not a PNG somebody exported
 //
 // Because it is made of the same things the interface is made of — the accent
-// colour, and the one glyph the Currencies screen already uses — and a bitmap in
-// a folder is a second copy of those that nothing keeps in step.
-// `examples/render_icon.rs` renders this at 1024px with the same software
-// renderer the reference images use, so the icon is reproducible from source and
-// follows the palette when it changes.
+// colour and the bundled monospace — and a bitmap in a folder is a second copy
+// of those that nothing keeps in step. `examples/render_icon.rs` renders this at
+// every size macOS asks for, with the same software renderer the reference
+// images use, so the icon is reproducible from source.
 //
 // # The mark
 //
-// A ring with a centre: `⊙`, the glyph this wallet already uses for a currency,
-// so the icon in the dock and the mark beside a currency are the same shape.
-// Drawn as rectangles rather than as text, because a glyph rasterised at 1024px
-// is at the mercy of the font's hinting — which is also why the font swap under
-// it changed nothing here.
+// `@` and a cursor, which is the wordmark reduced to its two halves. The design
+// package delivers this as `icons/master.svg` and **that file cannot be used**:
+// it draws the `@` as an SVG `<text>` element naming "JetBrains Mono", so on any
+// machine without that font installed it renders whatever the system falls back
+// to. As a scalable Linux icon that is a different glyph on every desktop.
 //
-// This is still the old mark. The Pecu icon is `@` with a cursor, and replacing
-// it is its own commit: it needs the outlined path (the delivered `master.svg`
-// draws the `@` as a `<text>` element and so renders the wrong glyph on any
-// machine without JetBrains Mono) and a macOS shape that is not a hard square.
-// See `docs/design/REVIEW.md`.
+// Here the font is not a dependency but a fact: `JetBrainsMonoNL-Bold.ttf` is
+// compiled into this binary by `theme/theme.slint`, so the glyph this draws is
+// the glyph that ships. Hinting is not a concern at these sizes — it is a
+// small-size mechanism and the small sizes are drawn small rather than shrunk.
+//
+// Geometry follows `master.svg`, expressed against the shape rather than the
+// canvas: the glyph is half the square, the cursor is 0.15 of it wide and the
+// same height as the glyph, with a 0.106 gap. Those are `410`, `123` and `87`
+// over `824` in the original.
+//
+// # The colours are the brand's, not the theme's
+//
+// Ink and neon mint, always. An application icon is a file: it does not follow
+// the system theme, and one that changed colour depending on which mode the
+// person packaging the build happened to have set would be a different icon per
+// release. `render_icon.rs` therefore renders in the **dark** palette, which is
+// the pair this mark is defined on — the light theme's mint is a corrected,
+// darker colour that exists for text contrast and has no business here.
 //
 // # The geometry is Apple's, not a guess
 //
@@ -32,15 +44,17 @@
 // and an icon drawn edge to edge sits visibly larger than every other icon in
 // the dock.
 //
+// This is also what `docs/design/REVIEW.md` records as wrong with the delivered
+// PNGs: they are full-bleed squares, and macOS would draw them as hard squares
+// beside every other icon that is not one.
+//
 // # Why the fill is flat
 //
 // It was a gradient, and **the software renderer drops `border-radius` when the
 // fill is a gradient** — measured, by rendering it: the corners came out square
-// while everything else was right. A flat fill rounds correctly. This is the
-// same class of finding as the missing glyphs, and it is written down here for
-// the same reason: it is invisible in the source and obvious in the picture.
+// while everything else was right. A flat fill rounds correctly.
 
-import { Theme } from "theme/theme.slint";
+import { Theme, Typo } from "theme/theme.slint";
 
 export component AppIcon inherits Window {
     // The canvas. Set per render: every size in the iconset is drawn at its own
@@ -48,19 +62,14 @@ export component AppIcon inherits Window {
     in property <length> canvas: 1024px;
     // The shape inside it, at Apple's proportion.
     property <length> side: root.canvas * 824 / 1024;
-    // Below this the mark is drawn as a ring alone.
+
+    // Below this the cursor comes off.
     //
-    // # Why the small sizes are a different drawing
-    //
-    // Because the same drawing does not survive them, and both failures were
-    // looked at rather than assumed. Shrinking the 1024px render to 16 blurs the
-    // ring and the dot into one blob; drawing at 16 directly makes the ring
-    // 0.8px, which the renderer drops entirely and leaves a lone dot. Neither is
-    // the mark.
-    //
-    // So at 16px it is a ring with a floor under its stroke and nothing inside
-    // it — which is what Apple's own guidance means by simplifying at small
-    // sizes, and what a Finder row and the ⌘-Tab strip actually show.
+    // The design states the rule: under 32px the cursor is dropped, under 24px
+    // only the `@` remains — which here is the same instruction twice, since the
+    // cursor is the only other thing in the mark. At 16px the bar would be under
+    // a pixel wide, and a stroke the renderer drops is worse than one that was
+    // never asked for.
     property <bool> simplified: root.canvas < 32px;
 
     width: root.canvas;
@@ -76,28 +85,60 @@ export component AppIcon inherits Window {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: root.side * 185.4 / 824;
-        background: Theme.accent;
+        background: Theme.bg-base;
 
-        // The ring.
-        Rectangle {
-            width: root.side * 0.46;
-            height: root.side * 0.46;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: self.width / 2;
-            // Floored, so the stroke never falls below a pixel and vanishes.
-            border-width: max(root.side * 0.062, 1.5px);
-            border-color: Theme.text-on-accent;
-        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: root.simplified ? 0px : root.side * 0.106;
 
-        // The centre, at every size that has room for it.
-        if !root.simplified: Rectangle {
-            width: root.side * 0.15;
-            height: root.side * 0.15;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: self.width / 2;
-            background: Theme.text-on-accent;
+            if !root.simplified: Text {
+                text: "@";
+                font-family: Typo.mono;
+                font-size: root.side * 0.5;
+                font-weight: Typo.w-bold;
+                color: Theme.accent;
+                vertical-alignment: center;
+            }
+
+            // The same mark with the spiral taken out, for the sizes the glyph
+            // cannot survive.
+            //
+            // Rendered at 16 and looked at, pixel for pixel: the `@` from the
+            // font is an amorphous blob there. It is not a rendering fault and
+            // no amount of scaling fixes it — the glyph has a counter inside a
+            // counter, and below about ten pixels there are no pixels left to
+            // put them in. Enlarging it to fill the square was tried first and
+            // produced a larger blob.
+            //
+            // So at these sizes it is an `@` reduced to a ring broken on the
+            // right with a tail — and the honest report is that **at 16px the
+            // break and the tail do not survive either**. What lands is a clean,
+            // crisp ring. That is a legible mark instead of a smudge, which is
+            // the trade worth making, but it is not recognisably an `@`.
+            //
+            // The design package expects this: its Windows spec asks for
+            // "16/24px: nur @ ohne Cursor (Pixel-Hinting)" — hand-hinted pixel
+            // art, drawn for the grid rather than scaled onto it. That is a
+            // designer's job and it has not been done. Until it is, 16px is a
+            // ring. See `docs/design/REVIEW.md`.
+            if root.simplified: Path {
+                commands: "M 18.2 17.6 A 9 9 0 1 1 20.4 9.4 M 20.4 9.4 L 20.4 16.2";
+                viewbox-width: 24;
+                viewbox-height: 24;
+                width: root.side * 0.78;
+                height: root.side * 0.78;
+                fill: transparent;
+                stroke: Theme.accent;
+                stroke-width: root.side * 0.78 * 2.6 / 24;
+                stroke-line-cap: round;
+            }
+
+            if !root.simplified: Rectangle {
+                width: root.side * 0.149;
+                height: root.side * 0.5;
+                y: (parent.height - self.height) / 2;
+                background: Theme.accent;
+            }
         }
     }
 }

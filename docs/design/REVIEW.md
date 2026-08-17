@@ -167,3 +167,25 @@ found out during implementation:
   external files, no C, identical on all three platforms. English is the
   original. Retrofitting this across the interface later is the work nobody
   does twice.
+
+---
+
+## Still open: the 16px icon
+
+The app icon is drawn from source (`ui/icon.slint`) rather than taken from the
+delivered PNGs, which fixes two of the three problems recorded above: the glyph
+comes from the bundled `JetBrainsMonoNL-Bold` instead of an SVG `<text>` element
+that renders differently on every machine, and the shape is Apple's 824-in-1024
+rounded square instead of a full-bleed one.
+
+The third is not fixed. **At 16px the `@` cannot be drawn.** Rendered and
+inspected pixel by pixel, the glyph is an amorphous blob — it has a counter
+inside a counter and there are not enough pixels for either. Enlarging it to
+fill the square makes a larger blob. What ships at that size is the mark reduced
+to a ring, broken on the right with a tail, and at 16px even the break and the
+tail disappear: it is a clean ring, legible, and not recognisably an `@`.
+
+The package asks for exactly the thing that would solve this — "16/24px: nur @
+ohne Cursor (Pixel-Hinting)" — and does not deliver it. Hand-hinted pixel art
+for 16 and 24, drawn to the grid rather than scaled onto it, is a designer's
+task. It matters for the Finder list, the window proxy icon and the ⌘-Tab strip.

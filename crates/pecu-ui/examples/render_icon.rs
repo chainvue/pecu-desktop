@@ -25,10 +25,16 @@
 //! Two differences, and both matter. The icon keeps its **alpha** — macOS
 //! composites it over a dock and a Finder row, and an opaque square would be a
 //! square — where a screenshot is opaque by definition and throws alpha away.
-//! And it is rendered in the **light** palette explicitly rather than in both:
-//! an application icon does not follow the system theme, and one that was
-//! rendered in whichever mode happened to be set would change colour depending
-//! on who packaged the build.
+//! And it is rendered in one palette explicitly rather than in both: an
+//! application icon does not follow the system theme, and one that was rendered
+//! in whichever mode happened to be set would change colour depending on who
+//! packaged the build.
+//!
+//! That palette is the **dark** one, which is a change and not an oversight.
+//! The Pecu mark is defined on ink in neon mint — `#0B0D10` and `#12D6B4` — and
+//! those are the dark theme's two values. The light theme's mint is a darker,
+//! corrected colour that exists so text can clear 4.5:1 on a white card; it is
+//! the right answer to a question the icon is not asking.
 
 use std::rc::Rc;
 
@@ -102,8 +108,8 @@ fn draw(
     side: u32,
 ) -> Result<image::RgbaImage, Box<dyn std::error::Error>> {
     let icon = AppIcon::new()?;
-    // The light accent, deliberately and always — see the note at the top.
-    icon.global::<Theme>().set_dark(false);
+    // Ink and neon mint, deliberately and always — see the note at the top.
+    icon.global::<Theme>().set_dark(true);
     // `f32` because that is what a Slint length is; every size here is a small
     // power of two and exact.
     #[allow(clippy::cast_precision_loss)]
