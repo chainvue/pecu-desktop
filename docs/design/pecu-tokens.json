@@ -1,0 +1,81 @@
+{
+  "$schema": "design-tokens",
+  "brand": {
+    "name": "pecu@",
+    "tagline": "// your identity. your money. your wallet.",
+    "fonts": {
+      "mono": { "family": "JetBrains Mono", "use": "wordmark, numbers, amounts, IDs, code comments", "weights": [400, 500, 700] },
+      "ui": { "family": "Space Grotesk", "use": "UI text, titles, labels, body", "weights": [400, 500, 700] }
+    },
+    "cursorBlink": { "duration": "1100ms", "easing": "step-end", "rule": "cursor width = 0.42em of wordmark size; drop cursor below 32px, drop everything but @ below 24px" }
+  },
+  "color": {
+    "dark": {
+      "bg": "#0B0D10", "surface": "#14181D", "field": "#0F1216", "line": "#232A32", "chip": "#232A32",
+      "text": "#FFFFFF", "textSub": "#8B95A3",
+      "accent": "#12D6B4", "onAccent": "#062A24",
+      "negative": "#FF5C7A", "warning": "#FDBE3B", "positive": "#12D6B4"
+    },
+    "light": {
+      "bg": "#F4F6F8", "surface": "#FFFFFF", "field": "#EEF1F4", "line": "#E4E8EF", "chip": "#EEF1F4",
+      "text": "#0B0D10", "textSub": "#5B6470",
+      "accent": "#0FA38A", "onAccent": "#FFFFFF",
+      "negative": "#E5484D", "warning": "#B98900", "positive": "#0FA38A"
+    }
+  },
+  "typography": {
+    "display": { "font": "mono", "size": 30, "weight": 700, "letterSpacing": "-0.02em", "use": "total balance" },
+    "h1": { "font": "ui", "size": 20, "weight": 700 },
+    "h2": { "font": "ui", "size": 16, "weight": 700 },
+    "amount": { "font": "mono", "size": 14, "weight": 700 },
+    "body": { "font": "ui", "size": 12.5, "weight": 400, "lineHeight": 1.5 },
+    "label": { "font": "ui", "size": 10, "weight": 400, "color": "textSub" },
+    "sectionHeader": { "font": "mono", "size": 9, "weight": 400, "letterSpacing": "0.08em", "transform": "uppercase", "color": "textSub" },
+    "id": { "font": "mono", "size": 11, "weight": 700, "note": "identity names always mono, @ in accent" }
+  },
+  "space": { "unit": 4, "scale": [4, 8, 12, 16, 20, 24, 32, 48], "screenPadding": { "phone": 16, "tablet": 24, "desktop": 24 } },
+  "radius": { "chip": 999, "button": 9, "input": 10, "card": 12, "sheet": 16, "phoneScreen": 38 },
+  "border": { "hairline": 1, "focus": 1.5, "accentFrame": 1.5 },
+  "elevation": { "note": "no shadows inside app UI; separation via surface color + hairline borders only" },
+  "components": {
+    "button": {
+      "primary": { "bg": "accent", "fg": "onAccent", "padding": "10px 18px", "radius": 9, "font": "ui 12/600" },
+      "secondary": { "border": "1.5px accent", "fg": "accent" },
+      "ghost": { "border": "1.5px line", "fg": "textSub+2 steps" },
+      "danger": { "bg": "negative", "fg": "#FFFFFF" },
+      "minHitTarget": 44
+    },
+    "input": { "bg": "field", "border": "1px line", "focusBorder": "1.5px accent", "radius": 10, "padding": "11px 14px", "font": "mono 12" },
+    "filterChip": { "radius": 999, "padding": "6px 13px", "activeBg": "accent", "activeFg": "onAccent", "idleBg": "chip", "idleFg": "textSub" },
+    "listRow": { "paddingY": 9, "divider": "1px line", "title": "ui 12/600", "sub": "ui 9.5 textSub", "value": "mono 11.5", "delta": "mono 9.5 positive|negative" },
+    "toast": { "bg": "surface", "border": "1px line", "accentEdge": "3px left accent", "radius": 10, "duration": "4s" },
+    "idBadge": { "shape": "pill", "avatar": "accent circle with mono @", "name": "mono 11/700" },
+    "shieldedBadge": { "glyph": "\u25c8", "fg": "accent", "border": "1px line", "shape": "pill" },
+    "seedWord": { "bg": "field", "border": "1px line", "radius": 8, "index": "mono 8.5 textSub", "word": "mono 11/700", "hidden": "blur 4px + \u25c9 Tap to reveal overlay" }
+  },
+  "iconography": { "grid": 24, "stroke": 2, "caps": "round", "joins": "round", "sizes": { "nav": 17, "inline": 15, "list": 20 } },
+  "dataConventions": {
+    "unknownValue": "\u2014 (em dash) means unknown, not zero",
+    "positivePrefix": "\u25b2 or +", "negativePrefix": "-",
+    "privacyGlyph": "\u25c8 marks shielded/z-address items",
+    "currencyFormat": "USD with $ and thousands commas; crypto amounts in mono"
+  },
+  "responsive": {
+    "breakpoints": { "compact": "0-599 (phone: bottom nav, 1 column)", "medium": "600-1023 (tablet: rail/sidebar, 2 columns)", "expanded": "1024+ (desktop: sidebar + \u2318K, 3 columns)" },
+    "desktopMinWindow": { "width": 960, "height": 600 },
+    "narrowDesktopFallback": "below 960px width desktop behaves like tablet layout"
+  },
+  "motion": {
+    "durations": { "instant": 80, "fast": 150, "base": 220, "slow": 320, "toast": 4000 },
+    "easing": { "standard": "cubic-bezier(0.2, 0, 0, 1)", "decelerate": "cubic-bezier(0, 0, 0, 1)", "cursor": "step-end" },
+    "specs": {
+      "screenPush": "base / standard, 24px slide + fade",
+      "sheetUp": "slow / decelerate, from bottom",
+      "toastIn": "fast / decelerate, 8px rise + fade; out: fast reverse",
+      "successCheck": "circle scales 0.6\u21921 base/decelerate, check draws 150ms after",
+      "balanceCount": "counts up 400ms on first load only",
+      "sparkline": "draws left\u2192right 600ms on screen enter",
+      "reducedMotion": "respect OS setting: replace slides with fades, disable count-up"
+    }
+  }
+}
