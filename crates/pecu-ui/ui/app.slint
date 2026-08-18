@@ -1519,10 +1519,16 @@ component ChartPlot inherits Rectangle {
 
 // The balance over time, with its range control and its own empty state.
 component BalanceChart inherits VerticalLayout {
+    // Settable, because the same chart is asked for at two sizes: it is the
+    // subject of its own card on a screen dedicated to it, and a sparkline
+    // under the balance on the dashboard. 200px of chart above three columns
+    // pushed all three below the fold.
+    in property <length> plot-height: 200px;
+
     spacing: Sp.s4;
 
     Rectangle {
-        height: 200px;
+        height: root.plot-height;
 
         ChartPlot {
             width: parent.width;
@@ -1586,7 +1592,156 @@ component BalanceChart inherits VerticalLayout {
     }
 }
 
+// What this wallet holds.
+component AssetsPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if WalletState.assets.length == 0 && !WalletState.loading: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "◇";
+                title: @tr("No assets yet");
+                body: @tr("Receive to get started.");
+            }
+        }
+
+        if WalletState.loading: Rectangle {
+            height: 64px;
+            HorizontalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s5;
+                Skeleton { width: 34px; height: 34px; radius: R.full; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Sp.s2;
+                    Skeleton { width: 120px; height: 13px; }
+                    Skeleton { width: 72px; height: 11px; }
+                }
+            }
+        }
+
+        for asset in WalletState.assets: ListRow {
+            glyph: asset.native ? "◆" : "◇";
+            glyph-tone: asset.native ? Theme.accent : Theme.text-secondary;
+            title: asset.name;
+            subtitle: asset.secondary;
+            interactive: false;
+
+            // Right-aligned, so a column of amounts lines up on the decimal
+            // point rather than floating in the middle of the row. With the
+            // monospace family that is what makes two balances comparable.
+            HorizontalLayout {
+                alignment: end;
+                Money {
+                    amount: asset.amount;
+                    show-currency: false;
+                    size: Typo.num;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+}
+
+// What things are worth. The same rows the markets screen shows, which is why
+// there is no second source for them to disagree with.
+component MarketsPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if MarketState.rows.length == 0: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "⊙";
+                title: @tr("No prices yet");
+                body: @tr("Prices appear once a converter has been read.");
+            }
+        }
+
+        // No glyph. Every row would carry the same one, which is decoration
+        // rather than information — and it is 46px of a column narrow enough
+        // that it was truncating the names instead.
+        for row in MarketState.rows: ListRow {
+            title: row.name;
+            subtitle: row.price;
+            interactive: false;
+
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: row.change;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    // Carried, not read off the sign — `—` has none.
+                    color: row.tone == "positive" ? Theme.positive
+                        : row.tone == "negative" ? Theme.negative
+                        : Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// What has happened.
+component ActivityPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if WalletState.activity.length == 0 && !WalletState.loading: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "○";
+                title: @tr("No transactions yet");
+                body: @tr("Activity appears here once this wallet has been paid.");
+            }
+        }
+
+        for tx in WalletState.activity: ListRow {
+            glyph: tx.direction == "in" ? "↓" : tx.direction == "out" ? "↑" : "↔";
+            glyph-tone: tx.direction == "in" ? Theme.positive
+                : tx.direction == "out" ? Theme.negative
+                : Theme.text-secondary;
+            title: tx.direction == "in" ? @tr("Received")
+                : tx.direction == "out" ? @tr("Sent")
+                : @tr("Moved");
+            subtitle: tx.when;
+            interactive: true;
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+                alignment: end;
+
+                // The pill goes BEFORE the amount, so a pending row does not
+                // push its figure out of the column every other row lines up
+                // in. Alignment is what makes a list of amounts readable; the
+                // pill can move.
+                if tx.pending: StatusPill {
+                    state: "pending";
+                    text: @tr("Pending");
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Money {
+                    amount: tx.amount;
+                    show-currency: false;
+                    size: Typo.num-sm;
+                    tone: tx.direction == "in" ? "positive"
+                        : tx.direction == "out" ? "negative"
+                        : "neutral";
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+}
+
 component DashboardScreen inherits VerticalLayout {
+    // Asked of the window, because `go` belongs to the window: this screen
+    // knows it wants Send, not how the shell gets there.
+    callback navigate(string);
+
     spacing: Sp.section-gap;
 
     if SendState.pending-rows.length > 0: PendingPayments {}
@@ -1645,252 +1800,229 @@ component DashboardScreen inherits VerticalLayout {
         }
     }
 
-    // The hero. Total first, because that is the number people quote — with the
-    // breakdown directly beneath it, because a Verus balance is genuinely
-    // several numbers and a wallet that shows one cannot explain "you have 500
-    // but can spend 20".
-    VerticalLayout {
-        spacing: Sp.s4;
-
-        HorizontalLayout {
-            spacing: Sp.s4;
-            alignment: start;
-            Eyebrow { text: "TOTAL BALANCE"; }
-            // "These numbers were true, just not now" — which is a different
-            // statement from "loading", and the one worth making when a read
-            // fails against a wallet that already has figures on screen.
-            if WalletState.stale: Eyebrow {
-                text: "· NOT UP TO DATE";
-                color: Theme.warning;
-            }
-        }
-
-        if WalletState.loading: Skeleton {
-            width: 320px;
-            height: 48px;
-        }
-
-        if !WalletState.loading: Money {
-            amount: WalletState.total;
-            currency: WalletState.ticker;
-            size: Typo.hero;
-            mono: false;
-        }
-
-        // The parts of the total, as separate figures rather than one sentence.
-        //
-        // This was a single dot-separated run at caption size: three long
-        // monospace numbers, three different meanings, one line. Nobody parses
-        // that — and the one that decides whether a payment can be made at all,
-        // spendable, was the least prominent number on a screen whose headline
-        // is a total that includes money nobody can spend.
-        //
-        // Value above label, mono, generously spaced: the same arrangement the
-        // eye is given for any row of statistics, and each column can now be
-        // read on its own.
-        if !WalletState.loading && WalletState.has-breakdown: HorizontalLayout {
-            spacing: Sp.s9;
-            alignment: start;
-
-            VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: WalletState.spendable;
-                    font-family: Typo.mono;
-                    font-size: Typo.num;
-                    color: Theme.text-primary;
-                }
-                Text {
-                    text: "spendable";
-                    font-size: Typo.micro;
-                    color: Theme.text-tertiary;
-                }
-            }
-
-            if WalletState.immature != "": VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: WalletState.immature;
-                    font-family: Typo.mono;
-                    font-size: Typo.num;
-                    color: Theme.warning;
-                }
-                Text {
-                    // The wait belongs with the figure it qualifies, not in a
-                    // parenthesis inside a longer sentence.
-                    text: WalletState.matures-in == ""
-                        ? "maturing"
-                        : "maturing · " + WalletState.matures-in;
-                    font-size: Typo.micro;
-                    color: Theme.text-tertiary;
-                }
-            }
-
-            if WalletState.incoming != "": VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: WalletState.incoming;
-                    font-family: Typo.mono;
-                    font-size: Typo.num;
-                    color: Theme.positive;
-                }
-                Text {
-                    text: "arriving";
-                    font-size: Typo.micro;
-                    color: Theme.text-tertiary;
-                }
-            }
-
-            // Money that has left and not settled. Never drawn until now,
-            // though it has always been one of the three states that make this
-            // row appear at all.
-            if WalletState.pending != "": VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: WalletState.pending;
-                    font-family: Typo.mono;
-                    font-size: Typo.num;
-                    color: Theme.text-secondary;
-                }
-                Text {
-                    text: "leaving";
-                    font-size: Typo.micro;
-                    color: Theme.text-tertiary;
-                }
-            }
-        }
-    }
-
-    // The balance over time. Directly under the figure it is a chart of, so
-    // the two can be read as one statement rather than as two facts that
-    // happen to share a screen.
+    // The hero.
     //
-    // Absent entirely until there is something to draw. A wallet with no
-    // transactions would otherwise stack three empty states — "no chart", "no
-    // assets", "no transactions" — which says one thing three times and makes
-    // the screen look broken rather than new. The card arriving with the first
-    // transaction is information; a placeholder for it is not.
-    if ChartState.has-data: Card {
+    // Total first, because that is the number people quote — with the breakdown
+    // directly beneath it, because a Verus balance is genuinely several numbers
+    // and a wallet that shows one cannot explain "you have 500 but can spend
+    // 20". The design has no equivalent of that row and it is kept anyway: it
+    // is the difference between a figure and a spendable figure.
+    //
+    // The three actions sit in the card rather than under it, which is the
+    // design's arrangement and the one that stops them competing with the
+    // section headings below.
+    Card {
         VerticalLayout {
             padding: Sp.card-pad;
-            BalanceChart {}
-        }
-    }
+            spacing: Sp.s5;
 
-    // Assets
-    VerticalLayout {
-        spacing: Sp.s4;
-        Eyebrow { text: "ASSETS"; }
+            HorizontalLayout {
+                spacing: Sp.s7;
 
-        Card {
-            VerticalLayout {
-                padding: Sp.s3;
+                VerticalLayout {
+                    spacing: Sp.s4;
+                    horizontal-stretch: 1;
 
-                if WalletState.assets.length == 0 && !WalletState.loading: Rectangle {
-                    height: 88px;
-                    EmptyState {
-                        glyph: "◇";
-                        title: "No assets yet";
-                        body: "Receive VRSC to get started.";
-                    }
-                }
-
-                if WalletState.loading: Rectangle {
-                    height: 64px;
                     HorizontalLayout {
-                        padding: Sp.s5;
-                        spacing: Sp.s5;
-                        Skeleton { width: 34px; height: 34px; radius: R.full; }
+                        spacing: Sp.s4;
+                        alignment: start;
+                        Eyebrow { text: @tr("TOTAL BALANCE"); }
+                        // "These numbers were true, just not now" — a different
+                        // statement from "loading", and the one worth making
+                        // when a read fails against figures already on screen.
+                        if WalletState.stale: Eyebrow {
+                            text: @tr("· NOT UP TO DATE");
+                            color: Theme.warning;
+                        }
+                    }
+
+                    if WalletState.loading: Skeleton {
+                        width: 320px;
+                        height: 48px;
+                    }
+
+                    if !WalletState.loading: Money {
+                        amount: WalletState.total;
+                        currency: WalletState.ticker;
+                        size: Typo.hero;
+                        mono: false;
+                    }
+
+                    // The parts of the total, as separate figures rather than
+                    // one sentence.
+                    //
+                    // This was a single dot-separated run at caption size:
+                    // three long monospace numbers, three meanings, one line.
+                    // Nobody parses that — and the one that decides whether a
+                    // payment can be made at all, spendable, was the least
+                    // prominent number on a screen headed by a total that
+                    // includes money nobody can spend.
+                    if !WalletState.loading && WalletState.has-breakdown: HorizontalLayout {
+                        spacing: Sp.s9;
+                        alignment: start;
+
                         VerticalLayout {
-                            alignment: center;
-                            spacing: Sp.s2;
-                            Skeleton { width: 120px; height: 13px; }
-                            Skeleton { width: 72px; height: 11px; }
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.spendable;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.text-primary;
+                            }
+                            Text {
+                                text: @tr("spendable");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        if WalletState.immature != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.immature;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.warning;
+                            }
+                            Text {
+                                // The wait belongs with the figure it
+                                // qualifies, not in a parenthesis inside a
+                                // longer sentence.
+                                text: WalletState.matures-in == ""
+                                    ? @tr("maturing")
+                                    : @tr("maturing · ") + WalletState.matures-in;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        if WalletState.incoming != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.incoming;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.positive;
+                            }
+                            Text {
+                                text: @tr("arriving");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        // Money that has left and not settled.
+                        if WalletState.pending != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.pending;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: @tr("leaving");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
                         }
                     }
                 }
 
-                for asset in WalletState.assets: ListRow {
-                    // `◈` was here and drew nothing — the third glyph in this
-                    // file to do that. `◆` is one the system font is known to
-                    // carry, because it is already on screen in the nav rail.
-                    glyph: asset.native ? "◆" : "◇";
-                    glyph-tone: asset.native ? Theme.accent : Theme.text-secondary;
-                    title: asset.name;
-                    subtitle: asset.secondary;
-                    interactive: false;
-
-                    // Right-aligned, so a column of amounts lines up on the
-                    // decimal point rather than floating in the middle of the
-                    // row. Together with the monospace family this is what
-                    // makes two balances comparable at a glance.
+                // The three things a person came here to do.
+                VerticalLayout {
+                    alignment: start;
                     HorizontalLayout {
+                        spacing: Sp.s3;
                         alignment: end;
-                        Money {
-                            amount: asset.amount;
-                            show-currency: false;
-                            size: Typo.num-lg;
-                            y: (parent.height - self.height) / 2;
+                        Btn {
+                            text: @tr("Send");
+                            variant: "primary";
+                            clicked => { root.navigate("send"); }
+                        }
+                        Btn {
+                            text: @tr("Receive");
+                            variant: "secondary";
+                            clicked => { root.navigate("receive"); }
+                        }
+                        Btn {
+                            text: @tr("Convert");
+                            variant: "ghost";
+                            clicked => { root.navigate("convert"); }
                         }
                     }
                 }
+            }
+
+            // The balance over time, inside the card with the figure it is a
+            // chart of, so the two read as one statement.
+            //
+            // Absent entirely until there is something to draw. A wallet with
+            // no transactions would otherwise stack three empty states — no
+            // chart, no assets, no transactions — which says one thing three
+            // times and makes a new wallet look broken.
+            if ChartState.has-data: BalanceChart { plot-height: 132px; }
+        }
+    }
+
+    // A wallet with nothing in it says so once.
+    //
+    // The three columns below each carry their own empty state, and on a fresh
+    // wallet all three fire at the same moment — "no assets", "no prices", "no
+    // transactions" — which is one fact stated three times and reads as
+    // breakage rather than as newness. The chart is already absent for exactly
+    // this reason; the comment on it warned about stacking empty states and
+    // then a third column was added anyway.
+    property <bool> nothing-yet: !WalletState.loading
+        && WalletState.assets.length == 0
+        && WalletState.activity.length == 0
+        && MarketState.rows.length == 0;
+
+    if root.nothing-yet: Card {
+        VerticalLayout {
+            padding: Sp.s10;
+            EmptyState {
+                glyph: "◇";
+                title: @tr("Nothing here yet");
+                body: @tr("Receive to this wallet, and the balance, its history and what things are worth all appear here.");
+                action-text: @tr("Show my address");
+                action => { root.navigate("receive"); }
             }
         }
     }
 
-    // Recent activity
-    VerticalLayout {
-        spacing: Sp.s4;
+    // Three columns, which is what the design does with the space and what
+    // stops each list running the width of a 1240px window.
+    if !root.nothing-yet: HorizontalLayout {
+        spacing: Sp.s5;
 
-        HorizontalLayout {
-            Eyebrow { text: "RECENT ACTIVITY"; horizontal-stretch: 1; }
+        // `alignment: start` on each, and it is load-bearing: without it the
+        // layout hands the spare height to the gap between the heading and the
+        // card, so three columns holding different amounts began at three
+        // different heights and the shortest one sat at the bottom of the
+        // screen.
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("ASSETS"); }
+            AssetsPanel {}
         }
 
-        Card {
-            VerticalLayout {
-                padding: Sp.s3;
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("MARKETS"); }
+            MarketsPanel {}
+        }
 
-                if WalletState.activity.length == 0 && !WalletState.loading: Rectangle {
-                    height: 120px;
-                    EmptyState {
-                        glyph: "○";
-                        title: "No transactions yet";
-                        body: "Activity appears here once your wallet has been paid.";
-                    }
-                }
-
-                for tx in WalletState.activity: ListRow {
-                    glyph: tx.direction == "in" ? "↓" : tx.direction == "out" ? "↑" : "↔";
-                    glyph-tone: tx.direction == "in" ? Theme.positive
-                        : tx.direction == "out" ? Theme.negative
-                        : Theme.text-secondary;
-                    title: tx.direction == "in" ? "Received" : tx.direction == "out" ? "Sent" : "Moved";
-                    subtitle: tx.when;
-                    interactive: true;
-
-                    HorizontalLayout {
-                        spacing: Sp.s5;
-                        alignment: end;
-
-                        // The pill goes BEFORE the amount, so a pending row
-                        // does not push its figure out of the column every
-                        // other row lines up in. Alignment is what makes a
-                        // list of amounts readable; the pill can move.
-                        if tx.pending: StatusPill {
-                            state: "pending";
-                            text: "Pending";
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        Money {
-                            amount: tx.amount;
-                            show-currency: false;
-                            tone: tx.direction == "in" ? "positive" : tx.direction == "out" ? "negative" : "neutral";
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-                }
-            }
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("RECENT ACTIVITY"); }
+            ActivityPanel {}
         }
     }
 
@@ -9039,7 +9171,9 @@ export component AppWindow inherits Window {
                             // stretch to 2000px read as a dashboard, not a product.
                             max-width: Sp.content-max;
 
-                            if root.screen == "dashboard": DashboardScreen {}
+                            if root.screen == "dashboard": DashboardScreen {
+                                navigate(screen) => { root.go(screen); }
+                            }
                             if root.screen == "send": SendScreen {}
                             if root.screen == "identities": IdentitiesScreen {}
                             if root.screen == "currencies": CurrenciesScreen {}

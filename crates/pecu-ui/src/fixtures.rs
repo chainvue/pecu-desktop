@@ -112,7 +112,11 @@ pub fn converting_refused(ui: &AppWindow) {
 pub fn markets(ui: &AppWindow) {
     funded(ui);
     ui.set_screen("markets".into());
+}
 
+/// The table's rows on their own, so the dashboard's markets column can be
+/// filled without pretending the whole markets screen is open.
+fn market_rows(ui: &AppWindow) {
     let state = ui.global::<MarketState>();
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
         MarketRow {
@@ -628,6 +632,11 @@ pub fn receiving(ui: &AppWindow) {
 /// A wallet with money in it — **mock mode on**, so the picture says so.
 pub fn funded(ui: &AppWindow) {
     unlocked(ui);
+
+    // A wallet with figures on it has read a converter too, and the dashboard
+    // now has a column for that. Without this the markets column sits at its
+    // empty state beside two full ones, which photographs as a bug.
+    market_rows(ui);
 
     let net = ui.global::<NetworkState>();
     net.set_mock_mode(true);
