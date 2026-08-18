@@ -15,12 +15,12 @@ import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, S
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
 import { AppIcon } from "icon.slint";
 import { Icon } from "components/icons.slint";
-import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit } from "vm/structs.slint";
+import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit, MarketRow, Venue, Stat } from "vm/structs.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
-export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit }
+export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit, MarketRow, Venue, Stat }
 export { Theme, Motion, InputMode }
 // Rendered to a PNG by `examples/render_icon.rs`, never shown. Exported from
 // here because this file is the one compile root — see `build.rs`.
@@ -581,6 +581,54 @@ export global ChartState {
 }
 
 // What the wallet has said and nobody has read yet.
+// The markets screen.
+//
+// # Everything here is currently a fixture
+//
+// The figures are drawn, not derived. Deriving them is real work against the
+// chain — `getcurrencystate` for a mid price, `getcurrencyconverters` for the
+// pools, and a route to something that stands for a unit of account — and it is
+// deliberately not in this commit. What is here is the shape: what the screen
+// shows, in what order, with what conventions.
+//
+// The conventions are the part worth getting right first, because they are what
+// makes the real figures safe to put in later:
+//
+//   * a price is a **string**, so the core owns how money is spelled;
+//   * `—` means the wallet does not know, and is not the same as zero;
+//   * `tone` is carried rather than inferred from a leading minus, because a
+//     dash has no sign and would otherwise read as a loss.
+export global MarketState {
+    in property <[MarketRow]> rows: [];
+    // Which row the detail is showing, by i-address. Empty means none — a
+    // screen that auto-selects the first row answers a question nobody asked
+    // and hides the fact that the list is the primary thing here.
+    in-out property <string> selected: "";
+    // The detail, flat rather than as one struct. Slint models nested inside a
+    // struct field are awkward to feed from Rust, and `stats` and `venues` are
+    // both lists — so the shape that works is the shape `SendState` already
+    // uses for the same reason.
+    in property <string> detail-name;
+    in property <string> detail-subtitle;
+    in property <string> detail-price;
+    in property <string> detail-change;
+    in property <string> detail-tone: "unknown";
+    in property <[Stat]> detail-stats: [];
+    in property <[Venue]> detail-venues: [];
+    // How the price was arrived at, hop by hop. Not decoration: on a wallet
+    // that derives prices from conversion routes rather than reading a feed,
+    // this is the difference between a number somebody can check and one they
+    // have to trust.
+    in property <string> detail-route;
+    // Which hop is the constraint. Empty when there is no route.
+    in property <string> detail-route-note;
+    // The chart range, as an index into the buttons. Interface state: it
+    // decides what gets asked for, and the core has no opinion about which
+    // button looks pressed.
+    in-out property <int> range: 1;
+    callback select(string);
+}
+
 // The command palette.
 //
 // # Why the results come from the core
@@ -5678,6 +5726,333 @@ component ActionBar inherits Rectangle {
 // reserves for shielded items and giving it a second meaning here would spend
 // it. A glyph is only a glyph if the shipped font has it, and only useful if it
 // means one thing.
+// One row of the markets table.
+component MarketRowItem inherits Rectangle {
+    in property <MarketRow> entry;
+    in property <bool> selected;
+    callback picked();
+
+    height: 46px;
+    border-radius: R.md;
+    background: root.selected ? Theme.accent-soft
+        : touch.has-hover ? Theme.bg-hover
+        : transparent;
+    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+    HorizontalLayout {
+        padding-left: Sp.s4;
+        padding-right: Sp.s4;
+        spacing: Sp.s4;
+
+        Text {
+            text: root.entry.name;
+            font-family: Typo.mono;
+            font-size: Typo.body;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.entry.price;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 74px;
+        }
+        Text {
+            text: root.entry.change;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            // The tone is carried, not read off the sign. `—` has no sign, and
+            // colouring it as a loss would be the interface inventing a fact.
+            color: root.entry.tone == "positive" ? Theme.positive
+                : root.entry.tone == "negative" ? Theme.negative
+                : Theme.text-tertiary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 62px;
+        }
+        Text {
+            text: root.entry.depth;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 70px;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+
+    accessible-role: button;
+    accessible-label: root.entry.name + ", " + root.entry.price + ", " + root.entry.change;
+    accessible-action-default => { root.picked(); }
+}
+
+// Markets: every currency on the left, one of them in detail on the right.
+//
+// # The figures are fixtures
+//
+// Drawn, not derived. Deriving them is real work against the chain and is
+// deliberately not here yet — see `MarketState`. What this commit fixes is the
+// shape and the conventions, which is what makes real figures safe to drop in
+// later.
+component MarketsScreen inherits HorizontalLayout {
+    spacing: Sp.s7;
+
+    // ── The table ───────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: Sp.s4;
+        width: 46%;
+
+        Eyebrow { text: @tr("ALL CURRENCIES"); }
+
+        // The column headings, outside the card, so a long list scrolls under
+        // them rather than taking them with it.
+        HorizontalLayout {
+            padding-left: Sp.s4;
+            padding-right: Sp.s4;
+            spacing: Sp.s4;
+            Text {
+                text: @tr("Name");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: @tr("Price");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 74px;
+            }
+            Text {
+                text: @tr("24h");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 62px;
+            }
+            Text {
+                text: @tr("Exit @2%");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 70px;
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Sp.s3;
+                spacing: Sp.s1;
+                for row in MarketState.rows: MarketRowItem {
+                    entry: row;
+                    selected: MarketState.selected == row.address;
+                    picked => { MarketState.select(row.address); }
+                }
+            }
+        }
+
+        // The convention, said once, where the dashes are.
+        Text {
+            text: @tr("— means unknown, not zero.");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+
+    // ── The detail ──────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: Sp.s5;
+        horizontal-stretch: 1;
+
+        if MarketState.selected == "": EmptyState {
+            glyph: "⊙";
+            title: @tr("Pick a currency");
+            body: @tr("Its price, where it trades, and how deep those pools are.");
+        }
+
+        if MarketState.selected != "": VerticalLayout {
+            spacing: Sp.s5;
+
+            // Name, what it is, and the price.
+            VerticalLayout {
+                spacing: Sp.s2;
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    alignment: start;
+                    Text {
+                        text: MarketState.detail-name;
+                        font-family: Typo.mono;
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: MarketState.detail-subtitle;
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    alignment: start;
+                    Text {
+                        text: MarketState.detail-price;
+                        font-family: Typo.mono;
+                        font-size: Typo.hero;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: MarketState.detail-change;
+                        font-family: Typo.mono;
+                        font-size: Typo.num;
+                        color: MarketState.detail-tone == "positive" ? Theme.positive
+                            : MarketState.detail-tone == "negative" ? Theme.negative
+                            : Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // The range. Inert against a fixture, and shown anyway: it is what
+            // says the price above has a period attached to it.
+            Segmented {
+                options: [@tr("1D"), @tr("1W"), @tr("1M"), @tr("1Y"), @tr("Max")];
+                index <=> MarketState.range;
+            }
+
+            // The figures.
+            HorizontalLayout {
+                spacing: Sp.s4;
+                for stat in MarketState.detail-stats: Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: Sp.s4;
+                        spacing: Sp.s1;
+                        Text {
+                            text: stat.label;
+                            font-size: Typo.micro;
+                            color: Theme.text-tertiary;
+                        }
+                        Text {
+                            text: stat.value;
+                            font-family: Typo.mono;
+                            font-size: Typo.num;
+                            font-weight: Typo.w-bold;
+                            color: Theme.text-primary;
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Sp.s5;
+
+                // Where it trades.
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    horizontal-stretch: 1;
+                    Eyebrow { text: @tr("VENUES"); }
+                    Card {
+                        VerticalLayout {
+                            padding: Sp.s3;
+                            for venue in MarketState.detail-venues: HorizontalLayout {
+                                padding: Sp.s3;
+                                spacing: Sp.s4;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: venue.name;
+                                        font-family: Typo.mono;
+                                        font-size: Typo.caption;
+                                        font-weight: Typo.w-bold;
+                                        color: Theme.text-primary;
+                                    }
+                                    StatusPill {
+                                        state: venue.state == "active" ? "online" : "unknown";
+                                        text: venue.state;
+                                    }
+                                }
+                                Text {
+                                    text: venue.price;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: venue.change;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: venue.tone == "positive" ? Theme.positive
+                                        : venue.tone == "negative" ? Theme.negative
+                                        : Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    width: 56px;
+                                }
+                                Text {
+                                    text: venue.depth;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    width: 62px;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // How the price was reached.
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    width: 38%;
+                    Eyebrow { text: @tr("PRICE DISCOVERY"); }
+                    Card {
+                        VerticalLayout {
+                            padding: Sp.s5;
+                            spacing: Sp.s3;
+                            Text {
+                                text: MarketState.detail-route;
+                                font-family: Typo.mono;
+                                font-size: Typo.caption;
+                                color: Theme.accent;
+                                wrap: word-wrap;
+                            }
+                            if MarketState.detail-route-note != "": Text {
+                                text: MarketState.detail-route-note;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
 component CurrenciesScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -8057,6 +8432,7 @@ export component AppWindow inherits Window {
         // `id` and `icon` are names the code matches on and must never be
         // translated. `label` is the only thing here a person reads.
         { id: "dashboard", label: @tr("Dashboard"),  icon: "wallet",   enabled: true, badge: "" },
+        { id: "markets",   label: @tr("Markets"),    icon: "markets",  enabled: true, badge: "" },
         { id: "send",      label: @tr("Send"),       icon: "send",     enabled: true, badge: "" },
         { id: "receive",   label: @tr("Receive"),    icon: "receive",  enabled: true, badge: "" },
         { id: "activity",  label: @tr("Activity"),   icon: "history",  enabled: true, badge: "" },
@@ -8070,13 +8446,14 @@ export component AppWindow inherits Window {
     // no rail entry of its own. Only ids appear here; see `TitleBar`'s `title`.
     property <int> nav-index:
           root.screen == "dashboard"  ? 0
-        : root.screen == "send"       ? 1
-        : root.screen == "receive"    ? 2
-        : root.screen == "activity"   ? 3
-        : root.screen == "nodes"      ? 4
-        : root.screen == "identities" ? 5
-        : root.screen == "currencies" ? 6
-        : root.screen == "settings"   ? 7
+        : root.screen == "markets"    ? 1
+        : root.screen == "send"       ? 2
+        : root.screen == "receive"    ? 3
+        : root.screen == "activity"   ? 4
+        : root.screen == "nodes"      ? 5
+        : root.screen == "identities" ? 6
+        : root.screen == "currencies" ? 7
+        : root.screen == "settings"   ? 8
         : -1;
 
     // Before anything else: if there is no wallet, or it is locked, that is the
@@ -8212,13 +8589,16 @@ export component AppWindow inherits Window {
             // modifier on each. Checking only `meta` would have made every
             // shortcut here dead on a Mac.
             if (event.modifiers.control || event.modifiers.meta) {
+                // In rail order, so the number is what somebody counts down to
+                // rather than a second arrangement to learn.
                 if (event.text == "1") { root.go("dashboard"); return EventResult.accept; }
-                if (event.text == "2") { root.go("send"); return EventResult.accept; }
-                if (event.text == "3") { root.go("receive"); return EventResult.accept; }
-                if (event.text == "4") { root.go("activity"); return EventResult.accept; }
-                if (event.text == "5") { root.go("nodes"); return EventResult.accept; }
-                if (event.text == "6") { root.go("identities"); return EventResult.accept; }
-                if (event.text == "7") { root.go("currencies"); return EventResult.accept; }
+                if (event.text == "2") { root.go("markets"); return EventResult.accept; }
+                if (event.text == "3") { root.go("send"); return EventResult.accept; }
+                if (event.text == "4") { root.go("receive"); return EventResult.accept; }
+                if (event.text == "5") { root.go("activity"); return EventResult.accept; }
+                if (event.text == "6") { root.go("nodes"); return EventResult.accept; }
+                if (event.text == "7") { root.go("identities"); return EventResult.accept; }
+                if (event.text == "8") { root.go("currencies"); return EventResult.accept; }
                 if (event.text == ",") { root.go("settings"); return EventResult.accept; }
                 // Slint reports the character produced, and `⌘L` without shift
                 // produces a lower-case `l`.
@@ -8371,18 +8751,27 @@ export component AppWindow inherits Window {
                             if root.screen == "send": SendScreen {}
                             if root.screen == "identities": IdentitiesScreen {}
                             if root.screen == "currencies": CurrenciesScreen {}
+                            if root.screen == "markets": MarketsScreen {}
                             if root.screen == "receive": ReceiveScreen {}
                             if root.screen == "settings": SettingsScreen {
                                 tab <=> root.settings-tab;
                             }
                             if root.screen == "nodes": NodesScreen {}
-                            if root.screen != "dashboard" && root.screen != "nodes"
-                                && root.screen != "receive" && root.screen != "send"
-                                && root.screen != "settings" && root.screen != "activity"
-                                && root.screen != "identities"
-                                && root.screen != "currencies": ComingSoon {
-                                title: "Not built yet";
-                                body: "This part of the wallet is still being written.";
+                            // Derived, not listed.
+                            //
+                            // This was a chain of eight `!=`, one per built
+                            // screen, and adding Markets made it nine — which I
+                            // duly forgot, so the new screen rendered with "Not
+                            // built yet" underneath it.
+                            //
+                            // `nav-index` already answers the question: a screen
+                            // in the rail is a screen that exists, and one that
+                            // is not is `-1`. Rail entries for unbuilt areas are
+                            // `enabled: false` and cannot be navigated to, so
+                            // the two cannot disagree.
+                            if root.nav-index < 0: ComingSoon {
+                                title: @tr("Not built yet");
+                                body: @tr("This part of the wallet is still being written.");
                             }
                         }
                     }

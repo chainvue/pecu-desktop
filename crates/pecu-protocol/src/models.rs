@@ -976,6 +976,71 @@ pub enum TaskKind {
     CreatingWallet,
 }
 
+/// One currency in the markets table.
+///
+/// Every figure is a **formatted string**, not a number, and that is the same
+/// decision the rest of this protocol makes: the core owns how money is spelled,
+/// so a total cannot be rounded one way on the dashboard and another way here.
+///
+/// It also lets a figure be honestly absent. `"—"` means the wallet does not
+/// know — a currency with no converter has no price, and there is no number
+/// that says that. Writing `0` there would be a claim.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MarketRowVm {
+    pub name: String,
+    /// The i-address, so a row can be opened without matching on its name.
+    pub address: String,
+    /// In the fiat the wallet prices against, or `"—"`.
+    pub price: String,
+    /// Signed and suffixed, or `"—"`.
+    pub change: String,
+    /// "positive" · "negative" · "unknown". Chooses the colour, and is not
+    /// derived from `change` starting with a minus — a dash is neither.
+    pub tone: String,
+    /// What could be taken out before the price moves 2%. The one number on
+    /// this screen that says whether the others can be acted on.
+    pub depth: String,
+}
+
+/// One pool a currency trades in.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VenueVm {
+    pub name: String,
+    /// "active" · "unstarted" · "empty", in the vocabulary the node list uses.
+    pub state: String,
+    pub price: String,
+    pub change: String,
+    pub tone: String,
+    pub depth: String,
+}
+
+/// One labelled figure on the currency detail.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StatVm {
+    pub label: String,
+    pub value: String,
+}
+
+/// The right-hand half of the markets screen: one currency, in detail.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MarketDetailVm {
+    pub name: String,
+    /// "Verus · PoW/PoS · 7 venues" — what it is, in one line.
+    pub subtitle: String,
+    pub price: String,
+    pub change: String,
+    pub tone: String,
+    pub stats: Vec<StatVm>,
+    pub venues: Vec<VenueVm>,
+    /// How the price was arrived at, as a chain of hops. On a wallet whose
+    /// prices are derived from conversion routes rather than taken from a feed,
+    /// this is not decoration: it is the difference between a number somebody
+    /// can check and one they have to trust.
+    pub route: String,
+    /// Which hop is the constraint, and why. Empty when there is no route.
+    pub route_note: String,
+}
+
 /// One thing the search found.
 ///
 /// # Why the search runs in the core

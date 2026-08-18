@@ -39,10 +39,11 @@ pub use models::{
     CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm, CurrencyProblemVm,
     CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
-    LaunchReviewVm, ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm,
+    LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm,
+    PendingVm, PortfolioVm,
     PreallocationDraft, Reachability, RegistrationVm, ReserveDraft, ReviewOutputVm, ScreenId,
-    SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm,
-    TxDirection,
+    SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, StatVm, TaskKind,
+    TxDetailVm, TxDirection, VenueVm,
     WalletVm,
 };
 pub use secret::Secret;

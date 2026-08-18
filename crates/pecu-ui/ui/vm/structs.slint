@@ -113,6 +113,39 @@ export struct ToastRow {
 }
 
 // One VerusID in the list.
+// One currency in the markets table. Mirrors `MarketRowVm`.
+//
+// Every figure is a formatted string rather than a number: the core owns how
+// money is spelled, and `—` is a value the interface has to be able to show.
+// There is no number that means "the wallet does not know".
+export struct MarketRow {
+    name: string,
+    address: string,
+    price: string,
+    change: string,
+    // "positive" | "negative" | "unknown" — chooses the colour, and is not
+    // inferred from the sign, because a dash has no sign.
+    tone: string,
+    // What could be taken out before the price moves 2%.
+    depth: string,
+}
+
+// One pool a currency trades in. Mirrors `VenueVm`.
+export struct Venue {
+    name: string,
+    state: string,
+    price: string,
+    change: string,
+    tone: string,
+    depth: string,
+}
+
+// One labelled figure on the currency detail. Mirrors `StatVm`.
+export struct Stat {
+    label: string,
+    value: string,
+}
+
 // One result in the command palette. Mirrors `SearchHitVm`.
 export struct SearchHit {
     // "identity" | "currency" — chooses the icon and the screen to open.

@@ -22,10 +22,134 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
-    IdentityRow, IdentityState, KeyRow, KnownAddressRow, NetworkState, NodeRow, PendingRow,
+    IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState, NetworkState,
+    NodeRow, PendingRow,
     PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState, SeedWord,
-    SendState, TxState, WalletState,
+    SendState, Stat, TxState, Venue, WalletState,
 };
+
+/// The markets table, with nothing picked.
+///
+/// # These figures are invented
+///
+/// Every price, delta and depth here is written down rather than derived — the
+/// core does not price anything yet. They are chosen to exercise the states the
+/// screen has to survive rather than to look plausible: two currencies with no
+/// price at all, one that has not moved, and one down.
+///
+/// `—` is the case worth having a picture of. A currency with no converter has
+/// no price, and there is no number that says so.
+pub fn markets(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("markets".into());
+
+    let state = ui.global::<MarketState>();
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        MarketRow {
+            name: "VRSCTEST".into(),
+            address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
+            price: "$0.54".into(),
+            change: "+4.2%".into(),
+            tone: "positive".into(),
+            depth: "$412K".into(),
+        },
+        MarketRow {
+            name: "Bridge.vETH".into(),
+            address: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
+            price: "$14.86".into(),
+            change: "-1.3%".into(),
+            tone: "negative".into(),
+            depth: "$96K".into(),
+        },
+        MarketRow {
+            name: "DAI.vETH".into(),
+            address: "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".into(),
+            price: "$1.00".into(),
+            change: "+0.0%".into(),
+            // Flat is not a gain. It gets the neutral tone, which is the whole
+            // reason `tone` is carried rather than read off the sign.
+            tone: "unknown".into(),
+            depth: "$1.1M".into(),
+        },
+        MarketRow {
+            name: "kneipe".into(),
+            address: "iCCC1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            price: "—".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "—".into(),
+        },
+        MarketRow {
+            name: "demo.VRSCTEST".into(),
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            price: "—".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "—".into(),
+        },
+    ]))));
+}
+
+/// One currency picked, so the detail half has something in it.
+pub fn market_detail(ui: &AppWindow) {
+    markets(ui);
+
+    let state = ui.global::<MarketState>();
+    state.set_selected("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
+    state.set_detail_name("VRSCTEST".into());
+    state.set_detail_subtitle("Verus · PoW/PoS · 3 venues".into());
+    state.set_detail_price("$0.54".into());
+    state.set_detail_change("▲ +4.2% (24h)".into());
+    state.set_detail_tone("positive".into());
+    state.set_detail_stats(ModelRc::from(Rc::new(VecModel::from(vec![
+        Stat {
+            label: "Market cap".into(),
+            value: "$40.3M".into(),
+        },
+        Stat {
+            label: "Supply".into(),
+            value: "74.6M".into(),
+        },
+        Stat {
+            label: "Pooled".into(),
+            value: "$8.4M".into(),
+        },
+        Stat {
+            label: "Exit @2%".into(),
+            value: "$412K".into(),
+        },
+    ]))));
+    state.set_detail_venues(ModelRc::from(Rc::new(VecModel::from(vec![
+        Venue {
+            name: "Bridge.vETH".into(),
+            state: "active".into(),
+            price: "$0.54".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "$310K".into(),
+        },
+        Venue {
+            name: "Bridge.vARRR".into(),
+            state: "active".into(),
+            price: "$0.53".into(),
+            change: "-0.9%".into(),
+            tone: "negative".into(),
+            depth: "$64K".into(),
+        },
+        Venue {
+            name: "Pure".into(),
+            state: "active".into(),
+            price: "$0.55".into(),
+            change: "+0.9%".into(),
+            tone: "positive".into(),
+            depth: "$28K".into(),
+        },
+    ]))));
+    state.set_detail_route("DAI.vETH → Bridge.vETH → VRSCTEST".into());
+    state.set_detail_route_note(
+        "Thinnest hop limits the route: Bridge.vETH ($310K @2%)".into(),
+    );
+}
 
 /// The command palette, open over the dashboard with results.
 ///
