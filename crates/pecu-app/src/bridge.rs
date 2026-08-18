@@ -1067,6 +1067,8 @@ fn activity_row(row: &HistoryRowVm) -> ActivityRow {
         pending: row.pending,
         height: i32::try_from(row.height).unwrap_or(i32::MAX),
         group: row.group.clone().into(),
+        kind: row.kind.clone().into(),
+        note: row.note.clone().into(),
     }
 }
 

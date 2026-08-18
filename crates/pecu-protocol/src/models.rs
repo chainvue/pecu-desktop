@@ -798,6 +798,34 @@ pub struct HistoryRowVm {
     /// and because a calendar day is a fact about a timezone, not about a list.
     pub group: String,
     pub pending: bool,
+    /// "payment" · "convert" · "login" · "identity".
+    ///
+    /// What sort of thing happened, which is what the filters act on. Carried
+    /// rather than inferred from the amount: a declined login and an identity
+    /// update both move nothing, and telling them apart by their emptiness is
+    /// not telling them apart.
+    ///
+    /// Only `payment` is produced today. The other three are the shapes the
+    /// design's history has, and they arrive when the features behind them do
+    /// — a login needs VDXF consent, a convert needs the conversion flow, and
+    /// an identity action needs `getidentityhistory` folded into this list.
+    ///
+    /// `serde(default)` because this list is **cached on disk**, and a snapshot
+    /// written before this field existed has no key for it.
+    /// `Store::load_snapshot` deserialises with `.ok()?`, so a missing field
+    /// does not fail loudly — it silently discards the whole cached history and
+    /// every existing wallet comes up empty until it has re-read the chain.
+    #[serde(default)]
+    pub kind: String,
+    /// The line under the title: what this was, in the words of the thing it
+    /// was. "via Bridge.vETH", "as robert.VRSCTEST@", "Recovery address
+    /// changed". Empty when the time alone says enough.
+    ///
+    /// **Not the counterparty for a payment.** History is read from address
+    /// deltas and a delta names nobody — that is a property of how the chain is
+    /// queried, not an omission here.
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

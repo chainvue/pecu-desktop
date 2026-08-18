@@ -79,6 +79,14 @@ fn row(index: usize) -> ActivityRow {
         height: 1_000_000 - i32::try_from(index).unwrap_or(0),
         // A day heading every twentieth row, so the taller variant of the row
         // is represented rather than measuring the cheapest one.
+        kind: "payment".into(),
+        // A subtitle on every fifth row, so the measurement includes the row
+        // that has one rather than only the cheapest shape.
+        note: if index.is_multiple_of(5) {
+            "via Bridge.vETH".into()
+        } else {
+            "".into()
+        },
         group: if index.is_multiple_of(20) {
             "13 August"
         } else {

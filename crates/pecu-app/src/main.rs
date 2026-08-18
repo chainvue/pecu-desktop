@@ -300,6 +300,7 @@ fn home_dir() -> PathBuf {
 /// so the surface worth reviewing closely is two short functions rather than a
 /// search through one long one.
 fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
+    wire_history(ui, dispatcher.clone());
     wire_search(ui, dispatcher.clone());
     wire_wallet(ui, dispatcher.clone());
     wire_backup(ui, &dispatcher);
@@ -1177,6 +1178,20 @@ fn wire_identity_writes(ui: &AppWindow, dispatcher: &Dispatcher) {
 /// already at the length where a reader stops holding the whole thing in their
 /// head — and this is the one part of the shell that talks to the core on every
 /// keystroke, so it is worth being able to find.
+/// The history filter.
+///
+/// One line of wiring, and it is in the core for a reason worth keeping in view:
+/// a `ListView` cannot skip rows, and paging a filtered list is a question only
+/// the side holding the list can answer. See `Command::SetHistoryFilter`.
+fn wire_history(ui: &AppWindow, dispatcher: Dispatcher) {
+    let activity = ui.global::<pecu_ui::ActivityState>();
+    activity.on_filter_changed(move |kind| {
+        dispatcher.send(Command::SetHistoryFilter {
+            kind: kind.to_string(),
+        });
+    });
+}
+
 fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
     let search = ui.global::<pecu_ui::SearchState>();
 

@@ -461,7 +461,7 @@ impl Reading {
         let Ok(entries) = &self.history else {
             return Vec::new();
         };
-        rows_from(entries, &self.names, now)
+        rows_from(entries, &self.names, now, "all")
     }
 }
 
@@ -474,10 +474,17 @@ impl Reading {
 /// everything already on screen: a day heading is a statement about the row
 /// above, and appending a page without redoing them would print "Yesterday"
 /// twice.
+/// `kind` keeps only rows of that kind; `"all"` keeps everything.
+///
+/// Applied **before** the heading pass below, which is the only place it can go.
+/// The day headings are assigned by comparing each row with the one before it,
+/// so filtering afterwards would strand a heading on a row that was removed and
+/// leave the next day without one.
 pub fn rows_from(
     entries: &[HistoryEntry],
     names: &BTreeMap<CurrencyId, String>,
     now: i64,
+    kind: &str,
 ) -> Vec<HistoryRowVm> {
     // `net_currencies` is keyed by i-address and `names` by `CurrencyId`, so
     // the two need bridging before a row can say "mambo" instead of a fragment
@@ -491,6 +498,7 @@ pub fn rows_from(
         .iter()
         .rev()
         .map(|entry| row(entry, now, &by_address))
+        .filter(|row| kind == "all" || row.kind == kind)
         .collect();
 
     // The heading goes on the first row of each day. Done after the rows
@@ -669,6 +677,14 @@ fn row(entry: &HistoryEntry, now: i64, named: &BTreeMap<String, String>) -> Hist
         // Filled in by `rows`, which can see the row before this one.
         group: String::new(),
         pending: entry.height == 0,
+        // Everything this path produces is a payment. It reads address deltas,
+        // and a delta is money moving — a login, a conversion or an identity
+        // action reaches this list from somewhere that does not exist yet.
+        kind: "payment".to_string(),
+        // And for the same reason there is nothing to put here: a delta names
+        // no counterparty, so the honest subtitle is the time, which the row
+        // already carries.
+        note: String::new(),
     }
 }
 

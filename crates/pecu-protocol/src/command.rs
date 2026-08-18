@@ -369,6 +369,17 @@ pub enum Command {
         /// Matched against name and i-address, ignoring case.
         query: String,
     },
+    /// Which kind of history row to show: `"all"`, `"payment"`, `"convert"`,
+    /// `"login"`, `"identity"`.
+    ///
+    /// In the core rather than the interface, and not by preference. A
+    /// `ListView` needs exactly one element per model row to page at all, so a
+    /// conditional row breaks it — measured, by breaking it. And the filter and
+    /// the paging are the same question anyway: "load older" reads the next
+    /// window of blocks, not the next twenty rows of a kind.
+    SetHistoryFilter {
+        kind: String,
+    },
     /// Build and sign the launch. Nothing is sent — the review that follows is
     /// decoded from the transaction this produced.
     PrepareLaunch(CurrencyDraft),

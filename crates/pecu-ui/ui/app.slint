@@ -581,6 +581,34 @@ export global ChartState {
 }
 
 // What the wallet has said and nobody has read yet.
+// The history screen's own state: what is being looked at, and the summary
+// above it.
+//
+// # Why the filtering is not done here
+//
+// It was, briefly, and it did not work. Equality against `kind` is something
+// `.slint` can express — unlike the substring test the palette needed — so the
+// first attempt hid non-matching rows with `visible` and a zeroed height. A
+// `ListView` places its items by their preferred height, so every row collapsed
+// onto the one before it and six rows drew in two slots. That is not a bug in
+// the trick; it is what virtualisation means.
+//
+// The core filters and re-sends the list. That is where it belonged regardless:
+// filtering and **paging** are one question, because "load older" reads the next
+// window of blocks rather than the next twenty rows of a kind, and only the side
+// holding the list can reconcile the two.
+export global ActivityState {
+    // "all" | "payment" | "convert" | "login" | "identity"
+    //
+    // What the chips show. The **core** does the filtering — this is the echo,
+    // so the pressed chip does not wait for a round trip to look pressed.
+    in-out property <string> filter: "all";
+    callback filter-changed(string);
+    // The summary strip. Four figures the core does not compute yet — see the
+    // fixtures, which invent them.
+    in property <[Stat]> stats: [];
+}
+
 // Converting one currency into another.
 //
 // # Shape now, arithmetic later
@@ -3472,7 +3500,17 @@ component SettingsScreen inherits VerticalLayout {
 component ActivityRowItem inherits VerticalLayout {
     in property <ActivityRow> entry;
     // Mined, and therefore in a block with a time and a depth.
-    property <bool> settled: !root.entry.pending && root.entry.height > 0;
+    // Whether this happened on the chain at all.
+    //
+    // A **login did not**. It is a signature over a challenge; it never reaches
+    // a block. So it is neither confirmed nor unconfirmed, and the row says
+    // neither — the first attempt at this made it "unconfirmed" in warning
+    // colour, which is a worse falsehood than the "101 confirmations" it was
+    // fixing. Conversions and identity actions are real transactions and keep
+    // their count.
+    property <bool> on-chain: root.entry.kind != "login";
+    // Mined, and therefore in a block with a time and a depth.
+    property <bool> settled: root.on-chain && !root.entry.pending && root.entry.height > 0;
     // Depth, guarded and capped.
     //
     // Guarded because a tip that is briefly behind a block — during a reorg, or
@@ -3501,13 +3539,27 @@ component ActivityRowItem inherits VerticalLayout {
     }
 
     ListRow {
-        glyph: root.entry.direction == "in" ? "↓" : root.entry.direction == "out" ? "↑" : "↔";
-        glyph-tone: root.entry.direction == "in" ? Theme.positive
+        // The kind chooses the mark, and the direction only decides which way
+        // a payment points. A login and an identity action move nothing, so
+        // reading their mark off the direction would draw them all identically.
+        glyph: root.entry.kind == "login" ? "✓"
+            : root.entry.kind == "identity" ? "◇"
+            : root.entry.kind == "convert" ? "↔"
+            : root.entry.direction == "in" ? "↓"
+            : root.entry.direction == "out" ? "↑"
+            : "↔";
+        glyph-tone: root.entry.kind == "login" ? Theme.accent
+            : root.entry.kind == "identity" ? Theme.warning
+            : root.entry.kind == "convert" ? Theme.text-secondary
+            : root.entry.direction == "in" ? Theme.positive
             : root.entry.direction == "out" ? Theme.negative
             : Theme.text-secondary;
-        title: root.entry.direction == "in" ? "Received"
-            : root.entry.direction == "out" ? "Sent"
-            : "Moved";
+        title: root.entry.kind == "login" ? @tr("Signed in")
+            : root.entry.kind == "identity" ? @tr("Identity updated")
+            : root.entry.kind == "convert" ? @tr("Converted")
+            : root.entry.direction == "in" ? @tr("Received")
+            : root.entry.direction == "out" ? @tr("Sent")
+            : @tr("Moved");
         // When, not which transaction.
         //
         // This line used to carry the abbreviated txid, and it made every row
@@ -3523,7 +3575,12 @@ component ActivityRowItem inherits VerticalLayout {
         // The chain has nothing better to offer here. The history comes from
         // address deltas, and a delta names no counterparty: putting "to
         // robert@" on this line would cost a `getrawtransaction` per row.
-        subtitle: root.settled ? root.entry.when : "";
+        // What this was, when there is something to say — otherwise when it
+        // happened. Never both: two facts in a subtitle is a subtitle nobody
+        // reads either half of.
+        subtitle: root.entry.note != "" ? root.entry.note
+            : root.settled ? root.entry.when
+            : "";
         interactive: true;
         clicked => { Actions.open-tx(root.entry.txid); }
 
@@ -3546,8 +3603,8 @@ component ActivityRowItem inherits VerticalLayout {
                     color: Theme.text-disabled;
                     horizontal-alignment: right;
                 }
-                if !root.settled: Text {
-                    text: "unconfirmed";
+                if root.on-chain && !root.settled: Text {
+                    text: @tr("unconfirmed");
                     font-size: Typo.caption;
                     color: Theme.warning;
                     horizontal-alignment: right;
@@ -6959,13 +7016,65 @@ component ActivityScreen inherits VerticalLayout {
     max-width: Sp.content-max;
     spacing: Sp.s5;
 
+    // The summary, above the filters, because it describes the whole list
+    // rather than the slice being looked at.
+    if ActivityState.stats.length > 0: HorizontalLayout {
+        spacing: Sp.s4;
+        for stat in ActivityState.stats: Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: Sp.s4;
+                spacing: Sp.s1;
+                Text {
+                    text: stat.label;
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                }
+                Text {
+                    text: stat.value;
+                    font-family: Typo.mono;
+                    font-size: Typo.num;
+                    font-weight: Typo.w-bold;
+                    color: Theme.text-primary;
+                }
+            }
+        }
+    }
+
+    // The filters. Present for kinds this wallet cannot produce yet, and that
+    // is deliberate rather than sloppy: the rail makes the same promise about
+    // screens that are coming, and a filter list that grew as features landed
+    // would move under somebody's hand every release.
+    HorizontalLayout {
+        alignment: start;
+        Segmented {
+            // Wide enough for its five labels. Left to hug its contents the
+            // control squeezed them into an unreadable run.
+            width: 420px;
+            options: [@tr("All"), @tr("Payments"), @tr("Converts"), @tr("Logins"), @tr("Identity")];
+            index: ActivityState.filter == "payment" ? 1
+                : ActivityState.filter == "convert" ? 2
+                : ActivityState.filter == "login" ? 3
+                : ActivityState.filter == "identity" ? 4
+                : 0;
+            changed(i) => {
+                ActivityState.filter = i == 1 ? "payment"
+                    : i == 2 ? "convert"
+                    : i == 3 ? "login"
+                    : i == 4 ? "identity"
+                    : "all";
+                ActivityState.filter-changed(ActivityState.filter);
+            }
+        }
+    }
+
     if WalletState.history.length == 0 && !WalletState.loading: Card {
         VerticalLayout {
             padding: Sp.s11;
             EmptyState {
                 glyph: "○";
-                title: "No transactions yet";
-                body: "Everything this wallet has ever sent or received appears here.";
+                title: @tr("No transactions yet");
+                body: @tr("Everything this wallet has ever sent or received appears here.");
             }
         }
     }
@@ -6993,6 +7102,13 @@ component ActivityScreen inherits VerticalLayout {
             // computed in core, which can see the row before this one — so this
             // stays one flat model rather than a tree the list cannot page.
             list := ListView {
+                // One element per row, unconditionally.
+                //
+                // The filter was here first — `visible` plus a zeroed height —
+                // and it did not work: a `ListView` positions its items from
+                // their preferred height, so a conditional one made every row
+                // draw on top of the last. The list arrives filtered from the
+                // core now. See `Command::SetHistoryFilter`.
                 for item in WalletState.history: ActivityRowItem {
                     entry: item;
                 }

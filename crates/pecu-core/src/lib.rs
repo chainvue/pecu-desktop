@@ -127,6 +127,7 @@ pub fn start(
         last_draft: pecu_protocol::SendDraft::default(),
         identities: std::collections::BTreeMap::new(),
         currencies: Vec::new(),
+        history_filter: "all".to_string(),
         eligible: Vec::new(),
         launch_fees: None,
         currency_catalog: Catalog::Unasked,
@@ -233,6 +234,13 @@ struct Core {
     /// re-read on every emission because the walk costs one request per
     /// identity.
     currencies: Vec<pecu_protocol::CurrencyVm>,
+    /// Which kind of history row is being looked at. `"all"` by default.
+    ///
+    /// Held here rather than in the interface because filtering and **paging**
+    /// are the same question: "load older" fetches the next window of blocks,
+    /// and how many rows of a given kind that yields is something only the side
+    /// holding the list can answer.
+    history_filter: String,
     eligible: Vec<pecu_protocol::EligibleIdentityVm>,
     /// What a launch costs on this chain, once it has been asked. See
     /// `ensure_launch_fees`.
@@ -1172,7 +1180,7 @@ impl Core {
 
         store.save_snapshot(
             portfolio,
-            &portfolio::rows_from(&self.history.entries, &self.cached.names, now()),
+            &portfolio::rows_from(&self.history.entries, &self.cached.names, now(), "all"),
             now(),
         );
 
@@ -1288,6 +1296,10 @@ impl Core {
                 self.search_currencies(query, exclude);
             }
             Command::Search { query } => self.search(&query),
+            Command::SetHistoryFilter { kind } => {
+                self.history_filter = kind;
+                self.emit_history();
+            }
             Command::PrepareLaunch(draft) => self.prepare_launch(&draft),
             Command::StartCurrencyFromNewName {
                 revocation_authority,
@@ -1633,7 +1645,8 @@ impl Core {
     /// hundred rows and carries no in-flight transitions, so there is nothing
     /// for a delta to protect.
     fn emit_history(&self) {
-        let rows = portfolio::rows_from(&self.history.entries, &self.cached.names, now());
+        let rows =
+            portfolio::rows_from(&self.history.entries, &self.cached.names, now(), &self.history_filter);
         let _ = self.events.send(Event::History {
             key: String::new(),
             delta: pecu_protocol::ListDelta::Replace(rows),

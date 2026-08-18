@@ -24,8 +24,8 @@ use crate::{
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
     ConvertState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState,
     NetworkState, NodeRow, PendingRow,
-    PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState, SeedWord,
-    SendState, Stat, TxState, Venue, WalletState,
+    ActivityState, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState,
+    SeedWord, SendState, Stat, TxState, Venue, WalletState,
 };
 
 /// A conversion being priced.
@@ -96,6 +96,74 @@ pub fn converting_refused(ui: &AppWindow) {
             .into(),
     );
     state.set_ready(false);
+}
+
+/// The history screen with every kind of row on it.
+///
+/// Three of the four kinds cannot be produced by this wallet — see
+/// `activity_of`. They are here so the filters, the marks and the subtitles are
+/// settled and photographed before the features behind them land, rather than
+/// being designed in a hurry on the day they do.
+pub fn history(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("activity".into());
+
+    let wallet = ui.global::<WalletState>();
+    wallet.set_history(ModelRc::from(Rc::new(VecModel::from(vec![
+        dated("in", "+120.0000 0000", "14:02", "Today", 1_187_400),
+        activity_of(
+            "login",
+            "forum.verus.io · as robert.VRSCTEST@",
+            "—",
+            "13:40",
+            "",
+        ),
+        dated("out", "−50.0000 0000", "11:38", "", 1_187_380),
+        activity_of(
+            "convert",
+            "250 VRSCTEST → 134.12 DAI.vETH · via Bridge.vETH",
+            "250.0000 0000",
+            "09:15",
+            "",
+        ),
+        activity_of(
+            "identity",
+            "Recovery address changed",
+            "—",
+            "08:05",
+            "Yesterday",
+        ),
+        dated("in", "+5.0000 0000", "pending", "", 0),
+    ]))));
+
+    // Invented, like every other summary figure in this build. The core counts
+    // none of these yet.
+    ui.global::<ActivityState>()
+        .set_stats(ModelRc::from(Rc::new(VecModel::from(vec![
+            Stat {
+                label: "Transactions · 30d".into(),
+                value: "48".into(),
+            },
+            Stat {
+                label: "Sent · 30d".into(),
+                value: "3 410.00".into(),
+            },
+            Stat {
+                label: "Received · 30d".into(),
+                value: "5 102.00".into(),
+            },
+            Stat {
+                label: "Sign-ins · 30d".into(),
+                value: "12".into(),
+            },
+        ]))));
+}
+
+/// The same list with one filter applied, which is the state the filters exist
+/// for and the one that shows what they do to a short list.
+pub fn history_filtered(ui: &AppWindow) {
+    history(ui);
+    ui.global::<ActivityState>().set_filter("payment".into());
 }
 
 /// The markets table, with nothing picked.
@@ -791,6 +859,29 @@ fn activity_in(
         pending,
         height: 0,
         group: group.into(),
+        kind: "payment".into(),
+        note: "".into(),
+    }
+}
+
+/// A row that is not a payment: a login, an identity action, a conversion.
+///
+/// None of these can be produced by this wallet yet — history is read from
+/// address deltas, and none of the three is one. They exist so the filters and
+/// the row styling have something to be photographed against, and so the shapes
+/// are settled before the features arrive.
+fn activity_of(kind: &str, note: &str, amount: &str, when: &str, group: &str) -> ActivityRow {
+    ActivityRow {
+        txid: "fixture-not-a-real-transaction".into(),
+        txid_short: "fixtu…ction".into(),
+        direction: "self".into(),
+        amount: amount.into(),
+        when: when.into(),
+        pending: false,
+        height: 1_187_400,
+        group: group.into(),
+        kind: kind.into(),
+        note: note.into(),
     }
 }
 

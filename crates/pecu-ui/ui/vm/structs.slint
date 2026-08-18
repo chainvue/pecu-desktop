@@ -351,6 +351,15 @@ export struct ActivityRow {
     // single `tip` property, so a new block updates one integer instead of
     // rewriting every row.
     height: int,
+    // "payment" | "convert" | "login" | "identity" — what the filters act on.
+    // Carried rather than inferred: a declined login and an identity update
+    // both move nothing, and telling those apart by their emptiness is not
+    // telling them apart.
+    kind: string,
+    // The line under the title. "via Bridge.vETH", "as robert.VRSCTEST@".
+    // Never the counterparty of a payment: history comes from address deltas
+    // and a delta names nobody.
+    note: string,
     // Non-empty when this row starts a new day: the heading to draw above it.
     // Computed in core, which can see the row before this one — something a
     // `for` loop over a model cannot.
