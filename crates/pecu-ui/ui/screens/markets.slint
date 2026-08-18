@@ -1,7 +1,7 @@
 // What things are worth, and where they trade.
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Card, EmptyState, Eyebrow, Segmented, StatusPill } from "../components/base.slint";
+import { Card, EmptyState, Eyebrow, StatusPill } from "../components/base.slint";
 import { MarketRow } from "../vm/structs.slint";
 import { MarketState } from "../vm/state.slint";
 
@@ -78,12 +78,16 @@ export component MarketRowItem inherits Rectangle {
 
 // Markets: every currency on the left, one of them in detail on the right.
 //
-// # The figures are fixtures
+// # Every figure here is derived
 //
-// Drawn, not derived. Deriving them is real work against the chain and is
-// deliberately not here yet — see `MarketState`. What this commit fixes is the
-// shape and the conventions, which is what makes real figures safe to drop in
-// later.
+// The prices come from reserve state the chain publishes, divided out in
+// `pecu-core`'s `market` module and checked against the node's own conversion
+// estimate. Nothing on this screen is drawn.
+//
+// Two things are honestly absent, and the screen is built to say so rather than
+// to fill them: the 24-hour change, because the SDK cannot ask for a price at a
+// past height, and a price chart, for the same reason. Both show `—`, which is
+// what the convention line at the bottom of the table is there to explain.
 export component MarketsScreen inherits HorizontalLayout {
     spacing: Sp.s7;
 
@@ -92,7 +96,11 @@ export component MarketsScreen inherits HorizontalLayout {
         spacing: Sp.s4;
         width: 46%;
 
-        Eyebrow { text: @tr("ALL CURRENCIES"); }
+        Eyebrow {
+            text: MarketState.quote == ""
+                ? @tr("ALL CURRENCIES")
+                : @tr("ALL CURRENCIES · PRICED IN {}", MarketState.quote);
+        }
 
         // The column headings, outside the card, so a long list scrolls under
         // them rather than taking them with it.
@@ -107,6 +115,8 @@ export component MarketsScreen inherits HorizontalLayout {
                 horizontal-stretch: 1;
             }
             Text {
+                // The unit is named above, where there is room for it — at this
+                // width "Price · DAI.vETH" is "Price · DAI.vET".
                 text: @tr("Price");
                 font-size: Typo.micro;
                 color: Theme.text-tertiary;
@@ -143,9 +153,10 @@ export component MarketsScreen inherits HorizontalLayout {
 
         // The convention, said once, where the dashes are.
         Text {
-            text: @tr("— means unknown, not zero.");
+            text: @tr("— means unknown, not zero. Exit @2% is in each row's own currency.");
             font-size: Typo.micro;
             color: Theme.text-tertiary;
+            wrap: word-wrap;
         }
 
         Rectangle { vertical-stretch: 1; }
@@ -207,11 +218,35 @@ export component MarketsScreen inherits HorizontalLayout {
                 }
             }
 
-            // The range. Inert against a fixture, and shown anyway: it is what
-            // says the price above has a period attached to it.
-            Segmented {
-                options: [@tr("1D"), @tr("1W"), @tr("1M"), @tr("1Y"), @tr("Max")];
-                index <=> MarketState.range;
+            // Where the price chart goes, and why it is not here yet.
+            //
+            // This used to be a row of range buttons — 1D, 1W, 1M — with
+            // nothing behind them and no chart under them. A control that does
+            // nothing is a worse answer than no control: it says the wallet
+            // could show you a week of prices and has chosen not to.
+            //
+            // It cannot. A price here is derived from a currency's reserve
+            // state, and reserve state at a past height is `getcurrencystate`
+            // with a block range — which the SDK this wallet is pinned to takes
+            // no argument for. Until that changes there is no series, which is
+            // also why every change column on this screen reads `—`.
+            Card {
+                VerticalLayout {
+                    padding: Sp.s5;
+                    spacing: Sp.s2;
+                    Text {
+                        text: @tr("No price history");
+                        font-size: Typo.body;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-secondary;
+                    }
+                    Text {
+                        text: @tr("Prices are read from reserve state at the tip. Reading it at a past block needs a node call this build cannot make yet, so there is no chart and no 24-hour change.");
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
             }
 
             // The figures.

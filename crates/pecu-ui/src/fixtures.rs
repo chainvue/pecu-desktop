@@ -184,46 +184,71 @@ pub fn markets(ui: &AppWindow) {
 
 /// The table's rows on their own, so the dashboard's markets column can be
 /// filled without pretending the whole markets screen is open.
+///
+/// # Every string here was produced by the code that produces them
+///
+/// Not drawn. These are the exact rows `pecu-core`'s `market::rows` returns for
+/// the scripted chain — the same figures, formatted by the same formatter, in
+/// the same order. That matters because the previous version of this fixture
+/// showed `$0.54`, `+4.2%` and `$412K`, and the wallet has never been able to
+/// produce any of the three: there is no dollar sign on a DAI price, no
+/// 24-hour change the SDK can ask for, and no `K` in the quantity formatter.
+/// A reference image of figures the product cannot emit reviews a screen that
+/// does not exist.
+///
+/// This crate cannot call `market::rows` to check — `pecu-core` is deliberately
+/// not on its dependency list, see `tests/dependency_boundary.rs`. What keeps
+/// the two honest is `pecu-core`'s own `opening_the_markets_screen_prices_the
+/// _chain_currency`, which asserts the same strings against the same script.
 fn market_rows(ui: &AppWindow) {
     let state = ui.global::<MarketState>();
+    state.set_quote("DAI.vETH".into());
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
         MarketRow {
-            name: "VRSCTEST".into(),
-            address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
-            price: "$0.54".into(),
-            change: "+4.2%".into(),
-            tone: "positive".into(),
-            depth: "$412K".into(),
-        },
-        MarketRow {
             name: "Bridge.vETH".into(),
-            address: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
-            price: "$14.86".into(),
-            change: "-1.3%".into(),
-            tone: "negative".into(),
-            depth: "$96K".into(),
+            address: "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2".into(),
+            price: "7.09".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "94.63".into(),
         },
         MarketRow {
             name: "DAI.vETH".into(),
             address: "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".into(),
-            price: "$1.00".into(),
-            change: "+0.0%".into(),
-            // Flat is not a gain. It gets the neutral tone, which is the whole
-            // reason `tone` is carried rather than read off the sign.
-            tone: "unknown".into(),
-            depth: "$1.1M".into(),
-        },
-        MarketRow {
-            name: "kneipe".into(),
-            address: "iCCC1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
-            price: "—".into(),
+            price: "1.00".into(),
             change: "—".into(),
             tone: "unknown".into(),
-            depth: "—".into(),
+            depth: "670.96".into(),
         },
         MarketRow {
-            name: "demo.VRSCTEST".into(),
-            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            name: "MKR.vETH".into(),
+            address: "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL".into(),
+            price: "1 831".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "0.37".into(),
+        },
+        MarketRow {
+            name: "vETH".into(),
+            address: "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm".into(),
+            price: "2 044".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "0.33".into(),
+        },
+        MarketRow {
+            name: "VRSCTEST".into(),
+            address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
+            price: "0.5372".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "1 249".into(),
+        },
+        // Last, because nothing started can price it — which is the same rule
+        // that keeps its five-dollar quote off the row above.
+        MarketRow {
+            name: "Bridge.Betelgeuse".into(),
+            address: "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB".into(),
             price: "—".into(),
             change: "—".into(),
             tone: "unknown".into(),
@@ -233,63 +258,58 @@ fn market_rows(ui: &AppWindow) {
 }
 
 /// One currency picked, so the detail half has something in it.
+///
+/// The same provenance as [`market_rows`]: this is what `market::detail`
+/// returns for VRSCTEST on the scripted chain, field for field.
 pub fn market_detail(ui: &AppWindow) {
     markets(ui);
 
     let state = ui.global::<MarketState>();
     state.set_selected("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
     state.set_detail_name("VRSCTEST".into());
-    state.set_detail_subtitle("Verus · PoW/PoS · 3 venues".into());
-    state.set_detail_price("$0.54".into());
-    state.set_detail_change("▲ +4.2% (24h)".into());
-    state.set_detail_tone("positive".into());
+    state.set_detail_subtitle("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq · 1 of 2 venues trading".into());
+    state.set_detail_price("0.5372".into());
+    state.set_detail_change("—".into());
+    state.set_detail_tone("unknown".into());
     state.set_detail_stats(ModelRc::from(Rc::new(VecModel::from(vec![
         Stat {
-            label: "Market cap".into(),
-            value: "$40.3M".into(),
+            label: "Exit @2% · VRSCTEST".into(),
+            value: "1 249".into(),
         },
         Stat {
-            label: "Supply".into(),
-            value: "74.6M".into(),
+            label: "Venues".into(),
+            value: "1 of 2".into(),
         },
         Stat {
-            label: "Pooled".into(),
-            value: "$8.4M".into(),
-        },
-        Stat {
-            label: "Exit @2%".into(),
-            value: "$412K".into(),
+            label: "Quoted in".into(),
+            value: "DAI.vETH".into(),
         },
     ]))));
     state.set_detail_venues(ModelRc::from(Rc::new(VecModel::from(vec![
         Venue {
             name: "Bridge.vETH".into(),
             state: "active".into(),
-            price: "$0.54".into(),
+            price: "0.5372".into(),
             change: "—".into(),
             tone: "unknown".into(),
-            depth: "$310K".into(),
+            depth: "1 249".into(),
         },
+        // Five dollars where the market says fifty-four cents, because it never
+        // launched. Listed and never priced from — the one row on this screen
+        // that shows why the venue list is worth the space.
         Venue {
-            name: "Bridge.vARRR".into(),
-            state: "active".into(),
-            price: "$0.53".into(),
-            change: "-0.9%".into(),
-            tone: "negative".into(),
-            depth: "$64K".into(),
-        },
-        Venue {
-            name: "Pure".into(),
-            state: "active".into(),
-            price: "$0.55".into(),
-            change: "+0.9%".into(),
-            tone: "positive".into(),
-            depth: "$28K".into(),
+            name: "Bridge.Betelgeuse".into(),
+            state: "unstarted".into(),
+            price: "5.00".into(),
+            change: "—".into(),
+            tone: "unknown".into(),
+            depth: "13.38".into(),
         },
     ]))));
-    state.set_detail_route("DAI.vETH → Bridge.vETH → VRSCTEST".into());
+    state.set_detail_route("VRSCTEST  →  Bridge.vETH  →  DAI.vETH".into());
     state.set_detail_route_note(
-        "Thinnest hop limits the route: Bridge.vETH ($310K @2%)".into(),
+        "Mid price from reserve state notarized at block 1 156 331, before the conversion fee."
+            .into(),
     );
 }
 

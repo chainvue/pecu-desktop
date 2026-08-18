@@ -302,6 +302,7 @@ fn home_dir() -> PathBuf {
 fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_history(ui, dispatcher.clone());
     wire_search(ui, dispatcher.clone());
+    wire_markets(ui, dispatcher.clone());
     wire_wallet(ui, dispatcher.clone());
     wire_backup(ui, &dispatcher);
     wire_send(ui, &dispatcher);
@@ -1192,6 +1193,27 @@ fn wire_history(ui: &AppWindow, dispatcher: Dispatcher) {
     });
 }
 
+/// Picking a row on the markets screen.
+///
+/// The core answers from the book it already holds — no request, so no
+/// debounce and no in-flight state to track here. Selecting is the only thing
+/// this screen can do: the figures on it are read, and everything that would
+/// act on them lives on Convert.
+fn wire_markets(ui: &AppWindow, dispatcher: Dispatcher) {
+    let markets = ui.global::<pecu_ui::MarketState>();
+    let weak = ui.as_weak();
+    markets.on_select(move |address| {
+        // Written here as well as by the reply, so the row highlights on the
+        // click rather than after the round trip through the core. The reply
+        // sets it again to the same value, which is what keeps a selection the
+        // core refused from sticking.
+        if let Some(ui) = weak.upgrade() {
+            ui.global::<pecu_ui::MarketState>().set_selected(address.clone());
+        }
+        dispatcher.send(Command::OpenMarket(address.to_string()));
+    });
+}
+
 fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
     let search = ui.global::<pecu_ui::SearchState>();
 
@@ -1350,6 +1372,7 @@ fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
             "nodes" => ScreenId::Nodes,
             "identities" => ScreenId::Identities,
             "currencies" => ScreenId::Currencies,
+            "markets" => ScreenId::Markets,
             "settings" => ScreenId::Settings,
             _ => ScreenId::Dashboard,
         };

@@ -177,6 +177,25 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Currencies { yours, eligible } => apply_currencies(ui, &yours, &eligible),
 
+        Event::Markets { rows, quote } => {
+            let state = ui.global::<pecu_ui::MarketState>();
+            state.set_quote(quote.into());
+            let rows: Vec<pecu_ui::MarketRow> = rows
+                .iter()
+                .map(|row| pecu_ui::MarketRow {
+                    name: row.name.clone().into(),
+                    address: row.address.clone().into(),
+                    price: row.price.clone().into(),
+                    change: row.change.clone().into(),
+                    tone: row.tone.clone().into(),
+                    depth: row.depth.clone().into(),
+                })
+                .collect();
+            state.set_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        }
+
+        Event::MarketDetail(detail) => apply_market_detail(ui, detail.as_deref()),
+
         Event::SearchHits { query, hits } => {
             let state = ui.global::<pecu_ui::SearchState>();
             // Drop a reply to a query nobody is running any more. Two
@@ -591,6 +610,62 @@ fn close_currency_form(ui: &AppWindow) {
 
 /// Both halves of the currency walk, from one event.
 ///
+/// One currency in detail, or nothing selected.
+///
+/// `None` clears the selection as well as the fields. Leaving `selected` set
+/// while the panel emptied would leave a row highlighted next to a blank half
+/// screen, which reads as a screen that failed rather than as one showing
+/// nothing.
+fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDetailVm>) {
+    let state = ui.global::<pecu_ui::MarketState>();
+
+    let Some(detail) = detail else {
+        state.set_selected(slint::SharedString::new());
+        state.set_detail_name(slint::SharedString::new());
+        state.set_detail_stats(slint::ModelRc::new(slint::VecModel::from(Vec::<
+            pecu_ui::Stat,
+        >::new(
+        ))));
+        state.set_detail_venues(slint::ModelRc::new(slint::VecModel::from(Vec::<
+            pecu_ui::Venue,
+        >::new(
+        ))));
+        return;
+    };
+
+    state.set_detail_name(detail.name.clone().into());
+    state.set_detail_subtitle(detail.subtitle.clone().into());
+    state.set_detail_price(detail.price.clone().into());
+    state.set_detail_change(detail.change.clone().into());
+    state.set_detail_tone(detail.tone.clone().into());
+    state.set_detail_route(detail.route.clone().into());
+    state.set_detail_route_note(detail.route_note.clone().into());
+
+    let figures: Vec<pecu_ui::Stat> = detail
+        .stats
+        .iter()
+        .map(|stat| pecu_ui::Stat {
+            label: stat.label.clone().into(),
+            value: stat.value.clone().into(),
+        })
+        .collect();
+    state.set_detail_stats(slint::ModelRc::new(slint::VecModel::from(figures)));
+
+    let venues: Vec<pecu_ui::Venue> = detail
+        .venues
+        .iter()
+        .map(|venue| pecu_ui::Venue {
+            name: venue.name.clone().into(),
+            state: venue.state.clone().into(),
+            price: venue.price.clone().into(),
+            change: venue.change.clone().into(),
+            tone: venue.tone.clone().into(),
+            depth: venue.depth.clone().into(),
+        })
+        .collect();
+    state.set_detail_venues(slint::ModelRc::new(slint::VecModel::from(venues)));
+}
+
 /// Written together because they arrive together — see `Event::Currencies`. Two
 /// separate handlers would let the list and the picker be repainted a frame
 /// apart, describing wallets a second apart.

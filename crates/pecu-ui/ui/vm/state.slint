@@ -666,6 +666,10 @@ export global ConvertState {
 //     dash has no sign and would otherwise read as a loss.
 export global MarketState {
     in property <[MarketRow]> rows: [];
+    // What every price here is denominated in, by name. Empty until the first
+    // read answers — the column says "Price" alone rather than naming a
+    // currency the wallet has not confirmed the chain has.
+    in property <string> quote: "";
     // Which row the detail is showing, by i-address. Empty means none — a
     // screen that auto-selects the first row answers a question nobody asked
     // and hides the fact that the list is the primary thing here.
@@ -688,10 +692,6 @@ export global MarketState {
     in property <string> detail-route;
     // Which hop is the constraint. Empty when there is no route.
     in property <string> detail-route-note;
-    // The chart range, as an index into the buttons. Interface state: it
-    // decides what gets asked for, and the core has no opinion about which
-    // button looks pressed.
-    in-out property <int> range: 1;
     callback select(string);
 }
 

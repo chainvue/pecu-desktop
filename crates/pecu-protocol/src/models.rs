@@ -1033,6 +1033,10 @@ pub enum ScreenId {
     Send,
     Receive,
     Activity,
+    /// What everything is worth. Like `Nodes` and `Identities`, its being open
+    /// is what justifies the two requests it makes — nothing else on any other
+    /// screen reads a price.
+    Markets,
     /// The node list. Separate from `Settings` because it is the one screen
     /// whose being open justifies asking every configured node a question —
     /// polling endpoints nobody is looking at is asking public infrastructure

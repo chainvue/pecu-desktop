@@ -106,10 +106,38 @@ pub struct MockState {
     /// where every identity had one would never render the picker that offers
     /// the ones that do not.
     pub currencies: BTreeMap<String, CurrencySummary>,
+    /// The fractional currencies this chain can price with, and the reserve
+    /// state each last published. Keyed by converter i-address.
+    ///
+    /// Scripted rather than derived, because there is nothing here to derive
+    /// from: the mock has no reserve pool to run a curve over. What is in it is
+    /// transcribed from what VRSCTEST answers, so the markets screen in a demo
+    /// build shows the arithmetic the real one does on figures the real chain
+    /// published — and a price that came out wrong here would come out wrong
+    /// there.
+    pub converters: BTreeMap<String, CurrencyConverter>,
     /// Latency to simulate on every call, so loading states are reachable.
     pub latency: std::time::Duration,
     /// When set, every read fails with this, so error states are reachable too.
     pub fail_reads: Option<String>,
+}
+
+impl MockState {
+    /// A name or an i-address, as the i-address.
+    ///
+    /// Every scripted answer is keyed by i-address, and callers arrive with
+    /// whichever they have — `getcurrencyconverters` is normally handed names
+    /// and the wallet's own market read is handed the chain id. A mock that
+    /// only matched one of the two would answer nothing for half its callers,
+    /// which reads as an empty market rather than as a missing case.
+    pub fn resolve_currency(&self, name_or_id: &str) -> String {
+        self.currencies
+            .values()
+            .find(|currency| {
+                currency.name == name_or_id || currency.fully_qualified_name == name_or_id
+            })
+            .map_or_else(|| name_or_id.to_string(), |c| c.currency_id.clone())
+    }
 }
 
 impl Default for MockState {
@@ -126,6 +154,7 @@ impl Default for MockState {
             identity_outputs: BTreeMap::new(),
             broadcast_attempts: 0,
             currencies: BTreeMap::new(),
+            converters: BTreeMap::new(),
             latency: std::time::Duration::from_millis(140),
             fail_reads: None,
         }
@@ -217,6 +246,15 @@ impl MockChain {
         const INCOMING: i64 = 500_000_000; // +5.00
 
         let mut state = MockState::default();
+
+        // Before the early return, deliberately. What currencies a chain has
+        // and what they trade at has nothing to do with whose keys are asking —
+        // and this script is built once before the wallet is unlocked, so a
+        // currency list that appeared only for a funded wallet would be a
+        // property of the mock rather than of a chain.
+        seed_currencies(&mut state);
+        seed_converters(&mut state);
+
         let Some(address) = addresses.first() else {
             return Ok(Self::new(state));
         };
@@ -282,8 +320,6 @@ impl MockChain {
 
         seed_identities(&mut state, address);
         seed_launchable_identity(&mut state, address)?;
-        seed_currencies(&mut state);
-
         state.utxos.insert(address.clone(), utxos);
         state.deltas.insert(address.clone(), deltas);
         state.mempool.insert(address.clone(), vec![incoming]);
@@ -561,11 +597,34 @@ impl ChainReader for MockChain {
         self.read(|s| Ok(s.currencies.values().cloned().collect()))
     }
 
-    fn currency_converters(
-        &self,
-        _currencies: &[&str],
-    ) -> Result<Vec<CurrencyConverter>, RpcError> {
-        self.read(|_| Ok(Vec::new()))
+    /// Every scripted pool that trades **all** of the currencies named.
+    ///
+    /// The `all` is what the daemon does and is easy to get wrong in the
+    /// permissive direction: naming two currencies asks which markets can route
+    /// between them, and a mock that answered "any pool touching either" would
+    /// let a routing bug pass here and fail against a node.
+    ///
+    /// An empty list is a real answer. An empty **question** is not — the
+    /// daemon refuses that, and so does this.
+    fn currency_converters(&self, currencies: &[&str]) -> Result<Vec<CurrencyConverter>, RpcError> {
+        self.read(|state| {
+            if currencies.is_empty() {
+                return Err(RpcError::Node {
+                    code: -32602,
+                    message: "Invalid currency or currency not found".to_string(),
+                });
+            }
+            let wanted: Vec<String> = currencies
+                .iter()
+                .map(|name| state.resolve_currency(name))
+                .collect();
+            Ok(state
+                .converters
+                .values()
+                .filter(|converter| wanted.iter().all(|currency| converter.trades(currency)))
+                .cloned()
+                .collect())
+        })
     }
 
     fn estimate_fee(&self, _blocks: u32) -> Result<Option<Amount>, RpcError> {
@@ -1022,6 +1081,155 @@ fn seed_currencies(state: &mut MockState) {
                 options,
                 proof_protocol: 1,
                 definition: serde_json::Value::Null,
+            },
+        );
+    }
+}
+
+/// The chain's traded currencies, and the pools that price them.
+///
+/// # Everything here is transcribed, not invented
+///
+/// The i-addresses, the reserve holdings, the weights and the `priceinreserve`
+/// figures are what `getcurrency Bridge.vETH` and
+/// `getcurrencyconverters ["VRSCTEST"]` answered on VRSCTEST. That matters more
+/// than it looks: the wallet derives a price by dividing two of these figures,
+/// and the derivation was checked against the node's own `estimateconversion`
+/// on exactly this state. Made-up numbers would still divide, and the check
+/// would have been a check of nothing.
+///
+/// **Two pools, one of them unlaunched.** Bridge.Betelgeuse quotes VRSCTEST at
+/// five dollars where the market says fifty-four cents, because it never
+/// started and is still showing the price its initial contributions implied. A
+/// script with one healthy pool would never exercise the rule that keeps that
+/// figure off the table — and that rule is the difference between a price and a
+/// number.
+fn seed_converters(state: &mut MockState) {
+    seed_traded_currencies(state);
+    seed_pools(state);
+}
+
+/// The names behind the i-addresses the pools quote.
+///
+/// Options 32 is a plain token, which is what the bridged ones are; 545 is the
+/// fractional basket.
+fn seed_traded_currencies(state: &mut MockState) {
+    for (name, currency_id, options, start_block) in [
+        (
+            "DAI.vETH",
+            "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh",
+            32_u32,
+            0_u32,
+        ),
+        ("MKR.vETH", "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL", 32, 0),
+        ("vETH", "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm", 136, 0),
+        (
+            "Bridge.vETH",
+            "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
+            545,
+            113_100,
+        ),
+        (
+            "Bridge.Betelgeuse",
+            "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB",
+            545,
+            243_200,
+        ),
+    ] {
+        state.currencies.insert(
+            name.to_string(),
+            CurrencySummary {
+                currency_id: currency_id.to_string(),
+                name: name.split('.').next().unwrap_or(name).to_string(),
+                fully_qualified_name: name.to_string(),
+                parent: Some(state.chain_name.clone()),
+                system_id: state.chain_id.clone(),
+                start_block,
+                end_block: 0,
+                options,
+                proof_protocol: 2,
+                definition: serde_json::Value::Null,
+            },
+        );
+    }
+}
+
+/// The two pools, and the reserve state each last published.
+fn seed_pools(state: &mut MockState) {
+    let vrsctest = state.chain_id.clone();
+    for (id, name, height, prelaunch, supply, reserves) in [
+        (
+            "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
+            "Bridge.vETH",
+            1_156_331_u32,
+            false,
+            14_147.660_833_07_f64,
+            vec![
+                (vrsctest.as_str(), 13.197_904_09, 46_679.867_694_4, 0.25),
+                (
+                    "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh",
+                    7.090_256_43,
+                    25_077.635_817_84,
+                    0.25,
+                ),
+                (
+                    "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL",
+                    0.003_871_42,
+                    13.692_905_8,
+                    0.25,
+                ),
+                (
+                    "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm",
+                    0.003_468_14,
+                    12.266_537_19,
+                    0.25,
+                ),
+            ],
+        ),
+        (
+            "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB",
+            "Bridge.Betelgeuse",
+            243_201,
+            true,
+            100_000.0,
+            vec![
+                (vrsctest.as_str(), 0.02, 500.0, 0.25),
+                ("iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh", 0.1, 2_500.0, 0.25),
+                ("iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm", 0.000_04, 1.0, 0.25),
+            ],
+        ),
+    ] {
+        let entries: Vec<serde_json::Value> = reserves
+            .iter()
+            .map(|(reserve, price, held, weight)| {
+                serde_json::json!({
+                    "currencyid": reserve,
+                    "priceinreserve": price,
+                    "reserves": held,
+                    "weight": weight,
+                })
+            })
+            .collect();
+
+        state.converters.insert(
+            id.to_string(),
+            CurrencyConverter {
+                converter_id: id.to_string(),
+                name: name.to_string(),
+                height,
+                reserves: reserves
+                    .iter()
+                    .map(|(reserve, ..)| (*reserve).to_string())
+                    .collect(),
+                definition: serde_json::Value::Null,
+                last_notarization: serde_json::json!({
+                    "prelaunch": prelaunch,
+                    "currencystate": {
+                        "currencyid": id,
+                        "supply": supply,
+                        "reservecurrencies": entries,
+                    },
+                }),
             },
         );
     }

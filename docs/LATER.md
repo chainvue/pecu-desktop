@@ -387,3 +387,53 @@ the Windows `.ico` at 16 and 24. Everywhere else the real mark is what renders.
 have `render_icon.rs` use them for those two sizes instead of rasterising the
 component. The loop that draws every size is already per-size, so this is a
 branch in one function rather than a new pipeline.
+
+---
+
+## 8. The price chart and the 24-hour change — needs one SDK argument
+
+**Status:** every price on the markets screen is derived and current. Every
+*change* on it reads `—`, there is no chart, and both are the same missing
+argument. Blocked on the SDK, not on the wallet.
+
+**What works.** `market::Book` prices a currency by dividing two `priceinreserve`
+figures out of a converter's last notarization, and the result was checked
+against the daemon: one VRSCTEST derives to `0.53722594` DAI.vETH where
+`estimateconversion` answers `0.53694578` — a 0.052% gap that is the 0.05%
+conversion fee the estimate has already taken off. The arithmetic is right, and
+it is right at the tip.
+
+**Why there is no history.** A price at a past block is that same division over
+reserve state at that block. `getcurrencystate` will answer for a whole range —
+`getcurrencystate "Bridge.vETH" "243000, 243201, 100"` returns one
+`currencystate` per sampled block, each with `blocktime` — which is exactly the
+series both the chart and the change column need. But
+`ChainReader::currency_state` is `fn currency_state(&self, name_or_id: &str)`,
+its implementation is `self.call(Method::GetCurrencyState, json!([name_or_id]))`,
+and there is no way to pass a second parameter: `RpcClient::call` and `call_raw`
+are private, `RequestBody::new` is `pub(crate)`, and `Method` is a closed enum.
+Nothing outside the SDK can construct that request.
+
+**The move.** One method on the trait —
+
+```rust
+fn currency_state_range(
+    &self, name_or_id: &str, from: u32, to: u32, step: u32,
+) -> Result<Vec<(u32, serde_json::Value)>, RpcError>;
+```
+
+— implemented as `json!([name_or_id, format!("{from}, {to}, {step}")])`, plus the
+delegation in `pecu-chain`'s `delegate!` macro and a scripted answer in
+`pecu-mock`. Then `market.rs` gains a `series()` and the screen gains back the
+range buttons it currently does not have, over a real chart.
+
+**Why the buttons are gone rather than disabled.** They shipped inert: `1D`,
+`1W`, `1M`, `1Y`, `Max`, wired to a property nothing read, above an empty half
+screen. A control that does nothing claims the wallet could show you a week of
+prices and has decided not to. The card in their place says what is true, which
+is that the number above it has no period attached to it yet.
+
+**Scope note.** This also unblocks the sparkline the design puts on the markets
+detail, and it is the only thing standing between the change column and a
+colour — `tone` is already carried per row rather than inferred from a sign, so
+nothing above the data layer has to change when the series arrives.

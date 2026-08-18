@@ -379,25 +379,42 @@ export component MarketsPanel inherits Card {
             }
         }
 
+        // Four, not all of them. VRSCTEST prices around fifty currencies and a
+        // dashboard column is not a table — the rows arrive priced-first, so
+        // this is the part of the list that says something.
+        //
+        // Four rather than six because this column sits beside two others and
+        // has no scroll of its own: six ran the card off the bottom of the
+        // window at the size every reference image is taken at.
+        //
         // No glyph. Every row would carry the same one, which is decoration
         // rather than information — and it is 46px of a column narrow enough
         // that it was truncating the names instead.
-        for row in MarketState.rows: ListRow {
-            title: row.name;
-            subtitle: row.price;
-            interactive: false;
+        //
+        // The wrapper is not decoration. Slint's `for` body must be an element,
+        // so `for … : if …` does not parse; a layout that holds the row or
+        // holds nothing is how a repeater gets a conditional, and an empty one
+        // contributes no height as long as it is told not to stretch.
+        for row[index] in MarketState.rows: VerticalLayout {
+            vertical-stretch: 0;
 
-            HorizontalLayout {
-                alignment: end;
-                Text {
-                    text: row.change;
-                    font-family: Typo.mono;
-                    font-size: Typo.num-sm;
-                    // Carried, not read off the sign — `—` has none.
-                    color: row.tone == "positive" ? Theme.positive
-                        : row.tone == "negative" ? Theme.negative
-                        : Theme.text-tertiary;
-                    vertical-alignment: center;
+            if index < 4: ListRow {
+                title: row.name;
+                subtitle: row.price;
+                interactive: false;
+
+                HorizontalLayout {
+                    alignment: end;
+                    Text {
+                        text: row.change;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        // Carried, not read off the sign — `—` has none.
+                        color: row.tone == "positive" ? Theme.positive
+                            : row.tone == "negative" ? Theme.negative
+                            : Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
@@ -733,7 +750,11 @@ export component DashboardScreen inherits VerticalLayout {
             spacing: Sp.s4;
             alignment: start;
             horizontal-stretch: 1;
-            Eyebrow { text: @tr("MARKETS"); }
+            Eyebrow {
+                text: MarketState.quote == ""
+                    ? @tr("MARKETS")
+                    : @tr("MARKETS · {}", MarketState.quote);
+            }
             MarketsPanel {}
         }
 

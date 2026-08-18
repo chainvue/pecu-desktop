@@ -71,7 +71,108 @@ pub fn group(digits: &str) -> String {
     out
 }
 
+/// A derived price, to four significant digits.
+///
+/// # Why not the satoshi formatter
+///
+/// Because prices on this chain span eight orders of magnitude — a testnet
+/// basket unit is worth `0.000004` of a dollar and a wrapped bitcoin `5 888` of
+/// them — and one decimal rule cannot serve both. `0.00000400` in a column
+/// reads as zero; `5 887.9122 2600` reads as a balance rather than a price and
+/// claims a precision the reserve ratio it came from does not have.
+///
+/// Four significant digits, then: enough to tell two currencies apart, few
+/// enough that the number is the same width wherever it lands. Trailing zeros
+/// are trimmed, but never past two decimals for a value under a thousand — a
+/// price that renders as `7.09` beside one that renders as `7.1` is two
+/// different columns.
+///
+/// A non-zero value never formats as zero. Below a satoshi — the smallest
+/// thing this chain represents at all — there are no digits left to show, so it
+/// says `< 0.00000001` rather than rounding down to a claim that it is free.
+pub fn price(value: f64) -> String {
+    if !value.is_finite() {
+        return "—".to_string();
+    }
+    let magnitude = value.abs();
+    if magnitude == 0.0 {
+        return "0.00".to_string();
+    }
+
+    // Four significant digits: add decimal places until the value scaled by
+    // them has four digits in front of the point. By multiplication rather than
+    // through a logarithm and a cast — the cast is the part that would be
+    // wrong, silently, at the ends of the range this has to cover.
+    let mut places = 0_usize;
+    let mut scaled = magnitude;
+    while scaled < 1000.0 && places < 8 {
+        scaled *= 10.0;
+        places += 1;
+    }
+    let shown = format!("{magnitude:.places$}");
+
+    // A value too small for four significant digits at eight places rounds to
+    // zero, which is the one thing a price must never say by accident. Eight is
+    // where the chain itself stops, so there is no further place to go to —
+    // what is left to say is that it is smaller than that.
+    if shown.chars().all(|ch| !ch.is_ascii_digit() || ch == '0') {
+        let sign = if value < 0.0 { "−" } else { "" };
+        return format!("{sign}< 0.00000001");
+    }
+
+    let floor = if magnitude >= 1000.0 { 0 } else { 2 };
+    let shown = trim(&shown, floor);
+
+    let (whole, rest) = match shown.split_once('.') {
+        Some((whole, rest)) => (whole, format!(".{rest}")),
+        None => (shown.as_str(), String::new()),
+    };
+    let sign = if value < 0.0 { "−" } else { "" };
+    format!("{sign}{}{rest}", group(whole))
+}
+
+/// A derived quantity, rounded to something a person can compare.
+///
+/// Used for depths and supplies, which are answers to "roughly how much" and
+/// span from a third of one coin to forty million. Whole units above a
+/// thousand, two places below — the fraction of a large depth is noise, and the
+/// fraction of a small one is the whole figure.
+///
+/// **Not for anything anybody can spend.** This rounds, and it takes a float.
+/// Amounts go through [`coins`].
+pub fn approx(value: f64) -> String {
+    if !value.is_finite() {
+        return "—".to_string();
+    }
+    let magnitude = value.abs();
+    let places = if magnitude >= 1000.0 { 0 } else { 2 };
+    let shown = format!("{magnitude:.places$}");
+    let (whole, rest) = match shown.split_once('.') {
+        Some((whole, rest)) => (whole, format!(".{rest}")),
+        None => (shown.as_str(), String::new()),
+    };
+    let sign = if value < 0.0 { "−" } else { "" };
+    format!("{sign}{}{rest}", group(whole))
+}
+
+/// Drop trailing zeros, keeping at least `floor` decimal places.
+fn trim(shown: &str, floor: usize) -> String {
+    let Some((whole, decimals)) = shown.split_once('.') else {
+        return shown.to_string();
+    };
+    let kept = decimals.trim_end_matches('0');
+    let kept = &decimals[..kept.len().max(floor).min(decimals.len())];
+    if kept.is_empty() {
+        whole.to_string()
+    } else {
+        format!("{whole}.{kept}")
+    }
+}
+
 #[cfg(test)]
+// The price cases are the figures VRSCTEST actually quotes, written the way the
+// daemon writes them. Separators would obscure exactly what is being checked.
+#[allow(clippy::unreadable_literal)]
 mod tests {
     use super::*;
 
@@ -121,6 +222,48 @@ mod tests {
             .collect::<String>()
             .parse()
             .unwrap_or_default()
+    }
+
+    /// The figures are the ones VRSCTEST actually quotes, so the widths in
+    /// this list are the widths the markets column has to hold.
+    #[test]
+    fn a_price_keeps_four_significant_digits_at_any_magnitude() {
+        assert_eq!(price(5887.912226), "5 888");
+        assert_eq!(price(2044.397409), "2 044");
+        assert_eq!(price(55.991938), "55.99");
+        assert_eq!(price(7.090256), "7.09");
+        assert_eq!(price(1.0), "1.00");
+        assert_eq!(price(0.537226), "0.5372");
+        assert_eq!(price(0.098340), "0.09834");
+        assert_eq!(price(0.002923), "0.002923");
+    }
+
+    /// The one thing a price may never do is claim something is free.
+    #[test]
+    fn a_price_smaller_than_four_digits_can_show_is_not_rounded_to_nothing() {
+        assert_eq!(price(0.000004), "0.000004");
+        assert_eq!(price(0.00000001), "0.00000001");
+        // Below the smallest unit the chain has. Not zero, and not a rounded
+        // number that would read as one.
+        assert_eq!(price(0.000000001), "< 0.00000001");
+        assert_eq!(price(-0.000000001), "−< 0.00000001");
+    }
+
+    #[test]
+    fn zero_is_a_price_and_infinity_is_not() {
+        assert_eq!(price(0.0), "0.00");
+        assert_eq!(price(f64::NAN), "—");
+        assert_eq!(price(f64::INFINITY), "—");
+        assert_eq!(approx(f64::NAN), "—");
+    }
+
+    #[test]
+    fn a_quantity_is_whole_above_a_thousand_and_exact_below_it() {
+        assert_eq!(approx(0.37), "0.37");
+        assert_eq!(approx(13.38), "13.38");
+        assert_eq!(approx(1248.93), "1 249");
+        assert_eq!(approx(94095.41), "94 095");
+        assert_eq!(approx(40_399_999.56), "40 400 000");
     }
 
     #[test]

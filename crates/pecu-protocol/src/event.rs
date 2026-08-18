@@ -9,7 +9,8 @@ use crate::models::DraftValidationVm;
 use crate::models::{
     ChartVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
-    ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, RegistrationVm, SeedWordVm,
+    ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, PendingVm, PortfolioVm,
+    RegistrationVm, SeedWordVm,
     SearchHitVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
@@ -122,6 +123,23 @@ pub enum Event {
         yours: Vec<CurrencyVm>,
         eligible: Vec<EligibleIdentityVm>,
     },
+    /// Every currency any pool can price, and what it is worth.
+    ///
+    /// Replaces the table wholesale. A delta would be smaller and would also
+    /// have to describe a currency whose price became unknown, which is a state
+    /// no partial update expresses without inventing one.
+    Markets {
+        rows: Vec<MarketRowVm>,
+        /// What every price in `rows` is denominated in, by name.
+        ///
+        /// Carried rather than assumed. The interface has no way to know, the
+        /// currency is resolved from the chain's own list at read time, and a
+        /// column of bare numbers with no unit on it is a price nobody can
+        /// read — `0.5372` of what?
+        quote: String,
+    },
+    /// One currency in full, or `None` when nothing is selected.
+    MarketDetail(Option<Box<MarketDetailVm>>),
     /// What the palette should show. Carries the query it answers, so a reply
     /// that arrives after the person has typed further can be discarded rather
     /// than flickering an older list back onto the screen.

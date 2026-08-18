@@ -36,6 +36,7 @@
 pub mod currency;
 pub mod identity;
 pub mod launch;
+pub mod market;
 pub mod paths;
 pub mod pending;
 pub mod portfolio;
@@ -133,6 +134,10 @@ pub fn start(
         eligible: Vec::new(),
         launch_fees: None,
         currency_catalog: Catalog::Unasked,
+        market: market::Book::default(),
+        market_names: std::collections::BTreeMap::new(),
+        market_open: String::new(),
+        markets: Markets::Unasked,
         pending_currency_search: None,
         launches: std::collections::HashMap::new(),
         intent: launch::Intent::open(paths.launch()),
@@ -218,6 +223,12 @@ fn open_store(paths: &paths::Paths) -> Option<pecu_store::Store> {
     }
 }
 
+// Nine flags on a forty-field actor. The lint is about a struct somebody
+// constructs positionally, where four bools in a row are four chances to swap
+// two of them; this one is private state, built once, in a literal that names
+// every field. Grouping them into a sub-struct would move the names one level
+// further from where they are read and change nothing about the risk.
+#[allow(clippy::struct_excessive_bools)]
 struct Core {
     wallet: Wallet,
     nodes: NodeManager,
@@ -249,6 +260,18 @@ struct Core {
     launch_fees: Option<(verus_sdk::money::Amount, verus_sdk::money::Amount)>,
     /// Every currency the chain knows about — see [`Catalog`].
     currency_catalog: Catalog,
+    /// What every currency is worth, as of the last time somebody looked at
+    /// the markets screen. Held rather than recomputed per question: the table
+    /// and the detail beside it are two views of one set of notarizations, and
+    /// re-fetching for the second would let them quote different blocks.
+    market: market::Book,
+    /// i-address to name, for everything the chain's currency list knows.
+    /// A currency missing from it keeps its i-address on screen.
+    market_names: std::collections::BTreeMap<String, String>,
+    /// Which market row is open, by i-address. Empty means none.
+    market_open: String,
+    /// Whether the markets have been read yet, and whether one is in flight.
+    markets: Markets,
     /// A search that arrived while the catalog was still being fetched, to be
     /// answered when it lands. One, not a queue: they are keystrokes, and only
     /// the last one is still being waited on.
@@ -545,6 +568,23 @@ enum Catalog {
     Ready(Vec<verus_sdk::network::CurrencySummary>),
 }
 
+/// How far the markets read has got, this session.
+///
+/// The same three states as [`Catalog`], and for the same reason — but note
+/// what `Asked` does **not** mean. It means the question was put, not that it
+/// was answered: a read that failed lands here too. That is deliberate. The
+/// alternative is "retry while the book is empty", and the book is empty
+/// exactly when the node is not answering — so every fifteen-second poll would
+/// ask a struggling node the two most expensive questions this wallet has.
+/// Opening the markets screen re-reads regardless, which is the retry a person
+/// can actually ask for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Markets {
+    Unasked,
+    Fetching,
+    Asked,
+}
+
 enum Work {
     Portfolio(Box<portfolio::Reading>),
     /// A payment was built and signed, or the attempt failed.
@@ -671,6 +711,25 @@ enum Work {
     /// Every currency on the chain, or why it could not be asked. Fetched once
     /// per session — see `Core::currency_catalog`.
     CurrencyCatalog(Box<Result<Vec<verus_sdk::network::CurrencySummary>, String>>),
+    /// The markets read: every currency the chain knows, and the pools that
+    /// can price them.
+    ///
+    /// Both in one job because a book assembled from a catalog fetched at one
+    /// moment and reserves fetched at another describes a chain that never
+    /// existed. `Err` for the whole read: unlike the currency walk, there is no
+    /// per-row answer to keep — two failed calls leave nothing to show.
+    #[allow(clippy::type_complexity)]
+    Markets(
+        Box<
+            Result<
+                (
+                    Vec<verus_sdk::network::CurrencySummary>,
+                    Vec<verus_sdk::network::CurrencyConverter>,
+                ),
+                String,
+            >,
+        >,
+    ),
     /// One identity looked up by name or i-address, with everything the detail
     /// sheet needs.
     IdentityDetail {
@@ -1051,6 +1110,17 @@ impl Core {
             move || Work::Portfolio(Box::new(portfolio::read(&chain, &addresses, cached))),
             self.work.clone(),
         );
+
+        // The first prices of the session, from the one place every path that
+        // could want them already passes through: unlocking, creating a wallet,
+        // changing node, changing chain. Every guard above has already been
+        // cleared here — the wallet is unlocked, it has addresses, and the node
+        // is on the chain it was asked for.
+        //
+        // Once, not on every poll. See `Markets::Asked`.
+        if self.markets == Markets::Unasked {
+            self.refresh_markets();
+        }
     }
 
     /// The chain the active node reports, when it is not the one asked for.
@@ -1106,6 +1176,7 @@ impl Core {
             Work::Identities(result) => self.finish_identities(*result),
             Work::Currencies(read) => self.finish_currencies(read),
             Work::CurrencyCatalog(result) => self.finish_currency_catalog(*result),
+            Work::Markets(result) => self.finish_markets(*result),
             Work::LaunchFees(result) => self.finish_launch_fees(*result),
             Work::LaunchPrepared { ticket, result } => {
                 self.finish_launch_prepared(ticket, *result);
@@ -1228,7 +1299,17 @@ impl Core {
             }
             Command::AddNode { url, label } => self.add_node(&url, &label),
             Command::RemoveNode(id) => self.remove_node(id),
-            Command::Refresh(_) => self.refresh(),
+            Command::Refresh(_) => {
+                self.refresh();
+                // Pressing Refresh on the markets screen has to re-read the
+                // prices. `refresh` asks for them once a session and then never
+                // again, which is right for the dashboard's column and wrong
+                // for the screen whose whole content is the answer — without
+                // this, the one button on that screen does nothing visible.
+                if self.polling.screen == pecu_protocol::ScreenId::Markets {
+                    self.refresh_markets();
+                }
+            }
             Command::LoadHistory { .. } => self.load_older_history(),
             Command::LoadTxDetail(txid) => self.load_tx_detail(&txid),
 
@@ -1242,6 +1323,8 @@ impl Core {
             // the day they diverge is the day the currency list is built from a
             // stale identity list.
             Command::RefreshIdentities | Command::RefreshCurrencies => self.refresh_identities(),
+            Command::RefreshMarkets => self.refresh_markets(),
+            Command::OpenMarket(address) => self.open_market(address),
             Command::LookUpIdentity(typed) => self.look_up_identity(&typed),
             Command::SetIdentityAuthorities {
                 address,
@@ -2362,6 +2445,19 @@ impl Core {
         if screen == pecu_protocol::ScreenId::Currencies {
             self.refresh_identities();
             self.ensure_launch_fees();
+        }
+
+        // And the markets, unconditionally — somebody who opened this screen
+        // wants current prices, and it is the only place to ask for them again.
+        //
+        // The dashboard shows the same rows in a column beside the balance and
+        // does **not** appear here: it gets its first read from `refresh`, once
+        // a session. `listcurrencies` is most of half a megabyte on VRSCTEST and
+        // the dashboard is the screen a person passes through on the way to
+        // everything else, so re-fetching on arrival would ask a public node for
+        // the same answer a dozen times an hour.
+        if screen == pecu_protocol::ScreenId::Markets {
+            self.refresh_markets();
         }
     }
 
@@ -3582,6 +3678,181 @@ impl Core {
         if self.polling.screen == pecu_protocol::ScreenId::Currencies {
             self.refresh_currencies();
         }
+    }
+
+    // ── Markets ─────────────────────────────────────────────────────────────
+
+    /// The currency prices are quoted in.
+    ///
+    /// A dollar stablecoin, because "0.5372" means something to a person and
+    /// "13.198 VRSCTEST to the Bridge unit" does not. By **name**, resolved
+    /// through the chain's own currency list rather than by a hardcoded
+    /// i-address: the same name exists on both networks and points at
+    /// different bytes, and a constant here would be right on one of them.
+    const QUOTE: &'static str = "DAI.vETH";
+
+    /// Read the whole book: the chain's currency list, and the pools.
+    ///
+    /// Two `getcurrencyconverters` calls, not one per currency. Asking for the
+    /// converters of the chain's own currency returns nearly every basket on
+    /// the chain — because nearly every basket holds it — and asking for the
+    /// quote currency's picks up the few that do not. Each answer already
+    /// carries the reserves, the weights and the supply, so the price of all
+    /// forty-odd currencies falls out of two replies.
+    fn refresh_markets(&mut self) {
+        if self.markets == Markets::Fetching {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.markets = Markets::Fetching;
+        self.busy(TaskKind::RefreshingBalance, true);
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+
+                let read = (|| {
+                    let native = chain.chain_info().map_err(|e| e.to_string())?.chain_id;
+                    let catalog = chain.list_currencies().map_err(|e| e.to_string())?;
+
+                    let mut converters = chain
+                        .currency_converters(&[native.as_str()])
+                        .map_err(|e| e.to_string())?;
+
+                    // The quote currency's own markets, minus the ones already
+                    // in hand. A pool that holds DAI but not the chain currency
+                    // prices things nothing above would reach.
+                    let seen: std::collections::BTreeSet<String> = converters
+                        .iter()
+                        .map(|entry| entry.converter_id.clone())
+                        .collect();
+                    if let Ok(more) = chain.currency_converters(&[Self::QUOTE]) {
+                        converters.extend(
+                            more.into_iter()
+                                .filter(|entry| !seen.contains(&entry.converter_id)),
+                        );
+                    }
+
+                    Ok((catalog, converters))
+                })();
+
+                Work::Markets(Box::new(read))
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_markets(
+        &mut self,
+        read: Result<
+            (
+                Vec<verus_sdk::network::CurrencySummary>,
+                Vec<verus_sdk::network::CurrencyConverter>,
+            ),
+            String,
+        >,
+    ) {
+        self.markets = Markets::Asked;
+        self.busy(TaskKind::RefreshingBalance, false);
+
+        let (catalog, converters) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                // The last book stays on screen. A market that could not be
+                // re-read is stale, not gone, and blanking the table would say
+                // the chain has no currencies on it.
+                //
+                // Said out loud only where somebody is looking at prices. This
+                // read also happens once behind the dashboard, for a column
+                // beside the balance that already has an honest empty state —
+                // and a toast about a background read nobody asked for is how a
+                // wallet on a flaky node becomes a wallet nobody reads toasts
+                // from. It is in the log either way.
+                tracing::warn!(code = "markets_read", %error, "could not read the markets");
+                if self.polling.screen == pecu_protocol::ScreenId::Markets {
+                    self.notice_warning(
+                        "markets_read",
+                        "Could not read what things are worth",
+                        &error,
+                    );
+                }
+                return;
+            }
+        };
+
+        self.market_names = catalog
+            .iter()
+            .map(|summary| {
+                (
+                    summary.currency_id.clone(),
+                    summary.fully_qualified_name.clone(),
+                )
+            })
+            .collect();
+
+        // The quote currency's i-address, found by the name it is known by.
+        // Without it there is nothing to price against and the book is empty —
+        // which is the honest outcome on a chain that has no stablecoin.
+        let quote = catalog
+            .iter()
+            .find(|summary| summary.fully_qualified_name == Self::QUOTE)
+            .map(|summary| summary.currency_id.clone())
+            .unwrap_or_default();
+        let native = self
+            .cached
+            .native
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+
+        let pools = converters
+            .iter()
+            .filter_map(market::Pool::from_converter)
+            .collect();
+        self.market = market::Book::new(pools, quote, native);
+
+        // A selection that no longer exists is not a selection. It survives a
+        // refresh that still knows the currency, so re-opening the screen does
+        // not throw away what somebody was reading.
+        if !self.market_open.is_empty() && self.market.quote_for(&self.market_open).is_none() {
+            let known = self.market.currencies().contains(&self.market_open);
+            if !known {
+                self.market_open.clear();
+            }
+        }
+
+        self.emit_markets();
+    }
+
+    /// Show one currency, from the book already in hand.
+    fn open_market(&mut self, address: String) {
+        self.wallet.touch();
+        self.market_open = address;
+        self.emit_market_detail();
+    }
+
+    fn emit_markets(&mut self) {
+        let _ = self.events.send(Event::Markets {
+            rows: market::rows(&self.market, &self.market_names),
+            quote: Self::QUOTE.to_string(),
+        });
+        self.emit_market_detail();
+    }
+
+    fn emit_market_detail(&mut self) {
+        let detail = if self.market_open.is_empty() {
+            None
+        } else {
+            Some(Box::new(market::detail(
+                &self.market,
+                &self.market_open,
+                &self.market_names,
+                Self::QUOTE,
+            )))
+        };
+        let _ = self.events.send(Event::MarketDetail(detail));
     }
 
     // ── Currencies ──────────────────────────────────────────────────────────

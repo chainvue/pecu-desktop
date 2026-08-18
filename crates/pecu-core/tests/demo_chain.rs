@@ -266,22 +266,40 @@ async fn a_verusid_can_be_paid_by_name_and_a_revoked_one_cannot() {
     });
 
     // `demo@` is in the scripted chain; `nobody@` is not.
-    for (typed, want_valid, want_in_note) in [
-        ("demo@", true, "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv"),
-        ("gone@", false, "revoked"),
-        ("nobody@", false, "No VerusID by that name"),
+    //
+    // Asserted on the **code**, not on the sentence. The core names the reason
+    // and the interface owns the words, so a test matching on prose would fail
+    // the day the wording improved and pass the day the meaning changed. What
+    // the note carries with it — the i-address a name resolved to — is checked
+    // in the arguments, which is where the fact lives.
+    for (typed, want_valid, want_code, want_arg) in [
+        (
+            "demo@",
+            true,
+            "verusid-resolved",
+            Some("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv"),
+        ),
+        ("gone@", false, "verusid-revoked", None),
+        ("nobody@", false, "verusid-unknown", None),
     ] {
         let verdict = resolve(&dispatcher, &mut events, typed).await;
         assert_eq!(
             verdict.to_valid, want_valid,
-            "`{typed}` validity is wrong: {}",
+            "`{typed}` validity is wrong: {:?}",
             verdict.to_note,
         );
-        assert!(
-            verdict.to_note.contains(want_in_note),
-            "`{typed}` says {:?}, which does not mention {want_in_note:?}",
+        assert_eq!(
+            verdict.to_note.code, want_code,
+            "`{typed}` says {:?}",
             verdict.to_note,
         );
+        if let Some(want_arg) = want_arg {
+            assert!(
+                verdict.to_note.args.iter().any(|arg| arg == want_arg),
+                "`{typed}` says {:?}, which does not carry {want_arg:?}",
+                verdict.to_note,
+            );
+        }
     }
 }
 
@@ -307,7 +325,7 @@ async fn resolve(
         loop {
             match events.recv().await {
                 Some(pecu_protocol::Event::SendValidation(verdict))
-                    if !verdict.to_note.contains("Looking") =>
+                    if verdict.to_note.code != "verusid-resolving" =>
                 {
                     break verdict;
                 }
@@ -693,5 +711,148 @@ fn a_wallet_with_no_addresses_still_has_a_chain_to_talk_to() {
         info.expect("the scripted chain answers").name,
         "VRSCTEST",
         "the demo build reports a chain the wallet is not set to",
+    );
+}
+
+/// Opening the markets screen fills it, from the same path the real chain uses.
+///
+/// # Why this test exists, in the same words as the one at the top of this file
+///
+/// The markets screen shipped as a *drawing*. Every figure on it was a fixture
+/// in the interface crate, the bridge wrote nothing into `MarketState`, and no
+/// command existed that would have filled it — so the screen was blank in every
+/// running build, mock or live, and looked complete in every reference image.
+/// Nothing caught it, because the only thing that had ever rendered that screen
+/// was the fixture that drew it.
+///
+/// So this asserts the number rather than the shape: one VRSCTEST is worth
+/// `0.5372` DAI.vETH, which is what the reserve state the scripted chain
+/// publishes divides out to, and what the daemon's own `estimateconversion`
+/// answered on that state to within its conversion fee.
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_the_markets_screen_prices_the_chain_currency() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (dispatcher, mut events) = pecu_core::start(
+        &tokio::runtime::Handle::current(),
+        pecu_core::Config {
+            nodes: vec![pecu_chain::Node::builtin(
+                0,
+                "Scripted chain",
+                "mock://scripted",
+            )],
+            network: pecu_chain::Network::Testnet,
+            mock: true,
+            home: dir.path().to_path_buf(),
+        },
+    );
+
+    dispatcher.send(pecu_protocol::Command::CreateWallet {
+        name: "demo".to_string(),
+        passphrase: pecu_protocol::Secret::from("correct-horse-battery-staple-9931"),
+    });
+    dispatcher.send(pecu_protocol::Command::ScreenEntered(
+        pecu_protocol::ScreenId::Markets,
+    ));
+
+    let rows = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if let Some(pecu_protocol::Event::Markets { rows, quote }) = events.recv().await {
+                if !rows.is_empty() {
+                    // The column has to be able to say what it is denominated
+                    // in, or every figure under it is a ratio of nothing.
+                    assert_eq!(quote, "DAI.vETH");
+                    break rows;
+                }
+            }
+        }
+    })
+    .await
+    .expect("arriving at the markets screen read the chain");
+
+    let vrsctest = rows
+        .iter()
+        .find(|row| row.name == "VRSCTEST")
+        .expect("the chain's own currency is on its own markets screen");
+    assert_eq!(vrsctest.price, "0.5372", "{vrsctest:?}");
+
+    // The quote currency is one of itself, and every row is honest about a
+    // change nothing on this chain can answer for yet.
+    let dai = rows
+        .iter()
+        .find(|row| row.name == "DAI.vETH")
+        .expect("the currency everything is priced in");
+    assert_eq!(dai.price, "1.00");
+    assert!(rows.iter().all(|row| row.change == "—"), "{rows:?}");
+
+    // And the detail, which must come out of the same book rather than a second
+    // read that could quote a different block.
+    dispatcher.send(pecu_protocol::Command::OpenMarket(vrsctest.address.clone()));
+    let detail = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(pecu_protocol::Event::MarketDetail(Some(detail))) = events.recv().await {
+                break detail;
+            }
+        }
+    })
+    .await
+    .expect("opening a row answered");
+
+    assert_eq!(detail.name, "VRSCTEST");
+    assert_eq!(detail.price, "0.5372");
+    assert_eq!(detail.route, "VRSCTEST  →  Bridge.vETH  →  DAI.vETH");
+
+    // Both pools are listed; only the started one set the price.
+    let states: Vec<&str> = detail
+        .venues
+        .iter()
+        .map(|venue| venue.state.as_str())
+        .collect();
+    assert_eq!(states, vec!["active", "unstarted"], "{:?}", detail.venues);
+}
+
+/// The dashboard gets prices without anybody opening the markets screen.
+///
+/// The dashboard carries a markets column beside the balance, and the read that
+/// fills it is scoped to a screen — so it would be entirely possible to ship a
+/// wallet whose markets screen worked and whose dashboard column was permanently
+/// empty, because nothing on the way to the dashboard asks. Creating a wallet is
+/// the only thing this test does.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_dashboard_gets_prices_without_visiting_the_markets_screen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (dispatcher, mut events) = pecu_core::start(
+        &tokio::runtime::Handle::current(),
+        pecu_core::Config {
+            nodes: vec![pecu_chain::Node::builtin(
+                0,
+                "Scripted chain",
+                "mock://scripted",
+            )],
+            network: pecu_chain::Network::Testnet,
+            mock: true,
+            home: dir.path().to_path_buf(),
+        },
+    );
+
+    dispatcher.send(pecu_protocol::Command::CreateWallet {
+        name: "demo".to_string(),
+        passphrase: pecu_protocol::Secret::from("correct-horse-battery-staple-9931"),
+    });
+
+    let rows = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if let Some(pecu_protocol::Event::Markets { rows, .. }) = events.recv().await {
+                if !rows.is_empty() {
+                    break rows;
+                }
+            }
+        }
+    })
+    .await
+    .expect("a new wallet reads the markets once, with no navigation at all");
+
+    assert!(
+        rows.iter().any(|row| row.name == "VRSCTEST"),
+        "{rows:?}",
     );
 }

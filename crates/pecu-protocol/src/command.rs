@@ -322,6 +322,22 @@ pub enum Command {
     /// no inverse, and this is the only direction that exists.
     DeriveContentKey(String),
 
+    // ── Markets ─────────────────────────────────────────────────────────
+    /// Work out what everything is worth, and where.
+    ///
+    /// One `getcurrencyconverters` per side of the pricing question — the
+    /// chain's own currency and the one prices are quoted in — and the whole
+    /// book falls out of the reserve state those answers already carry. No
+    /// request per currency, and nothing is asked until somebody opens the
+    /// screen: see `ScreenId::Markets`.
+    RefreshMarkets,
+    /// Show one currency in detail, by i-address.
+    ///
+    /// Reads the book already in hand rather than asking the chain again — the
+    /// detail is a second view of the same notarizations, and re-fetching would
+    /// let the table and the panel beside it quote different blocks.
+    OpenMarket(String),
+
     // ── Currencies ──────────────────────────────────────────────────────
     /// Find the currencies this wallet's identities define, and which of those
     /// identities could still define one.
