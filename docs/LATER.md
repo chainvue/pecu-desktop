@@ -354,3 +354,36 @@ blocks it everywhere else. That is correct behaviour and not a bug in the bundle
 **Not attempted:** a universal binary. This is an arm64 build; an Intel slice
 needs `cargo build --target x86_64-apple-darwin` and `lipo`, and nothing has been
 built or run on Intel.
+
+---
+
+## 7. The 16px application icon
+
+**Status:** measured, and the mark does not survive the size. What ships there
+is legible and is not the mark.
+
+The icon is `@` and a cursor, drawn from `ui/icon.slint` and rendered at every
+size macOS asks for. At 32px and above it is the wordmark reduced to its two
+halves and it reads. At **16px it does not**: the glyph has a counter inside a
+counter, and rendered at that size — inspected pixel for pixel, nearest
+neighbour, not a smoothed upscale — it is an amorphous blob. Enlarging it to
+fill the square was tried first and produced a larger blob.
+
+So below 32px the mark becomes a path: an `@` reduced to a ring broken on the
+right with a tail. The honest report is that **at 16px the break and the tail do
+not survive either**. What lands is a clean ring. That is a legible mark instead
+of a smudge, which is the trade worth making, and it is not recognisably an `@`.
+
+**The design package asks for exactly the thing that fixes this** and does not
+ship it: its Windows spec says "16/24px: nur @ ohne Cursor (Pixel-Hinting)" —
+hand-hinted pixel art, drawn *to* the grid rather than scaled onto it. That is a
+designer's task, not a developer's, and it is why this is parked rather than
+attempted again.
+
+**Where it shows:** the Finder list, the window proxy icon, the ⌘-Tab strip, and
+the Windows `.ico` at 16 and 24. Everywhere else the real mark is what renders.
+
+**The move,** when somebody picks it up: get 16 and 24 as hand-drawn PNGs, and
+have `render_icon.rs` use them for those two sizes instead of rasterising the
+component. The loop that draws every size is already per-size, so this is a
+branch in one function rather than a new pipeline.
