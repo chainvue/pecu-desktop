@@ -587,6 +587,24 @@ pub fn sending(ui: &AppWindow) {
         key("savings", SECOND_ADDRESS, "generated", true, false),
     ]))));
     wallet.set_address(ADDRESS.into());
+
+    // Who this wallet has paid, which the send screen now shows beside the
+    // form. The same rows the Addresses tab lists — one list, one truth about
+    // who has been paid, rather than a second address book that could disagree
+    // with the first.
+    ui.global::<SendState>()
+        .set_known(ModelRc::from(Rc::new(VecModel::from(vec![
+            KnownAddressRow {
+                address: SECOND_ADDRESS.into(),
+                label: "the exchange".into(),
+                summary: "3 payments · last 2 days ago".into(),
+            },
+            KnownAddressRow {
+                address: THIRD_ADDRESS.into(),
+                label: SharedString::new(),
+                summary: "1 payment · last in the last hour".into(),
+            },
+        ]))));
 }
 
 /// The review step, showing a payment that has been built and signed.
@@ -675,6 +693,19 @@ pub fn reviewing_identity(ui: &AppWindow) {
 /// address in a committed image.
 pub fn receiving(ui: &AppWindow) {
     unlocked(ui);
+
+    // A name this wallet controls, because the screen now offers it as the
+    // other way to be paid. Without one the panel is correctly absent — which
+    // is a state worth having too, but not the one this picture is of.
+    ui.global::<IdentityState>()
+        .set_rows(ModelRc::from(Rc::new(VecModel::from(vec![IdentityRow {
+            name: "robert.VRSCTEST@".into(),
+            address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
+            status: "Active".into(),
+            tone: "online".into(),
+            note: SharedString::new(),
+            mine: true,
+        }]))));
 
     let wallet = ui.global::<WalletState>();
     wallet.set_ticker("VRSCTEST".into());
