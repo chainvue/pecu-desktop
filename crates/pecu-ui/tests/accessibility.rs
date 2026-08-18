@@ -89,6 +89,8 @@ const SCREENS: &[Screen] = &[
     ("dashboard", pecu_ui::fixtures::funded),
     ("markets", pecu_ui::fixtures::markets),
     ("markets", pecu_ui::fixtures::market_detail),
+    ("convert", pecu_ui::fixtures::converting),
+    ("convert", pecu_ui::fixtures::converting_refused),
     ("send", pecu_ui::fixtures::sending),
     ("send", pecu_ui::fixtures::sending_too_much),
     ("nodes", pecu_ui::fixtures::network_trouble),

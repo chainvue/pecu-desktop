@@ -976,6 +976,50 @@ pub enum TaskKind {
     CreatingWallet,
 }
 
+/// What a conversion would cost, priced but not signed.
+///
+/// # Why this is net of fees where the markets screen is not
+///
+/// Two sources, two purposes, and mixing them is how a wallet quotes a price it
+/// cannot honour. `getcurrencystate` reports a mid price and is what a *display*
+/// shows; `estimateconversion` answers what a node expects this particular
+/// conversion to yield, after `conversionfees` and `fees`. This carries the
+/// second. A number on the markets screen is what the currency is worth; a
+/// number here is what somebody would actually receive.
+///
+/// Every figure is a formatted string for the same reason the market rows are:
+/// the core owns how money is spelled, and `—` has to be sayable.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConvertQuoteVm {
+    pub from: String,
+    pub to: String,
+    /// What goes in, as typed and then formatted back.
+    pub pay: String,
+    /// What the node expects to come out. Advisory — the SDK says so, and so
+    /// does this: the chain does not enforce it.
+    pub get: String,
+    /// The basket the conversion goes through, or empty when it is direct.
+    pub via: String,
+    /// "1 VRSCTEST = 0.5369 DAI.vETH", spelled by the core.
+    pub rate: String,
+    pub conversion_fee: String,
+    pub network_fee: String,
+    /// The least the caller is willing to accept.
+    ///
+    /// **Checked before signing and never again.** If the price moves after the
+    /// transaction is broadcast the conversion still happens — the chain has no
+    /// opinion about a floor. Recording it makes the intent explicit and catches
+    /// a price that has already moved, which is all it can do.
+    pub minimum: String,
+    /// How far the estimate is from the mid price, as the person will read it.
+    pub slippage: String,
+    /// "positive" · "warning" · "negative". Carried rather than derived from a
+    /// threshold here, because the threshold is a rule and rules live in core.
+    pub slippage_tone: String,
+    /// Why this cannot be done, or what to be careful of. Empty when neither.
+    pub note: String,
+}
+
 /// One currency in the markets table.
 ///
 /// Every figure is a **formatted string**, not a number, and that is the same

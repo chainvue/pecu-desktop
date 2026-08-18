@@ -22,11 +22,81 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
-    IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState, NetworkState,
-    NodeRow, PendingRow,
+    ConvertState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState,
+    NetworkState, NodeRow, PendingRow,
     PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState, SeedWord,
     SendState, Stat, TxState, Venue, WalletState,
 };
+
+/// A conversion being priced.
+///
+/// The figures are invented, like every other figure on this screen — the SDK
+/// can price a conversion for real and none of that is wired yet. What these
+/// exercise is the vocabulary: an estimate that is not a promise, a floor that
+/// is, and fees that are already subtracted.
+pub fn converting(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("convert".into());
+
+    let state = ui.global::<ConvertState>();
+    state.set_from_name("VRSCTEST".into());
+    state.set_to_name("DAI.vETH".into());
+    state.set_from_balance("12 382.4200 0000 VRSCTEST".into());
+    state.set_pay_draft("250".into());
+    state.set_get_estimate("134.1245 8300 DAI.vETH".into());
+    state.set_via("Bridge.vETH".into());
+    state.set_rate("1 VRSCTEST = 0.5369 DAI.vETH".into());
+    state.set_conversion_fee("0.1250 0000 VRSCTEST".into());
+    state.set_network_fee("0.0001 0000 VRSCTEST".into());
+    state.set_minimum("133.4539 6500 DAI.vETH".into());
+    state.set_slippage("0.5%".into());
+    state.set_slippage_tone("positive".into());
+    state.set_ready(true);
+}
+
+/// The conversion the design's flow calls out: slippage past the point where it
+/// should go through without somebody saying so again.
+///
+/// Its own picture because the warning is the whole content of the state, and a
+/// screen whose warnings have never been photographed is a screen whose
+/// warnings have never been read.
+pub fn converting_thin(ui: &AppWindow) {
+    converting(ui);
+
+    let state = ui.global::<ConvertState>();
+    state.set_pay_draft("9000".into());
+    state.set_get_estimate("4 611.0800 0000 DAI.vETH".into());
+    state.set_minimum("4 426.6368 0000 DAI.vETH".into());
+    state.set_slippage("4.6%".into());
+    state.set_slippage_tone("warning".into());
+    state.set_note(
+        "This is a large share of the pool. The price moves as the conversion \
+         goes through, and the estimate above already accounts for it — but a \
+         thinner pool moves further. Bridge.vETH holds $310K at 2%."
+            .into(),
+    );
+}
+
+/// A leg that cannot be converted at all: the design's "empty reserve".
+pub fn converting_refused(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("convert".into());
+
+    let state = ui.global::<ConvertState>();
+    state.set_from_name("VRSCTEST".into());
+    state.set_to_name("kneipe".into());
+    state.set_from_balance("12 382.4200 0000 VRSCTEST".into());
+    state.set_pay_draft("250".into());
+    // Deliberately blank rather than zero. There is no rate, so there is no
+    // number — and `0` would be a claim that the conversion yields nothing
+    // rather than that it cannot be priced.
+    state.set_note(
+        "kneipe has no converter, so there is no route to it and no price. A \
+         currency can only be converted through a basket that holds it."
+            .into(),
+    );
+    state.set_ready(false);
+}
 
 /// The markets table, with nothing picked.
 ///

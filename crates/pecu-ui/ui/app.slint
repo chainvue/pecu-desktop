@@ -581,6 +581,61 @@ export global ChartState {
 }
 
 // What the wallet has said and nobody has read yet.
+// Converting one currency into another.
+//
+// # Shape now, arithmetic later
+//
+// The SDK can do this for real — `verus_flows::convert` goes `plan_conversion`
+// → `prepare_conversion` → `broadcast`, which is the **same `Unsent` shape as
+// the send path**, so the review step, the spend permit and the pending ledger
+// all carry over rather than being rebuilt. None of that is wired here yet.
+// What is here is the screen and the vocabulary.
+//
+// # Two steps, like a send, and for the same reason
+//
+// A conversion moves money irreversibly and its output is an estimate rather
+// than a promise. So it is a form and then a review, the review is built from
+// something signed, and nothing leaves until the second button.
+export global ConvertState {
+    // "form" | "review" | "converting" | "done"
+    in-out property <string> step: "form";
+    in property <bool> busy: false;
+
+    // The interface's own drafts. Nothing is sent from here until Review — the
+    // same arrangement `SendState` uses, and for the reason recorded there: a
+    // field held inside an element is a state no fixture can reach.
+    in-out property <string> pay-draft: "";
+
+    // Which way round. Chosen here rather than derived, because "what I have"
+    // and "what I want" are two questions and swapping them must not silently
+    // reinterpret the amount already typed.
+    in-out property <string> from-name: "";
+    in-out property <string> to-name: "";
+    // What is available to spend of `from-name`, spelled by the core.
+    in property <string> from-balance: "";
+
+    // The quote. Mirrors `ConvertQuoteVm` — see it for why these are net of
+    // fees where the markets screen's figures are not.
+    in property <string> get-estimate: "";
+    in property <string> via: "";
+    in property <string> rate: "";
+    in property <string> conversion-fee: "";
+    in property <string> network-fee: "";
+    in property <string> minimum: "";
+    in property <string> slippage: "";
+    in property <string> slippage-tone: "unknown";
+    // Why this cannot be done, or what to be careful of. Empty when neither.
+    in property <string> note: "";
+    // Whether the form has enough to price. The core's verdict, not a length
+    // check here.
+    in property <bool> ready: false;
+
+    callback swap();
+    callback review();
+    callback confirm();
+    callback cancel();
+}
+
 // The markets screen.
 //
 // # Everything here is currently a fixture
@@ -5726,6 +5781,240 @@ component ActionBar inherits Rectangle {
 // reserves for shielded items and giving it a second meaning here would spend
 // it. A glyph is only a glyph if the shipped font has it, and only useful if it
 // means one thing.
+// One side of a conversion: a labelled box with an amount and a currency.
+//
+// The currency is a button and it is disabled, which is deliberate rather than
+// unfinished-looking. Choosing one needs the picker the currency screens
+// already have and a core that can price the result; until both are wired, a
+// control that is visibly present and visibly unavailable is honest, and one
+// that silently does nothing is not.
+component ConvertLeg inherits VerticalLayout {
+    in property <string> label;
+    in property <string> currency;
+    in property <string> under;
+    // Editable on the paying side, a computed estimate on the receiving one.
+    in property <bool> editable: false;
+    in property <string> estimate;
+    in-out property <string> draft;
+    callback edited();
+
+    spacing: Sp.s3;
+
+    Eyebrow { text: root.label; }
+
+    Card {
+        VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s3;
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+
+                if root.editable: amount := Field {
+                    mono: true;
+                    placeholder: "0.0000";
+                    text <=> root.draft;
+                    horizontal-stretch: 1;
+                    edited => { root.edited(); }
+                }
+
+                // Not a field: nothing types here. An estimate that looked
+                // editable would invite somebody to set the number they want
+                // and expect the chain to honour it.
+                if !root.editable: Text {
+                    text: root.estimate == "" ? "—" : root.estimate;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-lg;
+                    font-weight: Typo.w-bold;
+                    color: root.estimate == "" ? Theme.text-tertiary : Theme.text-primary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Btn {
+                    text: root.currency == "" ? @tr("Choose") : root.currency;
+                    variant: "ghost";
+                    enabled: false;
+                }
+            }
+
+            if root.under != "": Text {
+                text: root.under;
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+            }
+        }
+    }
+}
+
+// One line of the quote.
+component QuoteLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <brush> tone: Theme.text-primary;
+    in property <bool> strong: false;
+
+    spacing: Sp.s4;
+
+    Text {
+        text: root.label;
+        font-size: Typo.caption;
+        color: Theme.text-secondary;
+        horizontal-stretch: 1;
+    }
+    Text {
+        text: root.value == "" ? "—" : root.value;
+        font-family: Typo.mono;
+        font-size: Typo.num-sm;
+        font-weight: root.strong ? Typo.w-bold : Typo.w-regular;
+        color: root.value == "" ? Theme.text-tertiary : root.tone;
+    }
+}
+
+// Convert. A form, then a review — see `ConvertState` for why.
+component ConvertScreen inherits HorizontalLayout {
+    spacing: Sp.s8;
+
+    VerticalLayout {
+        spacing: Sp.s5;
+        width: 52%;
+
+        ConvertLeg {
+            label: @tr("YOU PAY");
+            currency: ConvertState.from-name;
+            editable: true;
+            draft <=> ConvertState.pay-draft;
+            under: ConvertState.from-balance == "" ? ""
+                : @tr("Available: ") + ConvertState.from-balance;
+        }
+
+        // The swap, between the two boxes because that is what it acts on.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: R.md;
+                background: swaptouch.has-hover ? Theme.bg-hover : Theme.bg-inset;
+                border-width: 1px;
+                border-color: Theme.border-default;
+                animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+                Icon {
+                    name: "convert";
+                    size: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tone: Theme.text-secondary;
+                }
+
+                swaptouch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { ConvertState.swap(); }
+                }
+
+                accessible-role: button;
+                accessible-label: @tr("Swap the two currencies");
+                accessible-action-default => { ConvertState.swap(); }
+            }
+        }
+
+        ConvertLeg {
+            label: @tr("YOU GET");
+            currency: ConvertState.to-name;
+            estimate: ConvertState.get-estimate;
+            under: @tr("Estimated. The chain does not guarantee it.");
+        }
+
+        HorizontalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            Btn {
+                text: @tr("Review conversion");
+                variant: "primary";
+                enabled: ConvertState.ready && !ConvertState.busy;
+                clicked => { ConvertState.review(); }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+
+    // ── The quote ───────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: Sp.s4;
+        horizontal-stretch: 1;
+
+        Eyebrow { text: @tr("QUOTE"); }
+
+        Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s4;
+
+                QuoteLine {
+                    label: @tr("Route");
+                    value: ConvertState.via == "" ? "" : @tr("via ") + ConvertState.via;
+                }
+                QuoteLine { label: @tr("Rate"); value: ConvertState.rate; }
+                QuoteLine {
+                    label: @tr("Conversion fee");
+                    value: ConvertState.conversion-fee;
+                }
+                QuoteLine {
+                    label: @tr("Network fee");
+                    value: ConvertState.network-fee;
+                }
+                QuoteLine {
+                    label: @tr("Slippage");
+                    value: ConvertState.slippage;
+                    tone: ConvertState.slippage-tone == "negative" ? Theme.negative
+                        : ConvertState.slippage-tone == "warning" ? Theme.warning
+                        : Theme.text-primary;
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-subtle;
+                }
+
+                // The one figure that is a commitment rather than a guess, so
+                // it is the one set in bold.
+                QuoteLine {
+                    label: @tr("You receive at least");
+                    value: ConvertState.minimum;
+                    strong: true;
+                }
+            }
+        }
+
+        if ConvertState.note != "": Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                HorizontalLayout {
+                    spacing: Sp.s3;
+                    alignment: start;
+                    Icon {
+                        name: "warning";
+                        size: 16px;
+                        tone: Theme.warning;
+                    }
+                    Text {
+                        text: ConvertState.note;
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
 // One row of the markets table.
 component MarketRowItem inherits Rectangle {
     in property <MarketRow> entry;
@@ -8433,6 +8722,7 @@ export component AppWindow inherits Window {
         // translated. `label` is the only thing here a person reads.
         { id: "dashboard", label: @tr("Dashboard"),  icon: "wallet",   enabled: true, badge: "" },
         { id: "markets",   label: @tr("Markets"),    icon: "markets",  enabled: true, badge: "" },
+        { id: "convert",   label: @tr("Convert"),    icon: "convert",  enabled: true, badge: "" },
         { id: "send",      label: @tr("Send"),       icon: "send",     enabled: true, badge: "" },
         { id: "receive",   label: @tr("Receive"),    icon: "receive",  enabled: true, badge: "" },
         { id: "activity",  label: @tr("Activity"),   icon: "history",  enabled: true, badge: "" },
@@ -8447,13 +8737,14 @@ export component AppWindow inherits Window {
     property <int> nav-index:
           root.screen == "dashboard"  ? 0
         : root.screen == "markets"    ? 1
-        : root.screen == "send"       ? 2
-        : root.screen == "receive"    ? 3
-        : root.screen == "activity"   ? 4
-        : root.screen == "nodes"      ? 5
-        : root.screen == "identities" ? 6
-        : root.screen == "currencies" ? 7
-        : root.screen == "settings"   ? 8
+        : root.screen == "convert"    ? 2
+        : root.screen == "send"       ? 3
+        : root.screen == "receive"    ? 4
+        : root.screen == "activity"   ? 5
+        : root.screen == "nodes"      ? 6
+        : root.screen == "identities" ? 7
+        : root.screen == "currencies" ? 8
+        : root.screen == "settings"   ? 9
         : -1;
 
     // Before anything else: if there is no wallet, or it is locked, that is the
@@ -8593,12 +8884,13 @@ export component AppWindow inherits Window {
                 // rather than a second arrangement to learn.
                 if (event.text == "1") { root.go("dashboard"); return EventResult.accept; }
                 if (event.text == "2") { root.go("markets"); return EventResult.accept; }
-                if (event.text == "3") { root.go("send"); return EventResult.accept; }
-                if (event.text == "4") { root.go("receive"); return EventResult.accept; }
-                if (event.text == "5") { root.go("activity"); return EventResult.accept; }
-                if (event.text == "6") { root.go("nodes"); return EventResult.accept; }
-                if (event.text == "7") { root.go("identities"); return EventResult.accept; }
-                if (event.text == "8") { root.go("currencies"); return EventResult.accept; }
+                if (event.text == "3") { root.go("convert"); return EventResult.accept; }
+                if (event.text == "4") { root.go("send"); return EventResult.accept; }
+                if (event.text == "5") { root.go("receive"); return EventResult.accept; }
+                if (event.text == "6") { root.go("activity"); return EventResult.accept; }
+                if (event.text == "7") { root.go("nodes"); return EventResult.accept; }
+                if (event.text == "8") { root.go("identities"); return EventResult.accept; }
+                if (event.text == "9") { root.go("currencies"); return EventResult.accept; }
                 if (event.text == ",") { root.go("settings"); return EventResult.accept; }
                 // Slint reports the character produced, and `⌘L` without shift
                 // produces a lower-case `l`.
@@ -8752,6 +9044,7 @@ export component AppWindow inherits Window {
                             if root.screen == "identities": IdentitiesScreen {}
                             if root.screen == "currencies": CurrenciesScreen {}
                             if root.screen == "markets": MarketsScreen {}
+                            if root.screen == "convert": ConvertScreen {}
                             if root.screen == "receive": ReceiveScreen {}
                             if root.screen == "settings": SettingsScreen {
                                 tab <=> root.settings-tab;

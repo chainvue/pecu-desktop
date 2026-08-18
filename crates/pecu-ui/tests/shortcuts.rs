@@ -76,14 +76,14 @@ fn the_keyboard_reaches_the_wallet() {
             .on_navigate(move |_| navigated.set(true));
     }
 
-    // The numbers follow the rail, and the rail gained Markets at position 2 —
-    // so these moved, deliberately, rather than the rail and the shortcuts
-    // drifting into two different arrangements to learn.
-    chord(&ui, Key::Meta, "4");
+    // The numbers follow the rail. It gained Markets and then Convert at the
+    // top, so these moved with it — deliberately, rather than letting the rail
+    // and the shortcuts drift into two arrangements to learn.
+    chord(&ui, Key::Meta, "5");
     assert_eq!(
         ui.get_screen(),
         "receive",
-        "Command-4 did not reach the window",
+        "Command-5 did not reach the window",
     );
     assert!(
         navigated.get(),
@@ -92,8 +92,8 @@ fn the_keyboard_reaches_the_wallet() {
 
     // Control as well as Command, because the same build runs on Linux and
     // Windows and a shortcut that only works on a Mac is not a shortcut.
-    chord(&ui, Key::Control, "5");
-    assert_eq!(ui.get_screen(), "activity", "Control-5 did not reach it");
+    chord(&ui, Key::Control, "6");
+    assert_eq!(ui.get_screen(), "activity", "Control-6 did not reach it");
 
     // ── Lock ────────────────────────────────────────────────────────────
     let locked: Rc<Cell<bool>> = Rc::default();
