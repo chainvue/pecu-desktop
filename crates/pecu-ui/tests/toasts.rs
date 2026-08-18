@@ -12,12 +12,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use pecu_protocol::{Severity, UiError};
+use pecu_protocol::{NoteVm, Severity, UiError};
 use pecu_ui::{snapshot, toast, AppWindow};
 use slint::ComponentHandle;
 
 fn notice(code: &'static str, severity: Severity) -> UiError {
-    UiError::simple(code, format!("{code} happened"), "what to do", severity)
+    UiError::simple(code, NoteVm::plain(code), "what to do", severity)
 }
 
 #[test]
@@ -93,9 +93,9 @@ fn nothing_the_wallet_says_is_lost() {
 
 /// The wording that arrives last is the one shown, even when the code repeats.
 ///
-/// The same code can carry a different sentence — "could not read this wallet's
-/// activity" is raised for a timeout and for a node refusing a method — and the
-/// one that just happened is the true one.
+/// The same category can carry a different reason — `history` is raised both
+/// for the recent list and for an older page — and the one that just happened
+/// is the true one.
 #[test]
 fn a_repeated_code_shows_the_newest_wording() {
     let _window = snapshot::install().expect("offscreen platform");
@@ -104,17 +104,27 @@ fn a_repeated_code_shows_the_newest_wording() {
 
     toast::show(
         &ui,
-        &UiError::simple("history", "first wording", "", Severity::Warning),
+        &UiError::simple(
+            "history",
+            NoteVm::plain("history-unreadable"),
+            "",
+            Severity::Warning,
+        ),
     );
     toast::show(
         &ui,
-        &UiError::simple("history", "second wording", "", Severity::Warning),
+        &UiError::simple(
+            "history",
+            NoteVm::plain("history-older-unreadable"),
+            "",
+            Severity::Warning,
+        ),
     );
 
     let rows = ui.global::<pecu_ui::ToastState>().get_rows();
     let row = slint::Model::row_data(&rows, 0).expect("a row");
     // The count is a separate field — the "(2×)" is added when it is drawn,
-    // so the stored title stays the sentence.
-    assert_eq!(row.title, "second wording");
+    // so the stored reason stays the reason.
+    assert_eq!(row.note.code, "history-older-unreadable");
     assert_eq!(row.count, 2, "the repeat was not counted");
 }

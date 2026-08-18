@@ -92,26 +92,6 @@ export struct KnownAddressRow {
     summary: string,
 }
 
-// Something the wallet said, waiting to be read.
-//
-// It exists because most of what this wallet has to say had nowhere to appear.
-// Notices were routed to a per-screen string, and every code without a screen
-// of its own fell through to one that is rendered only on the unlock form — so
-// while the wallet was open, a refused spend, a payment that could not be
-// recorded, a history that would not load and a node that failed over all
-// happened in silence.
-export struct ToastRow {
-    // Stable identifier. Also the key the list de-duplicates on: a refresh
-    // failing every fifteen seconds is one problem, not forty.
-    code: string,
-    title: string,
-    detail: string,
-    // "info" | "warning" | "danger"
-    severity: string,
-    // How many times this has been said. Shown from two upwards.
-    count: int,
-}
-
 // One VerusID in the list.
 // A sentence the interface writes, named by the core. Mirrors `NoteVm`.
 //
@@ -126,6 +106,38 @@ export struct Note {
     // spelled in exactly one place and this is not it.
     args: [string],
 }
+
+// Slint resolves types in declaration order, so `Note` has to be above every
+// struct that carries one — `ToastRow` does, and moving it below this line is
+// a compile error rather than a subtle one.
+
+// Something the wallet said, waiting to be read.
+//
+// It exists because most of what this wallet has to say had nowhere to appear.
+// Notices were routed to a per-screen string, and every code without a screen
+// of its own fell through to one that is rendered only on the unlock form — so
+// while the wallet was open, a refused spend, a payment that could not be
+// recorded, a history that would not load and a node that failed over all
+// happened in silence.
+export struct ToastRow {
+    // The category, for logs and for a support conversation.
+    code: string,
+    // What happened, as a named reason. The words are in `note.slint` — see
+    // `NoticeTitle` and `NoticeBody`.
+    //
+    // De-duplication keys on **this** rather than on `code` above: one category
+    // carries several different messages — `currency_launch` alone has seven —
+    // and collapsing them onto one card would hide six of them behind a count.
+    note: Note,
+    // What only the machine can say: a node's own error text. Never translated,
+    // because these are a daemon's words rather than the wallet's.
+    detail: string,
+    // "info" | "warning" | "danger"
+    severity: string,
+    // How many times this has been said. Shown from two upwards.
+    count: int,
+}
+
 
 // One currency in the markets table. Mirrors `MarketRowVm`.
 //
@@ -389,7 +401,8 @@ export struct ReviewOutput {
     // than guessed at: an unreadable output in a transaction about to be signed
     // is not something a review may present as ordinary.
     address: string,
-    kind: string,
+    // What kind of output this is, as a named reason — see `note.slint`.
+    kind: Note,
     amount: string,
     is-change: bool,
 }

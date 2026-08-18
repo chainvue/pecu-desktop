@@ -6,6 +6,8 @@ import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Segmented } from "../components/base.slint";
 import { Actions, SeedState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
+import { NoticeTitle } from "../components/note.slint";
+import { Note } from "../vm/structs.slint";
 
 // Choosing a passphrase, or entering it again.
 export component PassphraseForm inherits VerticalLayout {
@@ -13,7 +15,7 @@ export component PassphraseForm inherits VerticalLayout {
     in property <string> mode;
     in property <string> wallet-name;
     in property <bool> busy;
-    in property <string> problem;
+    in property <Note> problem;
     callback restore();
 
     // Whether the two boxes agree, and whether to say so yet.
@@ -65,7 +67,7 @@ export component PassphraseForm inherits VerticalLayout {
             placeholder: root.mode == "create"
                 ? @tr("A passphrase you will remember")
                 : @tr("Passphrase");
-            invalid: root.problem != "";
+            invalid: root.problem.code != "";
             accepted => { root.submit(); }
         }
     }
@@ -107,8 +109,8 @@ export component PassphraseForm inherits VerticalLayout {
         horizontal-alignment: center;
     }
 
-    if root.problem != "": Text {
-        text: root.problem;
+    if root.problem.code != "": NoticeTitle {
+        note: root.problem;
         font-size: Typo.caption;
         color: Theme.negative;
         horizontal-alignment: center;
@@ -167,7 +169,7 @@ export component PassphraseForm inherits VerticalLayout {
 // Restoring a wallet that already exists somewhere else.
 export component RestoreForm inherits VerticalLayout {
     in property <bool> busy;
-    in property <string> problem;
+    in property <Note> problem;
     callback cancelled();
 
     property <bool> matched: pass.text == again.text;
@@ -227,7 +229,7 @@ export component RestoreForm inherits VerticalLayout {
                 : kind.index == 1
                 ? @tr("The exact text you used")
                 : "abandon abandon abandon …";
-            invalid: root.problem != "";
+            invalid: root.problem.code != "";
         }
     }
 
@@ -251,11 +253,11 @@ export component RestoreForm inherits VerticalLayout {
     // This sat below the passphrase field, two controls away from the phrase it
     // describes — so "there is a typo in that phrase" appeared to be a
     // complaint about the passphrase somebody had just chosen.
-    if root.problem != "": HorizontalLayout {
+    if root.problem.code != "": HorizontalLayout {
         alignment: center;
-        Text {
+        NoticeTitle {
             width: 420px;
-            text: root.problem;
+            note: root.problem;
             font-size: Typo.caption;
             color: Theme.negative;
             wrap: word-wrap;
@@ -352,7 +354,7 @@ export component Onboarding inherits Rectangle {
     in property <string> mode;
     in property <string> wallet-name;
     in property <bool> busy;
-    in property <string> problem;
+    in property <Note> problem;
 
     // Which of the two forms is up. Pure navigation — there is no wallet state
     // that corresponds to "is currently typing a phrase" — but `in-out` rather
@@ -520,13 +522,13 @@ export component BackupPassphrase inherits VerticalLayout {
             width: 360px;
             password: true;
             placeholder: @tr("Passphrase");
-            invalid: SeedState.problem != "";
+            invalid: SeedState.problem.code != "";
             accepted => { root.submit(); }
         }
     }
 
-    if SeedState.problem != "": Text {
-        text: SeedState.problem;
+    if SeedState.problem.code != "": NoticeTitle {
+        note: SeedState.problem;
         font-size: Typo.caption;
         color: Theme.negative;
         horizontal-alignment: center;
@@ -722,27 +724,27 @@ export component BackupVerify inherits VerticalLayout {
         first := WordCheck {
             width: 180px;
             position: SeedState.challenge[0];
-            invalid: SeedState.problem != "";
+            invalid: SeedState.problem.code != "";
             accepted => { root.submit(); }
         }
         second := WordCheck {
             width: 180px;
             position: SeedState.challenge[1];
-            invalid: SeedState.problem != "";
+            invalid: SeedState.problem.code != "";
             accepted => { root.submit(); }
         }
         third := WordCheck {
             width: 180px;
             position: SeedState.challenge[2];
-            invalid: SeedState.problem != "";
+            invalid: SeedState.problem.code != "";
             accepted => { root.submit(); }
         }
     }
 
-    if SeedState.problem != "": Text {
+    if SeedState.problem.code != "": NoticeTitle {
         // Which word was wrong is never said. Saying it would turn this screen
         // into a checker that could be fed guesses one position at a time.
-        text: SeedState.problem;
+        note: SeedState.problem;
         font-size: Typo.caption;
         color: Theme.negative;
         horizontal-alignment: center;
@@ -796,14 +798,14 @@ export component BackupScreen inherits Rectangle {
                 // Conceal before moving on: the next screen has no business
                 // having the words sitting behind it.
                 Actions.hide-phrase();
-                SeedState.problem = "";
+                SeedState.problem = { code: "", args: [] };
                 SeedState.step = "verify";
             }
         }
 
         if SeedState.step == "verify" && SeedState.challenge.length == 3: BackupVerify {
             back => {
-                SeedState.problem = "";
+                SeedState.problem = { code: "", args: [] };
                 SeedState.step = "phrase";
             }
         }
@@ -813,7 +815,7 @@ export component BackupScreen inherits Rectangle {
     // offer comes back — this abandons the attempt, it does not decline it
     // permanently.
     function close() {
-        SeedState.problem = "";
+        SeedState.problem = { code: "", args: [] };
         SeedState.step = "";
         Actions.cancel-backup();
     }

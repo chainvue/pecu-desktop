@@ -5,7 +5,7 @@ import { R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money } from "../components/base.slint";
 import { Actions, SendState, WalletState } from "../vm/state.slint";
 import { Field, KeyPicker, QuoteLine } from "../components/form.slint";
-import { NoteText } from "../components/note.slint";
+import { NoteText, NoticeTitle } from "../components/note.slint";
 
 export component SendForm inherits HorizontalLayout {
     spacing: Sp.s7;
@@ -390,15 +390,17 @@ export component SendScreen inherits VerticalLayout {
                                     : Theme.text-primary;
                                 wrap: char-wrap;
                             }
-                            Text {
-                                // Not "Payment · change". Change is not a
-                                // payment to anybody; it is the part that never
-                                // left.
-                                text: output.is-change
-                                    ? @tr("Change · back to your wallet")
-                                    : output.kind;
+                            // Not "Payment · change". Change is not a payment
+                            // to anybody; it is the part that never left.
+                            if output.is-change: Text {
+                                text: @tr("Change · back to your wallet");
                                 font-size: Typo.caption;
-                                color: output.is-change ? Theme.text-disabled : Theme.text-tertiary;
+                                color: Theme.text-disabled;
+                            }
+                            if !output.is-change: NoteText {
+                                note: output.kind;
+                                font-size: Typo.caption;
+                                color: Theme.text-tertiary;
                             }
                         }
 
@@ -461,8 +463,8 @@ export component SendScreen inherits VerticalLayout {
                     }
                 }
 
-                if SendState.problem != "": Text {
-                    text: SendState.problem;
+                if SendState.problem.code != "": NoticeTitle {
+                    note: SendState.problem;
                     font-size: Typo.caption;
                     color: Theme.negative;
                     wrap: word-wrap;
@@ -475,7 +477,7 @@ export component SendScreen inherits VerticalLayout {
                         variant: "ghost";
                         clicked => {
                             Actions.cancel-send(SendState.ticket);
-                            SendState.problem = "";
+                            SendState.problem = { code: "", args: [] };
                             SendState.step = "form";
                         }
                     }
@@ -544,7 +546,7 @@ export component SendScreen inherits VerticalLayout {
                         text: @tr("Done");
                         variant: "primary";
                         clicked => {
-                            SendState.problem = "";
+                            SendState.problem = { code: "", args: [] };
                             SendState.step = "form";
                         }
                     }

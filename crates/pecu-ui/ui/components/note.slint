@@ -58,6 +58,23 @@ export component NoteText inherits Text {
         : root.note.code == "amount-unparsable"
             ? @tr("Not an amount. Up to eight decimal places, like 1.5 or 0.00000001.")
 
+        // ── What an output is ───────────────────────────────────────────
+        : root.note.code == "output-payment" ? @tr("Payment")
+        : root.note.code == "output-to-public-key" ? @tr("Payment to a public key")
+        : root.note.code == "output-to-verusid" ? @tr("Payment to a VerusID")
+        : root.note.code == "output-token" ? @tr("Token output")
+        : root.note.code == "output-unreadable" ? @tr("Could not be read")
+        : root.note.code == "output-unrecognised"
+            ? @tr("An output this build cannot read: {0}", root.note.args[0])
+
+        // ── Where a price came from ─────────────────────────────────────
+        : root.note.code == "price-from-notarization"
+            ? @tr("Mid price from reserve state notarized at block {0}, before the conversion fee.",
+                  root.note.args[0])
+        : root.note.code == "price-no-pool"
+            ? @tr("No started pool holds both {0} and {1}.",
+                  root.note.args[0], root.note.args[1])
+
         // ── Converting ──────────────────────────────────────────────────
         : root.note.code == "convert-pick-both"
             ? @tr("Choose what to pay with and what to receive.")
@@ -81,4 +98,202 @@ export component NoteText inherits Text {
     font-size: Typo.caption;
     color: root.problem ? Theme.negative : Theme.text-tertiary;
     wrap: word-wrap;
+}
+
+// What the wallet said, in a headline.
+//
+// # Why this is a second chain rather than a field on the first
+//
+// Because a toast has two lines with different jobs — what happened, and what
+// to do about it — and only some codes have both. Keeping them apart lets a
+// code carry a headline alone, which most of them do, without every entry in
+// the table having to write an empty string for the half it does not use.
+//
+// The codes are the same ones `NoteText` renders. A refusal that reaches a
+// field and a refusal that reaches a toast are the same fact, and the day one
+// of them is shown in the other place it should not need a second sentence.
+export component NoticeTitle inherits Text {
+    in property <Note> note;
+    // How many times this has been said. The suffix is here rather than around
+    // the component so the sentence and its count stay one string — a count in
+    // a second `Text` beside it would wrap onto its own line at the width this
+    // card actually has.
+    in property <int> count: 1;
+
+    property <string> sentence: root.note.code == "" ? ""
+
+        // ── The wallet, the vault, the passphrase ───────────────────────
+        : root.note.code == "wallet-create-failed" ? @tr("Could not create the wallet")
+        : root.note.code == "passphrase-wrong"
+            ? @tr("That is not the passphrase this wallet is using")
+        : root.note.code == "passphrase-changed" ? @tr("Passphrase changed")
+        : root.note.code == "wallet-locked" ? @tr("The wallet is locked")
+        : root.note.code == "backup-record-failed" ? @tr("Could not record the backup")
+        : root.note.code == "backup-in-progress"
+            ? @tr("Finish writing down the current recovery phrase first")
+
+        // ── Importing a key ─────────────────────────────────────────────
+        : root.note.code == "import-not-a-verus-key"
+            ? @tr("That is not a private key Pecu can read")
+        : root.note.code == "import-failed" ? @tr("Could not import that key")
+        : root.note.code == "phrase-mismatch"
+            ? @tr("That does not match the phrase we showed you. Check what you wrote down.")
+        : root.note.code == "phrase-checksum"
+            ? @tr("There is a typo in that phrase — one word is wrong or out of order.")
+        : root.note.code == "phrase-unknown-word"
+            ? @tr("Word {0} is not a recovery word. Check its spelling.", root.note.args[0])
+        : root.note.code == "phrase-word-count"
+            ? @tr("That is {0} words, and a recovery phrase has 12, 15, 18, 21 or 24.",
+                  root.note.args[0])
+        : root.note.code == "phrase-refused"
+            ? @tr("That phrase cannot be used: {0}", root.note.args[0])
+
+        // ── Keys ────────────────────────────────────────────────────────
+        : root.note.code == "key-name-taken"
+            ? @tr("There is already a key called {0}", root.note.args[0])
+        : root.note.code == "key-name-rules" ? @tr("That key name cannot be used")
+        : root.note.code == "key-not-here" ? @tr("That key is not in this wallet")
+        : root.note.code == "key-change-failed" ? @tr("Could not change that key")
+
+        // ── Nodes and chains ────────────────────────────────────────────
+        : root.note.code == "node-unreachable" ? @tr("Could not reach that node")
+        : root.note.code == "mock-chain-failed" ? @tr("The scripted chain could not be built")
+        : root.note.code == "node-duplicate" ? @tr("That endpoint is already in the list")
+        : root.note.code == "node-store-unavailable" ? @tr("Pecu cannot save a node right now")
+        : root.note.code == "node-not-saved" ? @tr("That node could not be saved")
+        : root.note.code == "node-added" ? @tr("Node added")
+        : root.note.code == "node-failover" ? @tr("Switched to another node")
+        : root.note.code == "node-url-insecure" ? @tr("That address is not encrypted")
+        : root.note.code == "node-url-unusable" ? @tr("That is not an address Pecu can use")
+        : root.note.code == "read-wrong-chain"
+            ? @tr("This node is on {0}, not {1}", root.note.args[0], root.note.args[1])
+        : root.note.code == "chain-switched"
+            ? @tr("Now on {0}. The wallet is locked.", root.note.args[0])
+        : root.note.code == "chain-switch-busy" ? @tr("A payment is on its way")
+
+        // ── Reading the chain ───────────────────────────────────────────
+        : root.note.code == "history-unreadable" ? @tr("Could not read this wallet's activity")
+        : root.note.code == "history-older-unreadable" ? @tr("Could not read older transactions")
+        : root.note.code == "identities-unreadable" ? @tr("Could not read your VerusIDs")
+        : root.note.code == "markets-unreadable" ? @tr("Could not read what things are worth")
+
+        // ── Spending ────────────────────────────────────────────────────
+        : root.note.code == "mainnet-confirm" ? @tr("Type the word mainnet to turn this on")
+        : root.note.code == "spend-no-node" ? @tr("No node is selected")
+        : root.note.code == "spend-chain-unknown"
+            ? @tr("The node has not said which chain it is on yet")
+        : root.note.code == "spend-wrong-chain"
+            ? @tr("This node is on {0}, but the wallet is set to {1}",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "spend-mainnet-off" ? @tr("Spending on mainnet is turned off")
+        : root.note.code == "spend-node-syncing"
+            ? @tr("The node is still catching up — {0} of {1} blocks",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "spend-node-not-ready"
+            ? @tr("The node is not ready to be spent through")
+        : root.note.code == "send-not-enough-spendable" ? @tr("Not enough spendable coins")
+        : root.note.code == "send-build-failed" ? @tr("Could not build this payment")
+        : root.note.code == "broadcast-rejected" ? @tr("The network rejected this transaction")
+        : root.note.code == "pending-unsaved"
+            ? @tr("Could not record the payment before sending it, so it was not sent")
+        : root.note.code == "resend-unconfirmed" ? @tr("That payment still could not be confirmed")
+
+        // ── VerusIDs ────────────────────────────────────────────────────
+        : root.note.code == "identity-change-failed" ? @tr("Could not build that change")
+        : root.note.code == "identity-change-rejected" ? @tr("The change was not accepted")
+        : root.note.code == "identity-revoke-confirm" ? @tr("Type the word to confirm")
+        : root.note.code == "name-claim-failed" ? @tr("Could not claim that name")
+        : root.note.code == "name-claim-unsaved"
+            ? @tr("Could not save the claim before sending it, so it was not sent")
+        : root.note.code == "name-claim-uncertain" ? @tr("We could not confirm the claim was sent")
+        : root.note.code == "name-register-failed" ? @tr("Could not finish registering that name")
+        : root.note.code == "name-claim-busy" ? @tr("A name is already being registered")
+        : root.note.code == "name-refused" ? @tr("That name cannot be claimed")
+
+        // ── Currencies ──────────────────────────────────────────────────
+        : root.note.code == "launch-draft-invalid" ? @tr("That currency cannot be launched yet")
+        : root.note.code == "launch-identity-not-yours"
+            ? @tr("That identity is not in this wallet")
+        : root.note.code == "launch-identity-unknown"
+            ? @tr("That identity is not in this wallet yet")
+        : root.note.code == "launch-chain-unknown"
+            ? @tr("The chain has not said what its own currency is")
+        : root.note.code == "launch-build-failed" ? @tr("Could not build that launch")
+        : root.note.code == "launch-rejected" ? @tr("The launch was not accepted")
+        : root.note.code == "launch-busy" ? @tr("A currency is already being made")
+        : root.note.code == "launch-on-its-way"
+            ? @tr("{0} is on its way", root.note.args[0])
+
+        // A code nobody wrote a headline for. Visible on purpose.
+        : root.note.code;
+
+    text: root.count > 1 ? @tr("{} ({}×)", root.sentence, root.count) : root.sentence;
+
+    // Size, weight and colour are the caller's. This component's job is the
+    // sentence: the same reason appears in a toast at body weight and beside a
+    // field at caption size in red, and baking either in would make one of the
+    // two wrong.
+}
+
+// …and what to do about it, where there is something to say.
+//
+// Empty for most codes. A toast whose second line repeats the first in more
+// words is a toast people stop reading, so this only speaks where the answer is
+// not already in the headline.
+export component NoticeBody inherits Text {
+    in property <Note> note;
+
+    text: root.note.code == "backup-in-progress"
+            ? @tr("A key is only as safe as its phrase, and showing two at once is how the wrong one gets written down.")
+        : root.note.code == "import-not-a-verus-key"
+            ? @tr("Verus keys start with a U; a key from another chain is refused rather than silently reinterpreted.")
+        : root.note.code == "phrase-word-count"
+            ? @tr("If it is not a recovery phrase, choose Free text.")
+        : root.note.code == "key-name-rules"
+            ? @tr("A key name can use lowercase letters, digits, - and _, and has to start with a letter or a digit.")
+        : root.note.code == "node-duplicate"
+            ? @tr("Two entries for one node would probe identically and could never disagree about anything worth knowing.")
+        : root.note.code == "node-store-unavailable"
+            ? @tr("The wallet database could not be opened, so a node added now would be gone at the next start.")
+        : root.note.code == "node-not-saved"
+            ? @tr("It has not been added, because a node the wallet cannot write down would disappear at the next start.")
+        : root.note.code == "node-failover"
+            ? @tr("The node Pecu was using stopped answering, so it moved to one that is. Nothing about your wallet changed.")
+        : root.note.code == "read-wrong-chain"
+            ? @tr("Pecu is not reading balances from it. The addresses in this wallet do not exist on that chain, so anything it reported would be a figure about somebody else's — or about nothing at all. Choose a node on the right chain.")
+        : root.note.code == "chain-switch-busy"
+            ? @tr("Wait for it to finish before changing chains.")
+        : root.note.code == "mainnet-confirm"
+            ? @tr("Spending real coins is off by default, and turning it on is deliberately a little awkward.")
+        : root.note.code == "spend-wrong-chain"
+            ? @tr("Pecu will not sign against a chain you did not choose.")
+        : root.note.code == "send-not-enough-spendable"
+            ? @tr("Mined coins need 100 confirmations, and coins held by a VerusID cannot be moved by this key.")
+        : root.note.code == "identity-revoke-confirm"
+            ? @tr("A revocation cannot be undone without the recovery authority, and an identity that is its own cannot be revoked at all.")
+        : root.note.code == "name-claim-uncertain"
+            ? @tr("It may already be on its way. Pecu saved it and is checking. Do not start the same name again — that would spend a second fee.")
+        : root.note.code == "name-claim-busy"
+            ? @tr("Finish or abandon it before starting another. A claim expires about twenty blocks after it is signed.")
+        : root.note.code == "launch-draft-invalid"
+            ? @tr("Something in the definition is still wrong.")
+        : root.note.code == "launch-identity-not-yours"
+            ? @tr("Choose one of your own identities to define it under.")
+        : root.note.code == "launch-identity-unknown"
+            ? @tr("Refresh the identities and try again.")
+        : root.note.code == "launch-chain-unknown"
+            ? @tr("Refresh and try again.")
+        : root.note.code == "launch-busy"
+            ? @tr("Finish or abandon that one first — each carries a name claim with its own deadline.")
+        : root.note.code == "launch-on-its-way"
+            ? @tr("It begins at block {0}. Until then it exists and does nothing.", root.note.args[0])
+        : "";
+
+    // Most codes have no second line, and a Text with nothing in it still takes
+    // a row and the spacing around it — which put a blank gap between the
+    // headline and the node's words on every toast that had only one of them.
+    visible: self.text != "";
+    height: self.text == "" ? 0px : self.preferred-height;
+
+    // Styling is the caller's here too, for the same reason.
 }

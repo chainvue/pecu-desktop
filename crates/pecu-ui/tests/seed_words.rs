@@ -98,7 +98,7 @@ fn closing_overwrites_before_it_drops(ui: &AppWindow) {
     assert_eq!(state.get_words().row_count(), 0);
     assert_eq!(state.get_challenge().row_count(), 0);
     assert_eq!(state.get_step(), "");
-    assert_eq!(state.get_problem(), "");
+    assert_eq!(state.get_problem().code, "");
 }
 
 /// A backup that was never opened must not blow up when the screen is closed —

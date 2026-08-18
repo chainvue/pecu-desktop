@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::models::NoteVm;
+
 /// How loudly to say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Severity {
@@ -52,9 +54,20 @@ pub struct UiError {
     /// Stable, greppable identifier. Appears in logs and in bug reports, and
     /// never changes once shipped — it is what a support conversation is about.
     pub code: &'static str,
-    /// One line, read first.
-    pub title: String,
-    /// What to do about it.
+    /// What happened, as a **named reason** rather than a sentence.
+    ///
+    /// The core knows what went wrong. It does not know how wide the line is,
+    /// what is beside it, or what language it is in — so it names the reason and
+    /// supplies the values, and `components/note.slint` has the words. Same
+    /// arrangement as every field-level refusal, for the same reasons, and it is
+    /// why a catalogue can now reach a toast at all.
+    pub message: NoteVm,
+    /// What to do about it, when that is something **only the machine can
+    /// say** — a node's own error text, or a reason the core assembled from one.
+    ///
+    /// Not translatable and not meant to be: these are the words a daemon used.
+    /// Prose that the *wallet* wrote belongs in the message above, where a
+    /// catalogue can reach it.
     pub detail: String,
     /// The whole cause chain, walked through `std::error::Error::source`.
     pub technical: String,
@@ -66,13 +79,13 @@ impl UiError {
     /// An error with nothing for the user to do but read it.
     pub fn simple(
         code: &'static str,
-        title: impl Into<String>,
+        message: NoteVm,
         detail: impl Into<String>,
         severity: Severity,
     ) -> Self {
         Self {
             code,
-            title: title.into(),
+            message,
             detail: detail.into(),
             technical: String::new(),
             severity,

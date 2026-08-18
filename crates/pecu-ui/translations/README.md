@@ -83,14 +83,26 @@ Two kinds of literal are exempt and both are recognised rather than tolerated:
 
 ## What is still not covered
 
-`@tr` reaches `.slint` and nothing else. Around a hundred user-visible sentences
-are still built in Rust — refusals and explanations from `pecu-core` — and they
-arrive at the interface already written. Slint cannot translate those, and
-neither can this directory.
+`@tr` reaches `.slint` and nothing else, so a sentence built in Rust is one no
+catalogue can touch. There were about a hundred and seven of them. There are
+now **forty-one**, and all but a handful are in two files:
 
-The answer is the one `components/note.slint` already demonstrates: the core
-names a **reason** and supplies the values, and the words live in `.slint`. The
-send and convert forms work that way now; the rest of the core does not yet.
+| file | left | what they feed |
+|---|---|---|
+| `pecu-core/src/currency.rs` | 17 | the currency draft validator's refusals and notes |
+| `pecu-core/src/identity.rs` | 16 | the identity lookup and authority verdicts |
+| `pecu-core/src/lib.rs` | 7 | `RegistrationVm.note`, the name check, the currency picker's problem |
+
+Everything else goes through a **named reason** now. The core says what is
+wrong and supplies the values; `components/note.slint` has the words, in three
+chains: `NoteText` for a refusal beside a field, `NoticeTitle` for the headline
+on a toast, `NoticeBody` for the line under it.
+
+An unknown code renders as itself, which is ugly on purpose — a code with no
+sentence is a bug, and it should be visible the first time it is drawn rather
+than the first time somebody reads a screenshot carefully. That is not
+theoretical: it caught a sentence filed in the wrong chain during this very
+change, in the first render after the mistake.
 
 ## The German catalogue here is a fixture
 

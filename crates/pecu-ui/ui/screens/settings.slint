@@ -5,6 +5,7 @@ import { Btn, Card, Eyebrow, ListRow, Segmented, StatusPill } from "../component
 import { KeyRow, KnownAddressRow } from "../vm/structs.slint";
 import { Actions, AppInfo, NetworkState, SendState, WalletState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
+import { NoticeTitle } from "../components/note.slint";
 
 // One labelled block of settings.
 export component Section inherits VerticalLayout {
@@ -236,7 +237,7 @@ export component RenameKeyForm inherits VerticalLayout {
             y: (parent.height - self.height) / 2;
             clicked => {
                 WalletState.renaming = "";
-                WalletState.key-problem = "";
+                WalletState.key-problem = { code: "", args: [] };
             }
         }
     }
@@ -244,8 +245,8 @@ export component RenameKeyForm inherits VerticalLayout {
     // Under the form, not at the foot of the list. A refusal that appears
     // three rows away from the field it is about is one someone has to go
     // looking for.
-    if WalletState.key-problem != "": Text {
-        text: WalletState.key-problem;
+    if WalletState.key-problem.code != "": NoticeTitle {
+        note: WalletState.key-problem;
         font-size: Typo.caption;
         color: Theme.negative;
         wrap: word-wrap;
@@ -256,7 +257,7 @@ export component RenameKeyForm inherits VerticalLayout {
     // with the message explaining why.
     function submit() {
         if (field.text == "" || field.text == root.label) { return; }
-        WalletState.key-problem = "";
+        WalletState.key-problem = { code: "", args: [] };
         Actions.rename-key(root.label, field.text);
     }
 }
@@ -282,7 +283,7 @@ export component AddKeyForm inherits HorizontalLayout {
 
     function submit() {
         if (field.text == "") { return; }
-        WalletState.key-problem = "";
+        WalletState.key-problem = { code: "", args: [] };
         Actions.add-key(field.text);
     }
 }
@@ -340,7 +341,7 @@ export component KeyRowItem inherits VerticalLayout {
                     x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     clicked => {
-                        WalletState.key-problem = "";
+                        WalletState.key-problem = { code: "", args: [] };
                         WalletState.renaming = root.entry.label;
                         WalletState.rename-draft = root.entry.label;
                     }
@@ -557,8 +558,8 @@ export component SettingsScreen inherits VerticalLayout {
 
             // Only when no rename is open — that form shows its own copy under
             // itself, and one message rendered twice reads as two problems.
-            if WalletState.key-problem != "" && WalletState.renaming == "": Text {
-                text: WalletState.key-problem;
+            if WalletState.key-problem.code != "" && WalletState.renaming == "": NoticeTitle {
+                note: WalletState.key-problem;
                 font-size: Typo.caption;
                 color: Theme.negative;
                 wrap: word-wrap;

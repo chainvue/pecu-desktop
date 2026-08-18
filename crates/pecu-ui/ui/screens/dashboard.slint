@@ -530,7 +530,7 @@ export component DashboardScreen inherits VerticalLayout {
                     variant: "primary";
                     y: (parent.height - self.height) / 2;
                     clicked => {
-                        SeedState.problem = "";
+                        SeedState.problem = { code: "", args: [] };
                         SeedState.step = "passphrase";
                     }
                 }

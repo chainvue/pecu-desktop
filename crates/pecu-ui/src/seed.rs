@@ -44,7 +44,7 @@ pub fn open(ui: &AppWindow, positions: &[u32], word_count: u32) {
 
     seed.set_challenge(ModelRc::from(Rc::new(VecModel::from(positions))));
     seed.set_words(ModelRc::from(Rc::new(VecModel::from(masked(word_count)))));
-    seed.set_problem(SharedString::new());
+    seed.set_problem(crate::Note::default());
     seed.set_step("phrase".into());
 }
 
@@ -98,7 +98,7 @@ pub fn close(ui: &AppWindow) {
         Vec::new(),
     ))));
     seed.set_challenge(ModelRc::from(Rc::new(VecModel::<i32>::from(Vec::new()))));
-    seed.set_problem(SharedString::new());
+    seed.set_problem(crate::Note::default());
     seed.set_step(SharedString::new());
 }
 

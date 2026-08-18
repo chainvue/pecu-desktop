@@ -127,10 +127,8 @@ fn apply(ui: &AppWindow, event: Event) {
             } else {
                 // Never which word. Saying that would make this screen a
                 // checker someone could feed guesses to one position at a time.
-                ui.global::<SeedState>().set_problem(
-                    "That does not match the phrase we showed you. Check what you wrote down."
-                        .into(),
-                );
+                ui.global::<SeedState>()
+                    .set_problem(note(&pecu_protocol::NoteVm::plain("phrase-mismatch")));
             }
         }
 
@@ -401,7 +399,7 @@ fn apply(ui: &AppWindow, event: Event) {
             }
         }
 
-        Event::Notice(error) => apply_notice(ui, error),
+        Event::Notice(error) => apply_notice(ui, &error),
 
         // Core only ever replaces this list wholesale.
         Event::Pending(other) => tracing::debug!(?other, "unexpected pending delta"),
@@ -414,7 +412,7 @@ fn apply(ui: &AppWindow, event: Event) {
 /// to appear next to the control that caused it, or it is indistinguishable
 /// from the button having done nothing. This is the stand-in for a proper toast
 /// host, and the codes it knows about are the ones with a screen of their own.
-fn apply_notice(ui: &AppWindow, error: pecu_protocol::UiError) {
+fn apply_notice(ui: &AppWindow, error: &pecu_protocol::UiError) {
     let network = ui.global::<NetworkState>();
 
     match error.code {
@@ -422,7 +420,7 @@ fn apply_notice(ui: &AppWindow, error: pecu_protocol::UiError) {
         // deliberately does not clear itself on submit, so that a refused
         // address survives to be corrected rather than retyped.
         "node_added" => {
-            network.set_problem(SharedString::new());
+            network.set_problem(pecu_ui::Note::default());
             network.set_draft_url(SharedString::new());
             network.set_draft_label(SharedString::new());
         }
@@ -433,14 +431,14 @@ fn apply_notice(ui: &AppWindow, error: pecu_protocol::UiError) {
         // message beside that field beats one in the corner. Everything else
         // falls through to a toast.
         "add_node" | "node_connect" => {
-            tracing::warn!(code = error.code, title = %error.title, "notice");
-            network.set_problem(error.title.into());
+            tracing::warn!(code = error.code, reason = %error.message.code, "notice");
+            network.set_problem(note(&error.message));
         }
 
         "add_key" | "rename_key" => {
-            tracing::warn!(code = error.code, title = %error.title, "notice");
+            tracing::warn!(code = error.code, reason = %error.message.code, "notice");
             ui.global::<WalletState>()
-                .set_key_problem(error.title.into());
+                .set_key_problem(note(&error.message));
         }
 
         // ── The unlock and restore forms ────────────────────────────────
@@ -448,16 +446,16 @@ fn apply_notice(ui: &AppWindow, error: pecu_protocol::UiError) {
         // These happen while the shell is not on screen, so a toast would be
         // rendered over an onboarding screen that has a better place for it.
         "unlock" | "import_key" | "wallet_create" => {
-            tracing::warn!(code = error.code, title = %error.title, "notice");
+            tracing::warn!(code = error.code, reason = %error.message.code, "notice");
             let state = ui.global::<WalletState>();
             state.set_busy(false);
-            state.set_problem(error.title.into());
+            state.set_problem(note(&error.message));
         }
 
         // The passphrase re-prompt on the backup screen.
         "reveal_backup" => {
-            tracing::warn!(code = error.code, title = %error.title, "notice");
-            ui.global::<SeedState>().set_problem(error.title.into());
+            tracing::warn!(code = error.code, reason = %error.message.code, "notice");
+            ui.global::<SeedState>().set_problem(note(&error.message));
         }
 
         // ── Everything else ─────────────────────────────────────────────
@@ -467,9 +465,9 @@ fn apply_notice(ui: &AppWindow, error: pecu_protocol::UiError) {
         // of them landed on a property rendered only by the unlock form, so
         // while the wallet was open they happened in silence.
         _ => {
-            tracing::warn!(code = error.code, title = %error.title, "notice");
+            tracing::warn!(code = error.code, reason = %error.message.code, "notice");
             ui.global::<WalletState>().set_busy(false);
-            pecu_ui::toast::show(ui, &error);
+            pecu_ui::toast::show(ui, error);
         }
     }
 }
@@ -656,7 +654,7 @@ fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDeta
     state.set_detail_change(detail.change.clone().into());
     state.set_detail_tone(detail.tone.clone().into());
     state.set_detail_route(detail.route.clone().into());
-    state.set_detail_route_note(detail.route_note.clone().into());
+    state.set_detail_route_note(note(&detail.route_note));
 
     let figures: Vec<pecu_ui::Stat> = detail
         .stats
@@ -904,14 +902,14 @@ fn apply_review(ui: &AppWindow, vm: &pecu_protocol::SendReviewVm) {
             // Empty means the script could not be decoded. The screen
             // shows that as such rather than hiding the row.
             address: output.address.clone().unwrap_or_default().into(),
-            kind: output.kind.clone().into(),
+            kind: note(&output.kind),
             amount: output.amount_display.clone().into(),
             is_change: output.is_change,
         })
         .collect();
     send.set_outputs(ModelRc::from(Rc::new(VecModel::from(outputs))));
 
-    send.set_problem(SharedString::new());
+    send.set_problem(pecu_ui::Note::default());
     send.set_step("review".into());
 }
 
@@ -921,7 +919,7 @@ fn apply_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
     match outcome {
         SendOutcomeVm::Sent { txid, .. } => {
             send.set_txid(txid.into());
-            send.set_problem(SharedString::new());
+            send.set_problem(pecu_ui::Note::default());
             send.set_step("sent".into());
         }
         // Not an error, and not a success. The bytes are on disk and the
@@ -932,7 +930,7 @@ fn apply_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
             send.set_step("uncertain".into());
         }
         SendOutcomeVm::Failed(error) => {
-            send.set_problem(error.title.into());
+            send.set_problem(note(&error.message));
             // Stays on whichever step it failed on, so the form or the
             // review is still there to correct.
         }
@@ -947,7 +945,7 @@ fn apply_wallet(ui: &AppWindow, vm: pecu_protocol::WalletVm) {
     state.set_name(vm.name.clone().into());
     state.set_busy(false);
     // A successful transition clears whatever went wrong last time.
-    state.set_problem(SharedString::new());
+    state.set_problem(pecu_ui::Note::default());
     state.set_loading(false);
 
     // The ACTIVE key's address, not the first one. Receive shows this and Send
@@ -1022,13 +1020,13 @@ fn close_finished_key_forms(state: &WalletState<'_>, vm: &pecu_protocol::WalletV
     if !renaming.is_empty() && !has(&renaming) {
         state.set_renaming(SharedString::new());
         state.set_rename_draft(SharedString::new());
-        state.set_key_problem(SharedString::new());
+        state.set_key_problem(pecu_ui::Note::default());
     }
 
     let adding = state.get_new_key_draft();
     if !adding.is_empty() && has(&adding) {
         state.set_new_key_draft(SharedString::new());
-        state.set_key_problem(SharedString::new());
+        state.set_key_problem(pecu_ui::Note::default());
     }
 }
 

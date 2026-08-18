@@ -302,7 +302,7 @@ async fn a_resumed_launch_is_signed_but_waits_for_a_press() {
             match events.recv().await {
                 Some(Event::LaunchPrepared(Some(review))) => break *review,
                 Some(Event::Notice(notice)) => {
-                    panic!("resuming was refused: {} — {}", notice.title, notice.detail)
+                    panic!("resuming was refused: {:?} — {}", notice.message, notice.detail)
                 }
                 Some(_) => {}
                 None => panic!("the core stopped before the launch was built"),

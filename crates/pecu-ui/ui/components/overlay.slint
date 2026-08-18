@@ -5,6 +5,7 @@ import { Btn, EmptyState } from "base.slint";
 import { Icon } from "icons.slint";
 import { SearchState, ToastState } from "../vm/state.slint";
 import { Field } from "form.slint";
+import { NoticeBody, NoticeTitle } from "note.slint";
 
 // The stack of things the wallet has said.
 //
@@ -186,14 +187,12 @@ export component ToastHost inherits Rectangle {
                         horizontal-stretch: 1;
                         spacing: Sp.s2;
 
-                        Text {
-                            // The count rather than one card per occurrence: a
-                            // refresh failing every fifteen seconds is one
-                            // problem, and forty cards is a wallet nobody can
-                            // use.
-                            text: entry.count > 1
-                                ? @tr("{} ({}×)", entry.title, entry.count)
-                                : entry.title;
+                        // The count rather than one card per occurrence: a
+                        // refresh failing every fifteen seconds is one problem,
+                        // and forty cards is a wallet nobody can use.
+                        NoticeTitle {
+                            note: entry.note;
+                            count: entry.count;
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: entry.severity == "danger" ? Theme.negative
@@ -202,10 +201,20 @@ export component ToastHost inherits Rectangle {
                             wrap: word-wrap;
                         }
 
+                        // What to do about it, in the wallet's own words…
+                        NoticeBody {
+                            note: entry.note;
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+
+                        // …and what only the node can say, which is never
+                        // translated because they are not the wallet's words.
                         if entry.detail != "": Text {
                             text: entry.detail;
                             font-size: Typo.caption;
-                            color: Theme.text-secondary;
+                            color: Theme.text-tertiary;
                             wrap: word-wrap;
                         }
                     }

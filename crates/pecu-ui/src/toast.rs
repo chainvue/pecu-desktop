@@ -43,7 +43,7 @@ thread_local! {
 
 struct Notice {
     code: &'static str,
-    title: String,
+    note: pecu_protocol::NoteVm,
     detail: String,
     severity: Severity,
     count: u32,
@@ -94,14 +94,14 @@ pub fn show(ui: &AppWindow, error: &UiError) {
             existing.count = existing.count.saturating_add(1);
             // The newest wording wins: the same code can carry a different
             // sentence, and the one that just happened is the true one.
-            existing.title.clone_from(&error.title);
+            existing.note.clone_from(&error.message);
             existing.detail.clone_from(&error.detail);
             return;
         }
 
         toasts.push(Notice {
             code: error.code,
-            title: error.title.clone(),
+            note: error.message.clone(),
             detail: error.detail.clone(),
             severity: error.severity,
             count: 1,
@@ -132,7 +132,15 @@ fn publish(ui: &AppWindow) {
             .iter()
             .map(|notice| ToastRow {
                 code: notice.code.into(),
-                title: notice.title.as_str().into(),
+                note: crate::Note {
+                    code: notice.note.code.as_str().into(),
+                    args: slint::ModelRc::new(slint::VecModel::from(
+                        notice.note.args
+                            .iter()
+                            .map(|arg| slint::SharedString::from(arg.as_str()))
+                            .collect::<Vec<_>>(),
+                    )),
+                },
                 detail: notice.detail.as_str().into(),
                 severity: match notice.severity {
                     Severity::Info => "info",

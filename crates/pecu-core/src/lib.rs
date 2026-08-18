@@ -887,7 +887,9 @@ impl Core {
                 // node beats showing a zero the wallet made up.
                 self.refresh();
             }
-            Err(error) => self.notice("wallet_create", "Could not create the wallet", &error),
+            Err(error) => {
+                self.notice("wallet_create", NoteVm::plain("wallet-create-failed"), &error);
+            }
         }
         self.busy(TaskKind::CreatingWallet, false);
     }
@@ -923,8 +925,7 @@ impl Core {
                 self.refresh();
             }
             Err(error) => {
-                let title = import_title(&error);
-                self.notice("import_key", &title, &error);
+                self.notice("import_key", import_note(&error), &error);
             }
         }
         self.busy(TaskKind::CreatingWallet, false);
@@ -935,7 +936,7 @@ impl Core {
             Ok(challenge) => self.emit_challenge(&challenge),
             Err(error) => self.notice(
                 "reveal_backup",
-                "That passphrase does not unlock this wallet",
+                NoteVm::plain("passphrase-wrong"),
                 &error,
             ),
         }
@@ -952,7 +953,7 @@ impl Core {
 
         if correct {
             if let Err(error) = self.wallet.finish_backup() {
-                self.notice("finish_backup", "Could not record the backup", &error);
+                self.notice("finish_backup", NoteVm::plain("backup-record-failed"), &error);
             }
             let _ = self.events.send(Event::SeedWords(Vec::new()));
         }
@@ -994,7 +995,7 @@ impl Core {
                 Some(chain)
             }
             Err(error) => {
-                self.notice("node_connect", "Could not reach that node", &error);
+                self.notice("node_connect", NoteVm::plain("node-unreachable"), &error);
                 None
             }
         }
@@ -1029,7 +1030,7 @@ impl Core {
             Err(error) => {
                 self.notice(
                     "node_connect",
-                    "The scripted chain could not be built",
+                    NoteVm::plain("mock-chain-failed"),
                     &error,
                 );
                 None
@@ -1136,10 +1137,8 @@ impl Core {
         if let Some(wrong) = self.reading_the_wrong_chain() {
             self.notice_warning(
                 "wrong_chain",
-                &format!("This node is on {wrong}, not {}", self.requested_name()),
-                "Pecu is not reading balances from it. The addresses in this wallet do not \
-                 exist on that chain, so anything it reported would be a figure about somebody \
-                 else's — or about nothing at all. Choose a node on the right chain.",
+                NoteVm::with("read-wrong-chain", [wrong, self.requested_name()]),
+                "",
             );
             return;
         }
@@ -1318,7 +1317,7 @@ impl Core {
             Err(error) => {
                 // An unknown history is not an empty one, and the difference
                 // matters: "no transactions yet" is a claim about the chain.
-                self.notice("history", "Could not read this wallet's activity", error);
+                self.notice("history", NoteVm::plain("history-unreadable"), error);
             }
         }
 
@@ -1552,7 +1551,7 @@ impl Core {
                     }
                     Err(error) => self.notice(
                         "unlock",
-                        "That passphrase does not unlock this wallet",
+                        NoteVm::plain("passphrase-wrong"),
                         &error,
                     ),
                 }
@@ -1742,7 +1741,7 @@ impl Core {
             Err(error) => {
                 // The list keeps what it has. An older page that could not be
                 // read is a page nobody has seen, not a list that shrank.
-                self.notice("load_history", "Could not read older transactions", &error);
+                self.notice("load_history", NoteVm::plain("history-older-unreadable"), &error);
                 return;
             }
         };
@@ -2059,9 +2058,8 @@ impl Core {
         if self.wallet.backup_in_progress() {
             self.notice_warning(
                 "add_key",
-                "Finish writing down the current recovery phrase first",
-                "A key is only as safe as its phrase, and showing two at once is how the wrong \
-                 one gets written down.",
+                NoteVm::plain("backup-in-progress"),
+                "",
             );
             return;
         }
@@ -2077,7 +2075,7 @@ impl Core {
                 // beats showing a zero the wallet made up.
                 self.refresh();
             }
-            Err(error) => self.notice("add_key", &key_error_title(&error), &error),
+            Err(error) => self.notice("add_key", key_error_note(&error), &error),
         }
     }
 
@@ -2102,7 +2100,7 @@ impl Core {
                 // worth saying before anything else on that screen.
                 self.emit_registration(None);
             }
-            Err(error) => self.notice("rename_key", &key_error_title(&error), &error),
+            Err(error) => self.notice("rename_key", key_error_note(&error), &error),
         }
     }
 
@@ -2138,16 +2136,15 @@ impl Core {
         // plaintext anywhere but loopback. No connection is opened, so this
         // says the URL is one we may use — not that anything is listening.
         if let Err(error) = pecu_chain::validate_url(url) {
-            self.notice("add_node", &url_refusal_title(&error), &error);
+            self.notice("add_node", url_refusal_note(&error), &error);
             return;
         }
 
         if self.nodes.has_url(url) {
             self.notice_warning(
                 "add_node",
-                "That endpoint is already in the list",
-                "Two entries for one node would probe identically and could never disagree \
-                 about anything, which makes choosing between them meaningless.",
+                NoteVm::plain("node-duplicate"),
+                "",
             );
             return;
         }
@@ -2155,9 +2152,8 @@ impl Core {
         let Some(store) = &self.store else {
             self.notice_warning(
                 "add_node",
-                "Pecu cannot save a node right now",
-                "The wallet database could not be opened, so a node added now would be gone \
-                 at the next start. It has not been added.",
+                NoteVm::plain("node-store-unavailable"),
+                "",
             );
             return;
         };
@@ -2173,9 +2169,8 @@ impl Core {
         let Some(row) = store.add_node(&label, url) else {
             self.notice_warning(
                 "add_node",
-                "That node could not be saved",
-                "It has not been added, because a node the wallet cannot write down would \
-                 disappear at the next start without saying so.",
+                NoteVm::plain("node-not-saved"),
+                "",
             );
             return;
         };
@@ -2185,7 +2180,7 @@ impl Core {
         self.emit_network();
         // The one signal the form waits for. It does not clear itself on
         // submit, so that a refused address is still there to be corrected.
-        self.notice_info("node_added", "Node added");
+        self.notice_info("node_added", NoteVm::plain("node-added"));
 
         // Ask it what it is straight away. An entry sitting at "unknown" until
         // someone presses Probe reads as a node that did not work.
@@ -2273,8 +2268,8 @@ impl Core {
         if self.broadcasting {
             self.notice_warning(
                 "network_switch_busy",
-                "A payment is on its way",
-                "Wait for it to finish before changing chains.",
+                NoteVm::plain("chain-switch-busy"),
+                "",
             );
             return;
         }
@@ -2390,7 +2385,7 @@ impl Core {
 
         self.notice_info(
             "network_switched",
-            &format!("Now on {label}. The wallet is locked."),
+            NoteVm::with("chain-switched", [label]),
         );
 
         // Ask the new chain's active node what it is, rather than waiting up to
@@ -2653,9 +2648,8 @@ impl Core {
         self.remember_active_node();
         self.notice_warning(
             "node_failover",
-            "Switched to another node",
-            "The node Pecu was using stopped answering, so it moved to one that is. \
-             Nothing about your wallet changed.",
+            NoteVm::plain("node-failover"),
+            "",
         );
         self.emit_network();
         self.refresh();
@@ -2780,7 +2774,7 @@ impl Core {
         let permit = match self.nodes.spend_permit() {
             Ok(permit) => permit,
             Err(refused) => {
-                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
             }
         };
@@ -2823,7 +2817,7 @@ impl Core {
                 self.pending.set_state(record, pending::State::Resent);
                 self.notice(
                     "resend",
-                    "That payment still could not be confirmed",
+                    NoteVm::plain("resend-unconfirmed"),
                     &error,
                 );
                 self.emit_pending();
@@ -2867,7 +2861,7 @@ impl Core {
     ) {
         match self.wallet.change_passphrase(old, new) {
             Ok(()) => {
-                self.notice_info("passphrase_changed", "Passphrase changed");
+                self.notice_info("passphrase_changed", NoteVm::plain("passphrase-changed"));
                 self.emit_wallet();
                 // A name claim the last run left unfinished. It has a deadline, so it is
                 // worth saying before anything else on that screen.
@@ -2875,7 +2869,7 @@ impl Core {
             }
             Err(error) => self.notice(
                 "change_passphrase",
-                "That is not the passphrase this wallet is using",
+                NoteVm::plain("passphrase-wrong"),
                 &error,
             ),
         }
@@ -2945,10 +2939,8 @@ impl Core {
             .events
             .send(Event::Notice(pecu_protocol::UiError::simple(
                 "mainnet_confirmation",
-                "Type the word mainnet to turn this on".to_string(),
-                "Spending real coins is off by default, and turning it on is deliberately a \
-                 little awkward."
-                    .to_string(),
+                NoteVm::plain("mainnet-confirm"),
+                String::new(),
                 pecu_protocol::Severity::Warning,
             )));
     }
@@ -3162,7 +3154,11 @@ impl Core {
                 });
             }
             Err(reason) => {
-                self.notice_warning("identity_change", "Could not build that change", &reason);
+                self.notice_warning(
+                    "identity_change",
+                    NoteVm::plain("identity-change-failed"),
+                    &reason,
+                );
             }
         }
     }
@@ -3179,9 +3175,8 @@ impl Core {
         {
             self.notice_warning(
                 "identity_change",
-                "Type the word to confirm",
-                "A revocation cannot be undone without the recovery authority, and an \
-                 identity that is its own recovery authority cannot be recovered at all.",
+                NoteVm::plain("identity-revoke-confirm"),
+                "",
             );
             return;
         }
@@ -3196,7 +3191,7 @@ impl Core {
                 // Put it back: rebuilding would produce different bytes, and
                 // the refusal may be something the user can fix.
                 self.identity_changes.insert(ticket, unsent);
-                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
             }
         };
@@ -3227,7 +3222,11 @@ impl Core {
                 self.refresh_identities();
             }
             Err(reason) => {
-                self.notice_warning("identity_change", "The change was not accepted", &reason);
+                self.notice_warning(
+                    "identity_change",
+                    NoteVm::plain("identity-change-rejected"),
+                    &reason,
+                );
             }
         }
     }
@@ -3305,7 +3304,7 @@ impl Core {
         let pending = match result {
             Ok(pending) => pending,
             Err(reason) => {
-                self.notice_warning("registration", "Could not claim that name", &reason);
+                self.notice_warning("registration", NoteVm::plain("name-claim-failed"), &reason);
                 return;
             }
         };
@@ -3316,7 +3315,7 @@ impl Core {
             // only in this process.
             self.notice(
                 "registration_write",
-                "Could not save the claim before sending it, so it was not sent",
+                NoteVm::plain("name-claim-unsaved"),
                 &error,
             );
             return;
@@ -3368,9 +3367,8 @@ impl Core {
                 self.reservation.mark_committed();
                 self.notice_warning(
                     "registration_uncertain",
-                    "We could not confirm the claim was sent",
-                    "It may already be on its way. Pecu saved it and is checking. \
-                     Do not start the same name again — that would spend a second fee.",
+                    NoteVm::plain("name-claim-uncertain"),
+                    "",
                 );
             }
         }
@@ -3462,7 +3460,7 @@ impl Core {
             Ok(permit) => permit,
             Err(refused) => {
                 self.ready = Some(ready);
-                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
             }
         };
@@ -3540,7 +3538,7 @@ impl Core {
                 tracing::warn!(%reason, "the registration could not be completed");
                 self.notice_warning(
                     "registration",
-                    "Could not finish registering that name",
+                    NoteVm::plain("name-register-failed"),
                     &reason,
                 );
                 self.emit_registration(None);
@@ -3600,10 +3598,8 @@ impl Core {
         if self.reservation.in_progress() {
             self.notice_warning(
                 "registration_busy",
-                "A name is already being registered",
-                "Finish or abandon it before starting another. A claim expires about \
-                 twenty blocks after it is signed, and two clocks running at once is \
-                 one more than anybody can watch.",
+                NoteVm::plain("name-claim-busy"),
+                "",
             );
             return;
         }
@@ -3619,7 +3615,7 @@ impl Core {
         // answer is about a shorter name. The same reasoning `prepare_launch`
         // gives: the checks are the core's, and this is where they bind.
         if let Some(problem) = identity::name_problem(&name) {
-            self.notice_warning("registration_name", "That name cannot be claimed", &problem);
+            self.notice_warning("registration_name", NoteVm::plain("name-refused"), &problem);
             return;
         }
         if name.is_empty() {
@@ -3641,7 +3637,7 @@ impl Core {
         let permit = match self.nodes.spend_permit() {
             Ok(permit) => permit,
             Err(refused) => {
-                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
             }
         };
@@ -3721,7 +3717,7 @@ impl Core {
         let found = match result {
             Ok(found) => found,
             Err(error) => {
-                self.notice("identities", "Could not read your VerusIDs", &error);
+                self.notice("identities", NoteVm::plain("identities-unreadable"), &error);
                 return;
             }
         };
@@ -3859,7 +3855,7 @@ impl Core {
                 if self.polling.screen == pecu_protocol::ScreenId::Markets {
                     self.notice_warning(
                         "markets_read",
-                        "Could not read what things are worth",
+                        NoteVm::plain("markets-unreadable"),
                         &error,
                     );
                 }
@@ -4375,8 +4371,8 @@ impl Core {
             // trusted: the checks are the core's, and this is where they bind.
             self.notice_warning(
                 "currency_launch",
-                "That currency cannot be launched yet",
-                "Something in the definition is still wrong.",
+                NoteVm::plain("launch-draft-invalid"),
+                "",
             );
             return;
         }
@@ -4389,8 +4385,8 @@ impl Core {
         else {
             self.notice_warning(
                 "currency_launch",
-                "That identity is not in this wallet",
-                "Choose one of your own identities to define it under.",
+                NoteVm::plain("launch-identity-not-yours"),
+                "",
             );
             return;
         };
@@ -4420,8 +4416,8 @@ impl Core {
         let Some(parent) = self.cached.native else {
             self.notice_warning(
                 "currency_launch",
-                "The chain has not said what its own currency is",
-                "Refresh and try again.",
+                NoteVm::plain("launch-chain-unknown"),
+                "",
             );
             return;
         };
@@ -4440,8 +4436,8 @@ impl Core {
             Err(refused) => {
                 self.notice_warning(
                     "spend_refused",
-                    &refusal_title(&refused),
-                    "Pecu will not sign against a chain you did not choose.",
+                    refusal_note(&refused),
+                    "",
                 );
                 return;
             }
@@ -4534,7 +4530,11 @@ impl Core {
                     .send(Event::LaunchPrepared(Some(Box::new(view))));
             }
             Err(reason) => {
-                self.notice_warning("currency_launch", "Could not build that launch", &reason);
+                self.notice_warning(
+                    "currency_launch",
+                    NoteVm::plain("launch-build-failed"),
+                    &reason,
+                );
             }
         }
     }
@@ -4585,11 +4585,14 @@ impl Core {
                     .events
                     .send(Event::Notice(pecu_protocol::UiError::simple(
                         "currency_launched",
-                        format!("{} is on its way", done.name),
-                        format!(
-                            "It begins at block {}. Until then it exists and does nothing.",
-                            currency::thousands(done.start_block),
+                        NoteVm::with(
+                            "launch-on-its-way",
+                            [
+                                done.name.clone(),
+                                currency::thousands(done.start_block),
+                            ],
                         ),
+                        String::new(),
                         pecu_protocol::Severity::Info,
                     )));
                 // The decision has been carried out. This is the only place the
@@ -4609,7 +4612,7 @@ impl Core {
                 self.refresh_identities();
             }
             Err(reason) => {
-                self.notice_warning("currency_launch", "The launch was not accepted", &reason);
+                self.notice_warning("currency_launch", NoteVm::plain("launch-rejected"), &reason);
             }
         }
     }
@@ -4643,8 +4646,8 @@ impl Core {
         if self.intent.in_progress() {
             self.notice_warning(
                 "currency_launch",
-                "A currency is already being made",
-                "Finish or abandon that one first — each carries a name claim with its own deadline.",
+                NoteVm::plain("launch-busy"),
+                "",
             );
             return;
         }
@@ -4652,8 +4655,8 @@ impl Core {
         if currency::problems(&draft, tip).iter().any(|p| p.blocking) {
             self.notice_warning(
                 "currency_launch",
-                "That currency cannot be launched yet",
-                "Something in the definition is still wrong.",
+                NoteVm::plain("launch-draft-invalid"),
+                "",
             );
             return;
         }
@@ -4695,8 +4698,8 @@ impl Core {
         else {
             self.notice_warning(
                 "currency_launch",
-                "That identity is not in this wallet yet",
-                "Refresh the identities and try again.",
+                NoteVm::plain("launch-identity-unknown"),
+                "",
             );
             return;
         };
@@ -5154,14 +5157,14 @@ impl Core {
                 let _ = self.events.send(Event::SendPrepared(review));
             }
             Err(error) => {
-                let title = send_title(&error);
-                self.notice("prepare_send", &title, &error);
+                let refusal = send_note(&error);
+                self.notice("prepare_send", refusal.clone(), &error);
                 let _ =
                     self.events
                         .send(Event::SendResult(pecu_protocol::SendOutcomeVm::Failed(
                             pecu_protocol::UiError::simple(
                                 "prepare_send",
-                                title,
+                                refusal,
                                 error.to_string(),
                                 pecu_protocol::Severity::Danger,
                             ),
@@ -5185,7 +5188,7 @@ impl Core {
                 // Put it back: the user may turn mainnet spending on and try
                 // again, and rebuilding would pick different coins.
                 self.prepared.insert(ticket, prepared);
-                self.notice("spend_refused", &refusal_title(&refused), &refused);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
             }
         };
@@ -5211,7 +5214,7 @@ impl Core {
                 self.prepared.insert(ticket, prepared);
                 self.notice(
                     "pending_commit",
-                    "Could not record the payment before sending it, so it was not sent",
+                    NoteVm::plain("pending-unsaved"),
                     &error,
                 );
                 return;
@@ -5285,13 +5288,16 @@ impl Core {
                 // A refusal is unambiguous: the node understood it and said no.
                 // Nothing was spent, and the record would only be noise.
                 self.pending.set_state(record, pending::State::Abandoned);
-                let title = "The network rejected this transaction".to_string();
-                self.notice("broadcast_rejected", &title, &error);
+                self.notice(
+                    "broadcast_rejected",
+                    NoteVm::plain("broadcast-rejected"),
+                    &error,
+                );
                 let _ = self.events.send(Event::SendResult(SendOutcomeVm::Failed(
                     pecu_protocol::UiError::simple(
                         "broadcast_rejected",
-                        title,
-                        format!("Nothing was spent. The node said: {error}"),
+                        NoteVm::plain("broadcast-rejected"),
+                        error.to_string(),
                         pecu_protocol::Severity::Danger,
                     ),
                 )));
@@ -5391,7 +5397,7 @@ impl Core {
 
     /// Turn an error into something a person can read, without losing the
     /// technical cause — that is what the "Copy details" button is for.
-    fn notice(&self, code: &'static str, title: &str, error: &dyn std::error::Error) {
+    fn notice(&self, code: &'static str, message: NoteVm, error: &dyn std::error::Error) {
         let mut technical = error.to_string();
         let mut source = error.source();
         while let Some(cause) = source {
@@ -5399,12 +5405,12 @@ impl Core {
             technical.push_str(&cause.to_string());
             source = cause.source();
         }
-        tracing::warn!(code, %technical, "notice");
+        tracing::warn!(code, reason = message.code, %technical, "notice");
 
         let _ = self.events.send(Event::Notice(
             pecu_protocol::UiError::simple(
                 code,
-                title.to_string(),
+                message,
                 error.to_string(),
                 pecu_protocol::Severity::Warning,
             )
@@ -5415,13 +5421,13 @@ impl Core {
     /// A refusal that has no underlying error to quote — the wallet decided,
     /// and it should say why in its own words rather than dress a decision up
     /// as a failure.
-    fn notice_warning(&self, code: &'static str, title: &str, detail: &str) {
-        tracing::info!(code, title, "refused");
+    fn notice_warning(&self, code: &'static str, message: NoteVm, detail: &str) {
+        tracing::info!(code, reason = message.code, "refused");
         let _ = self
             .events
             .send(Event::Notice(pecu_protocol::UiError::simple(
                 code,
-                title.to_string(),
+                message,
                 detail.to_string(),
                 pecu_protocol::Severity::Warning,
             )));
@@ -5429,12 +5435,12 @@ impl Core {
 
     /// A notice that is not a failure. Same channel, so the UI has one place to
     /// render everything it is told.
-    fn notice_info(&self, code: &'static str, title: &str) {
+    fn notice_info(&self, code: &'static str, message: NoteVm) {
         let _ = self
             .events
             .send(Event::Notice(pecu_protocol::UiError::simple(
                 code,
-                title.to_string(),
+                message,
                 String::new(),
                 pecu_protocol::Severity::Info,
             )));
@@ -5480,34 +5486,27 @@ impl Core {
 /// Note what is never in here: the word itself. The SDK reports a bad word by
 /// position only, and an error message is the last place key material should
 /// end up — it goes to logs, to crash reporters, and to screenshots.
-fn import_title(error: &wallet::ImportError) -> String {
+fn import_note(error: &wallet::ImportError) -> NoteVm {
     let problem = match error {
         wallet::ImportError::Mnemonic(problem) => problem,
         // `from_wif` enforces the Verus version byte, so a Bitcoin WIF lands
         // here — and "invalid key" would leave someone staring at a key that
         // is perfectly valid, just not for this chain.
-        wallet::ImportError::Key(_) => {
-            return "That is not a private key Pecu can read. Verus keys start with a U; \
-                    a key from another chain is refused rather than silently reinterpreted."
-                .to_string()
-        }
-        wallet::ImportError::Vault(_) => return "Could not import that key".to_string(),
+        wallet::ImportError::Key(_) => return NoteVm::plain("import-not-a-verus-key"),
+        wallet::ImportError::Vault(_) => return NoteVm::plain("import-failed"),
     };
 
     match problem {
-        MnemonicError::Checksum => {
-            "There is a typo in that phrase — one word is wrong or out of order.".to_string()
-        }
+        MnemonicError::Checksum => NoteVm::plain("phrase-checksum"),
         MnemonicError::UnknownWord { position } => {
-            format!("Word {position} is not a recovery word. Check its spelling.")
+            NoteVm::with("phrase-unknown-word", [position.to_string()])
         }
-        MnemonicError::WordCount(count) => format!(
-            "That is {count} words, and a recovery phrase has 12, 15, 18, 21 or 24. \
-             If it is not a recovery phrase, choose Free text."
-        ),
+        MnemonicError::WordCount(count) => NoteVm::with("phrase-word-count", [count.to_string()]),
         // `MnemonicError` is `#[non_exhaustive]` — the SDK gains a variant
-        // whenever it learns to refuse something new.
-        other => format!("That phrase cannot be used: {other}"),
+        // whenever it learns to refuse something new. The unknown one carries
+        // the SDK's own words, which is the one case where prose from below is
+        // better than a code nobody wrote a sentence for.
+        other => NoteVm::with("phrase-refused", [other.to_string()]),
     }
 }
 
@@ -5517,51 +5516,66 @@ fn import_title(error: &wallet::ImportError) -> String {
 /// and each calls for a different next step: pick another name, fix the name
 /// you picked, or unlock the wallet. A single message would leave all three
 /// people guessing.
-fn key_error_title(error: &pecu_keystore::VaultError) -> String {
+fn key_error_note(error: &pecu_keystore::VaultError) -> NoteVm {
     use pecu_keystore::VaultError;
 
     match error {
-        VaultError::DuplicateLabel(label) => {
-            format!("There is already a key called `{label}`")
-        }
+        VaultError::DuplicateLabel(label) => NoteVm::with("key-name-taken", [label.clone()]),
         // The rules are the vault's, and they are what make a label safe to use
         // as an identifier everywhere else — including in a file path.
-        VaultError::BadLabel(_) => "A key name can use lowercase letters, digits, `-` and `_`, \
-                                    and has to start with a letter or a digit."
-            .to_string(),
-        VaultError::Locked => "The wallet is locked".to_string(),
-        VaultError::NoSuchKey(_) => "That key is not in this wallet".to_string(),
-        _ => "Could not change that key".to_string(),
+        VaultError::BadLabel(_) => NoteVm::plain("key-name-rules"),
+        VaultError::Locked => NoteVm::plain("wallet-locked"),
+        VaultError::NoSuchKey(_) => NoteVm::plain("key-not-here"),
+        _ => NoteVm::plain("key-change-failed"),
     }
 }
 
 /// What the send form says when a build fails.
-fn send_title(error: &send::SendError) -> String {
+fn send_note(error: &send::SendError) -> NoteVm {
     use verus_sdk::network::FlowError;
 
     match error {
-        send::SendError::BadAddress => "That is not an address this wallet can pay".to_string(),
-        send::SendError::BadAmount => "That is not an amount".to_string(),
-        send::SendError::NothingToSend => "Enter an amount above zero".to_string(),
-        send::SendError::Vault(_) => "The wallet is locked".to_string(),
+        send::SendError::BadAddress => NoteVm::plain("address-unparsable"),
+        send::SendError::BadAmount => NoteVm::plain("amount-unparsable"),
+        send::SendError::NothingToSend => NoteVm::plain("amount-zero"),
+        send::SendError::Vault(_) => NoteVm::plain("wallet-locked"),
         // The distinction the SDK draws and a wallet must not lose: what you
         // hold and what you can spend right now are different numbers, and a
         // bare "insufficient funds" against a screen showing a balance reads as
         // a bug in the wallet.
         send::SendError::Flow(FlowError::InsufficientFunds { .. }) => {
-            "Not enough spendable coins. Mined coins need 100 confirmations, and coins held by \
-             a VerusID cannot be moved by this key."
-                .to_string()
+            NoteVm::plain("send-not-enough-spendable")
         }
-        send::SendError::Flow(_) => "Could not build this payment".to_string(),
+        send::SendError::Flow(_) => NoteVm::plain("send-build-failed"),
     }
 }
 
 /// What the send screen says when the spending guard refuses.
-fn refusal_title(refused: &pecu_chain::SpendRefused) -> String {
+fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
+    use pecu_chain::SpendRefused;
+
     // Deliberately specific. "Refused" tells someone nothing about what to do,
-    // and each of these has a different answer.
-    refused.to_string()
+    // and each of these has a different answer — which is also why this is a
+    // match rather than `refused.to_string()`. The `Display` text is a
+    // developer's sentence in a library that knows nothing about who is
+    // reading it, and it was going straight onto a toast.
+    match refused {
+        SpendRefused::NoNode => NoteVm::plain("spend-no-node"),
+        SpendRefused::NetworkUnknown => NoteVm::plain("spend-chain-unknown"),
+        SpendRefused::NetworkMismatch {
+            requested,
+            effective,
+        } => NoteVm::with(
+            "spend-wrong-chain",
+            [effective.to_string(), requested.to_string()],
+        ),
+        SpendRefused::MainnetNotEnabled => NoteVm::plain("spend-mainnet-off"),
+        SpendRefused::Syncing { blocks, longest } => NoteVm::with(
+            "spend-node-syncing",
+            [blocks.to_string(), longest.to_string()],
+        ),
+        SpendRefused::NodeNotReady { .. } => NoteVm::plain("spend-node-not-ready"),
+    }
 }
 
 /// How many consecutive failures mean a node is down rather than unlucky.
@@ -5653,12 +5667,12 @@ fn stored_node_id(id: u32) -> Option<i64> {
 /// like the wallet being difficult, and it is not: it is the one refusal that
 /// prevents every address in this wallet from being readable by whoever is on
 /// the path between here and that node.
-fn url_refusal_title(error: &verus_sdk::network::RpcError) -> String {
+fn url_refusal_note(error: &verus_sdk::network::RpcError) -> NoteVm {
     use verus_sdk::network::RpcError;
 
     match error {
-        RpcError::InsecureUrl { .. } => "That address is not encrypted".to_string(),
-        _ => "That is not an address Pecu can use".to_string(),
+        RpcError::InsecureUrl { .. } => NoteVm::plain("node-url-insecure"),
+        _ => NoteVm::plain("node-url-unusable"),
     }
 }
 
@@ -6102,7 +6116,7 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "import_key");
-        assert!(notice.title.contains("typo"), "{}", notice.title);
+        assert_eq!(notice.message.code, "phrase-checksum", "{:?}", notice.message);
         assert!(!path.exists(), "a refused restore created a wallet file");
 
         // The same words with a valid checksum.
@@ -6704,7 +6718,7 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_key");
-        assert!(notice.title.contains("already"), "{}", notice.title);
+        assert_eq!(notice.message.code, "key-name-taken", "{:?}", notice.message);
 
         // A name the vault's own rules refuse gets a different sentence,
         // because it calls for a different fix.
@@ -6719,7 +6733,7 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_key");
-        assert!(notice.title.contains("lowercase"), "{}", notice.title);
+        assert_eq!(notice.message.code, "key-name-rules", "{:?}", notice.message);
     }
 
     /// Wait for a network event the caller is interested in, ignoring the rest.
@@ -6823,7 +6837,7 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_node");
-        assert!(notice.title.contains("not encrypted"), "{}", notice.title);
+        assert_eq!(notice.message.code, "node-url-insecure", "{:?}", notice.message);
 
         // And nothing was written down, so a restart does not resurrect it.
         let store = pecu_store::Store::open(&chain_dir(&dir)).expect("store");
@@ -6862,7 +6876,7 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_node");
-        assert!(notice.title.contains("already"), "{}", notice.title);
+        assert_eq!(notice.message.code, "node-duplicate", "{:?}", notice.message);
     }
 
     /// Removing whichever node is in use must not leave the wallet pointed at

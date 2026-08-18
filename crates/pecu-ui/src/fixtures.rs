@@ -331,10 +331,7 @@ pub fn market_detail(ui: &AppWindow) {
         },
     ]))));
     state.set_detail_route("VRSCTEST  →  Bridge.vETH  →  DAI.vETH".into());
-    state.set_detail_route_note(
-        "Mid price from reserve state notarized at block 1 156 331, before the conversion fee."
-            .into(),
-    );
+    state.set_detail_route_note(note("price-from-notarization", &["1 156 331"]));
 }
 
 /// The command palette, open over the dashboard with results.
@@ -472,7 +469,7 @@ pub fn renaming_key(ui: &AppWindow) {
     let wallet = ui.global::<WalletState>();
     wallet.set_renaming("savings".into());
     wallet.set_rename_draft("main".into());
-    wallet.set_key_problem("There is already a key called `main`".into());
+    wallet.set_key_problem(note("key-name-taken", &["main"]));
 }
 
 /// The addresses these pictures are drawn with.
@@ -547,8 +544,11 @@ pub fn complaining(ui: &AppWindow) {
         ui,
         &UiError::simple(
             "spend_refused",
-            "This node is on Mainnet, not Testnet",
-            "Pecu will not sign against a chain you did not choose.",
+            pecu_protocol::NoteVm::with(
+                "spend-wrong-chain",
+                ["Mainnet".to_string(), "Testnet".to_string()],
+            ),
+            String::new(),
             Severity::Danger,
         ),
     );
@@ -557,8 +557,9 @@ pub fn complaining(ui: &AppWindow) {
             ui,
             &UiError::simple(
                 "history",
-                "Could not read this wallet\'s activity",
-                "The balance is still current. Only the transaction list failed to load.",
+                pecu_protocol::NoteVm::plain("history-unreadable"),
+                // A node's own words, which is what this line is for.
+                "the node closed the connection".to_string(),
                 Severity::Warning,
             ),
         );
@@ -689,7 +690,7 @@ pub fn reviewing(ui: &AppWindow) {
     send.set_outputs(ModelRc::from(Rc::new(VecModel::from(vec![
         ReviewOutput {
             address: "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX".into(),
-            kind: "Payment".into(),
+            kind: note("output-payment", &[]),
             amount: "50.0000 0000".into(),
             is_change: false,
         },
@@ -699,7 +700,7 @@ pub fn reviewing(ui: &AppWindow) {
             // checksum — which nobody would notice in a picture, and which
             // someone might copy out of it.
             address: "RWmjzbd4Sy6zK4H4rjHXrpaWTrsJYRr6Nn".into(),
-            kind: "Payment".into(),
+            kind: note("output-payment", &[]),
             amount: "12 332.4199 0000".into(),
             is_change: true,
         },
@@ -726,13 +727,13 @@ pub fn reviewing_identity(ui: &AppWindow) {
         ReviewOutput {
             // A real i-address from `api.verustest.net`, so it parses.
             address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
-            kind: "VerusID".into(),
+            kind: note("output-to-verusid", &[]),
             amount: "50.0000 0000".into(),
             is_change: false,
         },
         ReviewOutput {
             address: "RWmjzbd4Sy6zK4H4rjHXrpaWTrsJYRr6Nn".into(),
-            kind: "Payment".into(),
+            kind: note("output-payment", &[]),
             amount: "12 332.4199 0000".into(),
             is_change: true,
         },
@@ -980,7 +981,7 @@ pub fn restoring(ui: &AppWindow) {
     fresh(ui);
     ui.set_restoring(true);
     ui.global::<WalletState>()
-        .set_problem("There is a typo in that phrase — one word is wrong or out of order.".into());
+        .set_problem(note("phrase-checksum", &[]));
 }
 
 /// A wallet that exists and is locked — the screen most sessions start on.
@@ -1001,7 +1002,7 @@ pub fn locked(ui: &AppWindow) {
 pub fn locked_refused(ui: &AppWindow) {
     locked(ui);
     ui.global::<WalletState>()
-        .set_problem("That passphrase does not open this wallet.".into());
+        .set_problem(note("passphrase-wrong", &[]));
 }
 
 /// The send form with more asked for than the wallet holds.
@@ -1087,7 +1088,7 @@ pub fn network_trouble(ui: &AppWindow) {
     // between the picture and the running application, which is the one thing
     // these images exist to catch.
     net.set_node_state("degraded".into());
-    net.set_problem("That address is not encrypted — Pecu only talks https.".into());
+    net.set_problem(note("node-url-insecure", &[]));
 }
 
 /// A wallet whose phrase has never been written down, on the dashboard.
@@ -1119,7 +1120,7 @@ pub fn backup_verify(ui: &AppWindow) {
     let seed = ui.global::<SeedState>();
     seed.set_step("verify".into());
     seed.set_problem(
-        "That does not match the phrase we showed you. Check what you wrote down.".into(),
+        note("phrase-mismatch", &[]),
     );
 }
 

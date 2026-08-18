@@ -4,6 +4,7 @@ import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Card, EmptyState, Eyebrow, StatusPill } from "../components/base.slint";
 import { MarketRow } from "../vm/structs.slint";
 import { MarketState } from "../vm/state.slint";
+import { NoteText, NoticeTitle } from "../components/note.slint";
 
 // One row of the markets table.
 export component MarketRowItem inherits Rectangle {
@@ -351,8 +352,8 @@ export component MarketsScreen inherits HorizontalLayout {
                                 color: Theme.accent;
                                 wrap: word-wrap;
                             }
-                            if MarketState.detail-route-note != "": Text {
-                                text: MarketState.detail-route-note;
+                            if MarketState.detail-route-note.code != "": NoteText {
+                                note: MarketState.detail-route-note;
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                                 wrap: word-wrap;

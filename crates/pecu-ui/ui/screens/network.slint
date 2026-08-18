@@ -4,6 +4,7 @@ import { Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Segmented, StatusPill } from "../components/base.slint";
 import { Actions, NetworkState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
+import { NoticeTitle } from "../components/note.slint";
 
 // Configuring an endpoint of your own.
 //
@@ -29,7 +30,7 @@ export component AddNodeForm inherits VerticalLayout {
                 placeholder: "https://my-node.example:27486";
                 text <=> NetworkState.draft-url;
                 accepted => { root.submit(); }
-                edited => { NetworkState.problem = ""; }
+                edited => { NetworkState.problem = { code: "", args: [] }; }
             }
         }
 
@@ -49,8 +50,8 @@ export component AddNodeForm inherits VerticalLayout {
         }
     }
 
-    if NetworkState.problem != "": Text {
-        text: NetworkState.problem;
+    if NetworkState.problem.code != "": NoticeTitle {
+        note: NetworkState.problem;
         font-size: Typo.caption;
         color: Theme.negative;
         wrap: word-wrap;
@@ -82,7 +83,7 @@ export component AddNodeForm inherits VerticalLayout {
     // corrected rather than retyped from memory.
     function submit() {
         if (url.text == "") { return; }
-        NetworkState.problem = "";
+        NetworkState.problem = { code: "", args: [] };
         Actions.add-node(name.text, url.text);
     }
 }

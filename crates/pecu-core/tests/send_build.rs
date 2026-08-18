@@ -84,7 +84,7 @@ fn a_payment_is_built_signed_and_read_back_without_being_sent() {
         .expect("the recipient is among the outputs");
     assert!(!paid.is_change);
     assert_eq!(paid.amount_display, "50.0000 0000");
-    assert_eq!(paid.kind, "Payment");
+    assert_eq!(paid.kind.code, "output-payment");
 
     let change = review
         .outputs

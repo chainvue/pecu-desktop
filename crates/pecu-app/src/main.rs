@@ -330,7 +330,7 @@ fn wire_wallet(ui: &AppWindow, dispatcher: Dispatcher) {
         actions.on_create_wallet(move |passphrase| {
             if let Some(ui) = weak.upgrade() {
                 let wallet = ui.global::<WalletState>();
-                wallet.set_problem(SharedString::new());
+                wallet.set_problem(pecu_ui::Note::default());
                 wallet.set_busy(true);
             }
             dispatcher.send(Command::CreateWallet {
@@ -346,7 +346,7 @@ fn wire_wallet(ui: &AppWindow, dispatcher: Dispatcher) {
         actions.on_unlock(move |passphrase| {
             if let Some(ui) = weak.upgrade() {
                 let wallet = ui.global::<WalletState>();
-                wallet.set_problem(SharedString::new());
+                wallet.set_problem(pecu_ui::Note::default());
                 wallet.set_busy(true);
             }
             dispatcher.send(Command::Unlock {
@@ -364,7 +364,7 @@ fn wire_wallet(ui: &AppWindow, dispatcher: Dispatcher) {
         actions.on_restore_wallet(move |kind, material, passphrase| {
             if let Some(ui) = weak.upgrade() {
                 let wallet = ui.global::<WalletState>();
-                wallet.set_problem(SharedString::new());
+                wallet.set_problem(pecu_ui::Note::default());
                 wallet.set_busy(true);
             }
 
@@ -408,7 +408,7 @@ fn wire_backup(ui: &AppWindow, dispatcher: &Dispatcher) {
                 return;
             };
             let seed = ui.global::<SeedState>();
-            seed.set_problem(SharedString::new());
+            seed.set_problem(pecu_ui::Note::default());
 
             // Which key is being backed up is the wallet's answer, not the
             // screen's — the UI is told the label, it does not choose one.
@@ -455,7 +455,7 @@ fn wire_backup(ui: &AppWindow, dispatcher: &Dispatcher) {
                 return;
             };
             let seed = ui.global::<SeedState>();
-            seed.set_problem(SharedString::new());
+            seed.set_problem(pecu_ui::Note::default());
 
             // The positions come from the challenge core sent, in the order the
             // three fields were bound to it. Core checks that they are the
@@ -597,7 +597,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
         actions.on_prepare_send(move |to, amount| {
             if let Some(ui) = weak.upgrade() {
                 let send = ui.global::<SendState>();
-                send.set_problem(SharedString::new());
+                send.set_problem(pecu_ui::Note::default());
             }
             dispatcher.send(Command::PrepareSend(SendDraft {
                 from_label: String::new(),
@@ -612,7 +612,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
         let weak = ui.as_weak();
         actions.on_confirm_send(move |ticket| {
             if let Some(ui) = weak.upgrade() {
-                ui.global::<SendState>().set_problem(SharedString::new());
+                ui.global::<SendState>().set_problem(pecu_ui::Note::default());
             }
             dispatcher.send(Command::ConfirmSend {
                 ticket: ticket_id(ticket),

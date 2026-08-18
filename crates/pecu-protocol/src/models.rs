@@ -1002,7 +1002,8 @@ pub struct ReviewOutputVm {
     /// CryptoCondition this build cannot read is reported as such rather than
     /// guessed at.
     pub address: Option<String>,
-    pub kind: String,
+    /// What kind of output this is, as a named reason rather than a phrase.
+    pub kind: NoteVm,
     pub amount_display: String,
     pub is_change: bool,
 }
@@ -1206,8 +1207,9 @@ pub struct MarketDetailVm {
     /// this is not decoration: it is the difference between a number somebody
     /// can check and one they have to trust.
     pub route: String,
-    /// Which hop is the constraint, and why. Empty when there is no route.
-    pub route_note: String,
+    /// Which hop is the constraint, and why — as a named reason. `NoteVm::none()`
+    /// when there is nothing to say.
+    pub route_note: NoteVm,
 }
 
 /// One thing the search found.

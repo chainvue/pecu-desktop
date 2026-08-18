@@ -90,9 +90,10 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
             // The figure travels with the code, already spelled: money is
             // formatted in exactly one place in this workspace and the
             // interface is not a second one.
-            Ok(amount) if amount > spendable => {
-                (false, NoteVm::with("amount-above-spendable", [coins(spendable)]))
-            }
+            Ok(amount) if amount > spendable => (
+                false,
+                NoteVm::with("amount-above-spendable", [coins(spendable)]),
+            ),
             Ok(_) => (true, NoteVm::none()),
             // The SDK refuses more than eight decimal places rather than
             // rounding, and so does this: a satoshi silently dropped is a
@@ -216,30 +217,33 @@ fn decode_outputs(hex: &str, from: &str) -> Vec<ReviewOutputVm> {
         .collect()
 }
 
-fn describe(script: &[u8]) -> (Option<String>, String) {
+fn describe(script: &[u8]) -> (Option<String>, NoteVm) {
     use verus_sdk::decode::OutputKind;
 
     match verus_sdk::decode::decode_output_script(script) {
         Ok(OutputKind::PubKeyHash { hash }) => (
             Some(Address::new(AddressKind::PubKeyHash, hash).to_string()),
-            "Payment".to_string(),
+            NoteVm::plain("output-payment"),
         ),
         Ok(OutputKind::PubKey { hash, .. }) => (
             Some(Address::new(AddressKind::PubKeyHash, hash).to_string()),
-            "Payment to a public key".to_string(),
+            NoteVm::plain("output-to-public-key"),
         ),
         Ok(OutputKind::IdentityPayment { identity }) => (
             Some(Address::new(AddressKind::Identity, identity).to_string()),
-            "Payment to a VerusID".to_string(),
+            NoteVm::plain("output-to-verusid"),
         ),
         Ok(OutputKind::ReserveOutput { destination, .. }) => (
             destination_address(&destination),
-            "Token output".to_string(),
+            NoteVm::plain("output-token"),
         ),
-        Ok(other) => (None, format!("{other:?}")),
+        Ok(other) => (
+            None,
+            NoteVm::with("output-unrecognised", [format!("{other:?}")]),
+        ),
         // Deliberately loud. An unreadable output in a transaction about to be
         // signed is the one thing a review must not present as ordinary.
-        Err(_) => (None, "Could not be read".to_string()),
+        Err(_) => (None, NoteVm::plain("output-unreadable")),
     }
 }
 

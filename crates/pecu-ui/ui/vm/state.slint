@@ -34,11 +34,11 @@ export global WalletState {
     in-out property <string> rename-draft: "";
     in-out property <string> new-key-draft: "";
     // Why the last key operation was refused, shown on the keys section.
-    in-out property <string> key-problem: "";
+    in-out property <Note> key-problem;
     in property <bool> loading: true;
     in property <bool> busy: false;
     /// Set when unlocking or creating failed, cleared on the next attempt.
-    in property <string> problem: "";
+    in property <Note> problem;
 
     // What to write next to an amount. From the node's own chain name, never
     // a default: a screen that labels testnet coins "VRSC" has stopped being
@@ -107,7 +107,7 @@ export global SeedState {
     /// 1-based positions the confirmation step asks for. Chosen in core — a
     /// screen that picked its own could pick the same three every time.
     in property <[int]> challenge: [];
-    in-out property <string> problem: "";
+    in-out property <Note> problem;
     in property <bool> busy: false;
 }
 
@@ -187,7 +187,7 @@ export global SendState {
 
     // The outcome.
     in property <string> txid: "";
-    in-out property <string> problem: "";
+    in-out property <Note> problem;
 }
 
 // One transaction, opened.
@@ -496,7 +496,7 @@ export global NetworkState {
     // Why the last node the user tried was refused. Shown on the network
     // screen, because that is where the button they pressed is — a refusal that
     // appears somewhere else is indistinguishable from nothing happening.
-    in-out property <string> problem: "";
+    in-out property <Note> problem;
     // What is in the add-a-node form.
     //
     // Held here rather than inside the form so that Rust can clear it when the
@@ -710,7 +710,7 @@ export global MarketState {
     // have to trust.
     in property <string> detail-route;
     // Which hop is the constraint. Empty when there is no route.
-    in property <string> detail-route-note;
+    in property <Note> detail-route-note;
     callback select(string);
 }
 

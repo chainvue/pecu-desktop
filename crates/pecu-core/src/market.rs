@@ -44,7 +44,7 @@
 
 use std::collections::BTreeMap;
 
-use pecu_protocol::{MarketDetailVm, MarketRowVm, StatVm, VenueVm};
+use pecu_protocol::{MarketDetailVm, MarketRowVm, NoteVm, StatVm, VenueVm};
 use verus_sdk::network::CurrencyConverter;
 
 /// What the interface shows where the wallet does not know.
@@ -490,11 +490,11 @@ pub fn detail(
     };
 
     let route_note = match quote.as_ref() {
-        Some(quote) => format!(
-            "Mid price from reserve state notarized at block {}, before the conversion fee.",
-            pecu_protocol::format::group(&quote.height.to_string())
+        Some(quote) => NoteVm::with(
+            "price-from-notarization",
+            [pecu_protocol::format::group(&quote.height.to_string())],
         ),
-        None => format!("No started pool holds both {name} and {quote_name}."),
+        None => NoteVm::with("price-no-pool", [name.clone(), quote_name.to_string()]),
     };
 
     MarketDetailVm {
@@ -742,11 +742,7 @@ mod tests {
         let detail = detail(&book, stranger, &names(), "DAI.vETH");
         assert_eq!(detail.price, UNKNOWN);
         assert_eq!(detail.route, "");
-        assert!(
-            detail.route_note.contains("No started pool"),
-            "{}",
-            detail.route_note
-        );
+        assert_eq!(detail.route_note.code, "price-no-pool");
     }
 
     /// Priced rows come first. A table whose first screenful is dashes is a
@@ -779,12 +775,8 @@ mod tests {
     fn the_route_names_every_hop_and_the_block_it_was_read_at() {
         let detail = detail(&book(), VRSCTEST, &names(), "DAI.vETH");
         assert_eq!(detail.route, "VRSCTEST  →  Bridge.vETH  →  DAI.vETH");
-        assert!(
-            detail.route_note.contains("1 156 331"),
-            "{}",
-            detail.route_note
-        );
-        assert!(detail.route_note.contains("before the conversion fee"));
+        assert_eq!(detail.route_note.code, "price-from-notarization");
+        assert_eq!(detail.route_note.args, vec!["1 156 331".to_string()]);
     }
 
     /// A converter that has never notarized has nothing to price with, and is
