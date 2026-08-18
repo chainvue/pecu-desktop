@@ -7,7 +7,8 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm, HistoryRowVm,
+    ChartVm, ConvertQuoteVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
+    HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
     ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, PendingVm, PortfolioVm,
     RegistrationVm, SeedWordVm,
@@ -123,6 +124,12 @@ pub enum Event {
         yours: Vec<CurrencyVm>,
         eligible: Vec<EligibleIdentityVm>,
     },
+    /// What a conversion would yield, and what it would cost.
+    ///
+    /// Every field is answered on every edit, including the ones that are
+    /// empty — a quote that left the last conversion's fee on screen beside a
+    /// new pair of currencies would be describing something nobody asked for.
+    ConvertQuote(Box<ConvertQuoteVm>),
     /// Every currency any pool can price, and what it is worth.
     ///
     /// Replaces the table wholesale. A delta would be smaller and would also

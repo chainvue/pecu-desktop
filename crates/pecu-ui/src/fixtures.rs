@@ -30,26 +30,34 @@ use crate::{
 
 /// A conversion being priced.
 ///
-/// The figures are invented, like every other figure on this screen — the SDK
-/// can price a conversion for real and none of that is wired yet. What these
-/// exercise is the vocabulary: an estimate that is not a promise, a floor that
-/// is, and fees that are already subtracted.
+/// # These are the strings the core emits, not a drawing of them
+///
+/// Two hundred and fifty VRSCTEST into DAI.vETH through Bridge.vETH, on the
+/// reserve state the scripted chain publishes. The estimate is what the curve
+/// yields, the rate is that estimate divided by what went in, and the floor is
+/// three percent under it — all produced by `convert::quote`, checked in
+/// `pecu-core`'s own `a_quote_says_which_currency_each_figure_is_in`.
+///
+/// The previous version of this fixture was invented, and it showed a `Review
+/// conversion` button wired to a callback nothing listened to. Both are gone.
 pub fn converting(ui: &AppWindow) {
     funded(ui);
     ui.set_screen("convert".into());
 
     let state = ui.global::<ConvertState>();
+    state.set_from_address("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
+    state.set_to_address("iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".into());
     state.set_from_name("VRSCTEST".into());
     state.set_to_name("DAI.vETH".into());
-    state.set_from_balance("12 382.4200 0000 VRSCTEST".into());
+    state.set_from_balance("415.2500 0000".into());
     state.set_pay_draft("250".into());
-    state.set_get_estimate("134.1245 8300 DAI.vETH".into());
+    state.set_get_estimate("133.5245 8143".into());
     state.set_via("Bridge.vETH".into());
-    state.set_rate("1 VRSCTEST = 0.5369 DAI.vETH".into());
+    state.set_rate("1 VRSCTEST = 0.5341 DAI.vETH".into());
     state.set_conversion_fee("0.1250 0000 VRSCTEST".into());
     state.set_network_fee("0.0001 0000 VRSCTEST".into());
-    state.set_minimum("133.4539 6500 DAI.vETH".into());
-    state.set_slippage("0.5%".into());
+    state.set_minimum("129.5188 4398 DAI.vETH".into());
+    state.set_slippage("0.58%".into());
     state.set_slippage_tone("positive".into());
     state.set_ready(true);
 }
@@ -60,42 +68,58 @@ pub fn converting(ui: &AppWindow) {
 /// Its own picture because the warning is the whole content of the state, and a
 /// screen whose warnings have never been photographed is a screen whose
 /// warnings have never been read.
+///
+/// A thousand coins, which is what it takes to cost two percent against
+/// Bridge.vETH's real reserves. **The demo wallet cannot fund this** — it holds
+/// four hundred — so the state is reachable on a chain and not in the scripted
+/// build, which is exactly why it needs a fixture. The figures are still the
+/// curve's: `slippage_gets_its_tone_from_how_far_the_estimate_fell` asserts
+/// this size and this tone.
 pub fn converting_thin(ui: &AppWindow) {
     converting(ui);
 
     let state = ui.global::<ConvertState>();
-    state.set_pay_draft("9000".into());
-    state.set_get_estimate("4 611.0800 0000 DAI.vETH".into());
-    state.set_minimum("4 426.6368 0000 DAI.vETH".into());
-    state.set_slippage("4.6%".into());
+    state.set_pay_draft("1000".into());
+    state.set_get_estimate("525.7011 2000".into());
+    state.set_rate("1 VRSCTEST = 0.5257 DAI.vETH".into());
+    state.set_conversion_fee("0.5000 0000 VRSCTEST".into());
+    state.set_minimum("509.9300 8640 DAI.vETH".into());
+    state.set_slippage("2.15%".into());
     state.set_slippage_tone("warning".into());
-    state.set_note(
-        "This is a large share of the pool. The price moves as the conversion \
-         goes through, and the estimate above already accounts for it — but a \
-         thinner pool moves further. Bridge.vETH holds $310K at 2%."
-            .into(),
-    );
+    state.set_note(note("convert-slippage-high", &["2.15%"]));
 }
 
 /// A leg that cannot be converted at all: the design's "empty reserve".
+///
+/// `demo.VRSCTEST` is a real currency on the scripted chain that no started
+/// basket holds — so this is not a contrived case, it is what the wallet says
+/// about a currency somebody actually has.
 pub fn converting_refused(ui: &AppWindow) {
     funded(ui);
     ui.set_screen("convert".into());
 
     let state = ui.global::<ConvertState>();
+    state.set_from_address("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
+    state.set_to_address("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into());
     state.set_from_name("VRSCTEST".into());
-    state.set_to_name("kneipe".into());
-    state.set_from_balance("12 382.4200 0000 VRSCTEST".into());
+    state.set_to_name("demo.VRSCTEST".into());
+    state.set_from_balance("415.2500 0000".into());
     state.set_pay_draft("250".into());
     // Deliberately blank rather than zero. There is no rate, so there is no
     // number — and `0` would be a claim that the conversion yields nothing
     // rather than that it cannot be priced.
-    state.set_note(
-        "kneipe has no converter, so there is no route to it and no price. A \
-         currency can only be converted through a basket that holds it."
-            .into(),
-    );
+    state.set_note(note("convert-no-route", &["VRSCTEST", "demo.VRSCTEST"]));
     state.set_ready(false);
+}
+
+/// The currency picker, open over the convert form.
+///
+/// The list is the markets table, so this is also the only reference image that
+/// shows those rows anywhere but the markets screen — which is the claim the
+/// picker makes: one source, no second list to disagree with.
+pub fn converting_picking(ui: &AppWindow) {
+    converting(ui);
+    ui.global::<ConvertState>().set_picking("get".into());
 }
 
 /// The history screen with every kind of row on it.

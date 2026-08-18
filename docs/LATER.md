@@ -437,3 +437,44 @@ is that the number above it has no period attached to it yet.
 detail, and it is the only thing standing between the change column and a
 colour — `tone` is already carried per row rather than inferred from a sign, so
 nothing above the data layer has to change when the series arrives.
+
+---
+
+## 9. Signing a conversion
+
+**Status:** the convert screen prices a conversion against a node and cannot
+make one. Not blocked on anything external — this is work that was scoped out,
+deliberately, because it is the part that moves money.
+
+**What works.** Pick two currencies, type an amount, and the wallet answers with
+a route, an estimate, both fees, an effective rate, a floor and a slippage
+figure. Every one of those comes from the chain: the route from
+`getcurrencyconverters`, the estimate from `estimateconversion`, the mid price
+it is measured against from `market::Book`. `convert::check` refuses offline
+what a node never needs to be asked about — no route, no balance, an
+unparseable amount — so a keystroke is a request only when it is worth one.
+
+**What does not exist.** `verus_flows::convert::plan_conversion` →
+`prepare_conversion` → `broadcast`, which is the same three-step shape
+`pecu-core`'s `send` already has, plus the review screen that shows the decoded
+transaction before anybody agrees to it. The scaffolding is all there and none
+of it is reused yet: tickets, `SpendPermit`, the confirm word, `Unsent` staying
+inside the core with the interface holding only a number.
+
+**Why the button is gone rather than disabled.** `Review conversion` shipped
+primary and enabled, wired to a `ConvertState.review()` callback nothing
+listened to — so the one action on the screen did nothing at all. A card in its
+place says the wallet can price a conversion and cannot make one. Same
+treatment, same reason, as the markets range buttons in §8: a control that looks
+like it will send money is the worst possible place to be optimistic.
+
+**Order of work.** `plan_conversion` first, behind the existing review shape —
+it takes a `ChainReader` and no `Broadcaster`, so it *cannot* send and the whole
+review can be built and photographed before a single line of it is capable of
+spending. Then `prepare_conversion` under the permit, then the confirm.
+
+**One thing to carry over.** `ConversionPlan::min_expected` is checked once,
+before signing, and never again — the chain has no opinion about a floor and the
+conversion executes at whatever the ratios are when it is imported. The
+`minimum` line already on screen is a record of intent, not a promise, and the
+review has to keep saying so.

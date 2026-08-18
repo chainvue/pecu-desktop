@@ -43,7 +43,7 @@ import { ActivityScreen, TxSheet } from "screens/activity.slint";
 import { IdentitiesScreen, IdentityChangeReview, IdentitySheet } from "screens/identities.slint";
 import { CurrenciesScreen, LaunchReview, ReservePicker, ActionBar } from "screens/currencies.slint";
 import { MarketsScreen } from "screens/markets.slint";
-import { ConvertScreen } from "screens/convert.slint";
+import { ConvertPicker, ConvertScreen } from "screens/convert.slint";
 import { ReceiveScreen } from "screens/receive.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
@@ -358,6 +358,10 @@ export component AppWindow inherits Window {
                 if (CurrencyState.picking-reserve >= 0) {
                     CurrencyState.picking-reserve = -1;
                     CurrencyState.choices-query = "";
+                    return EventResult.accept;
+                }
+                if (ConvertState.picking != "") {
+                    ConvertState.picking = "";
                     return EventResult.accept;
                 }
                 if (TxState.txid != "") {
@@ -737,6 +741,9 @@ export component AppWindow inherits Window {
         // the form and it is the only thing being decided while it is up.
         if WalletState.exists && !WalletState.locked && CurrencyState.picking-reserve >= 0:
             ReservePicker {}
+
+        if WalletState.exists && !WalletState.locked && ConvertState.picking != "":
+            ConvertPicker {}
 
         // Under the toasts and over everything else. It is a detour rather
         // than a state, so it never survives a screen change — see `go`.

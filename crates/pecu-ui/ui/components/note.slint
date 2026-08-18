@@ -58,6 +58,23 @@ export component NoteText inherits Text {
         : root.note.code == "amount-unparsable"
             ? @tr("Not an amount. Up to eight decimal places, like 1.5 or 0.00000001.")
 
+        // ── Converting ──────────────────────────────────────────────────
+        : root.note.code == "convert-pick-both"
+            ? @tr("Choose what to pay with and what to receive.")
+        : root.note.code == "convert-same-currency"
+            ? @tr("Those are the same currency.")
+        : root.note.code == "convert-no-route"
+            ? @tr("No started basket holds both {0} and {1}, so there is no single conversion between them.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "convert-above-holding"
+            ? @tr("More than the {0} {1} this wallet holds.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "convert-slippage-high"
+            ? @tr("This is a large share of the pool. The price moves as the conversion goes through and the estimate already accounts for it — {0} of it. A smaller amount, or a different route, would lose less.",
+                  root.note.args[0])
+        : root.note.code == "convert-unpriced"
+            ? @tr("The node could not price this conversion. Nothing has been sent.")
+
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
 

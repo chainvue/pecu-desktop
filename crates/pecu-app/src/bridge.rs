@@ -196,6 +196,23 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::MarketDetail(detail) => apply_market_detail(ui, detail.as_deref()),
 
+        Event::ConvertQuote(quote) => {
+            let state = ui.global::<pecu_ui::ConvertState>();
+            state.set_from_name(quote.from.clone().into());
+            state.set_to_name(quote.to.clone().into());
+            state.set_from_balance(quote.from_balance.clone().into());
+            state.set_get_estimate(quote.get.clone().into());
+            state.set_via(quote.via.clone().into());
+            state.set_rate(quote.rate.clone().into());
+            state.set_conversion_fee(quote.conversion_fee.clone().into());
+            state.set_network_fee(quote.network_fee.clone().into());
+            state.set_minimum(quote.minimum.clone().into());
+            state.set_slippage(quote.slippage.clone().into());
+            state.set_slippage_tone(quote.slippage_tone.clone().into());
+            state.set_note(note(&quote.note));
+            state.set_ready(quote.ready);
+        }
+
         Event::SearchHits { query, hits } => {
             let state = ui.global::<pecu_ui::SearchState>();
             // Drop a reply to a query nobody is running any more. Two

@@ -24,7 +24,7 @@
 //! That is not key material in any useful sense, and wrapping it would blur what
 //! [`Secret`] means everywhere else.
 
-use crate::models::{CurrencyDraft, ScreenId, SendDraft};
+use crate::models::{ConvertDraft, CurrencyDraft, ScreenId, SendDraft};
 use crate::secret::Secret;
 
 /// How a key is being brought into the wallet.
@@ -321,6 +321,25 @@ pub enum Command {
     /// published under a name they know. A search, not a lookup: the hash has
     /// no inverse, and this is the only direction that exists.
     DeriveContentKey(String),
+
+    // ── Convert ─────────────────────────────────────────────────────────
+    /// Price what is being composed.
+    ///
+    /// The whole draft on every edit, the way `ValidateDraft` works and for the
+    /// same reason: which currency is being paid decides what the amount means,
+    /// so a command carrying one field cannot say whether the other two still
+    /// agree with it.
+    ///
+    /// Everything that can be decided offline is decided offline — is there a
+    /// route, does the amount parse, does the wallet hold it. A node is asked
+    /// only once those pass, because `estimateconversion` is a request per
+    /// keystroke otherwise.
+    SetConvertDraft(ConvertDraft),
+    /// Turn the conversion around.
+    ///
+    /// A command rather than two `SetConvertDraft`s from the interface: what
+    /// happens to the amount already typed is a decision, and it is the core's.
+    SwapConvertLegs,
 
     // ── Markets ─────────────────────────────────────────────────────────
     /// Work out what everything is worth, and where.

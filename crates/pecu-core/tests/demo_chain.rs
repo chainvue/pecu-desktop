@@ -856,3 +856,111 @@ async fn the_dashboard_gets_prices_without_visiting_the_markets_screen() {
         "{rows:?}",
     );
 }
+
+/// A conversion is priced end to end, by the node rather than by the wallet.
+///
+/// The distinction this asserts is the one the convert screen exists to make.
+/// `market::Book` divides two reserve figures and gets a **mid** price —
+/// 0.5372 DAI to the VRSCTEST, what the currency is worth. `estimateconversion`
+/// answers what *this* conversion at *this* size yields after the pool has been
+/// moved by it and the fee taken: 0.5341. The gap between them is the slippage
+/// line, and a wallet quoting the first would be quoting a price it cannot
+/// honour.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversion_is_priced_by_the_node_and_not_by_the_mid_price() {
+    const VRSCTEST: &str = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
+    const DAI: &str = "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (dispatcher, mut events) = pecu_core::start(
+        &tokio::runtime::Handle::current(),
+        pecu_core::Config {
+            nodes: vec![pecu_chain::Node::builtin(
+                0,
+                "Scripted chain",
+                "mock://scripted",
+            )],
+            network: pecu_chain::Network::Testnet,
+            mock: true,
+            home: dir.path().to_path_buf(),
+        },
+    );
+
+    dispatcher.send(pecu_protocol::Command::CreateWallet {
+        name: "demo".to_string(),
+        passphrase: pecu_protocol::Secret::from("correct-horse-battery-staple-9931"),
+    });
+
+    // The balance has to be in before an amount can be checked against it.
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if let Some(pecu_protocol::Event::Portfolio(portfolio)) = events.recv().await {
+                if !portfolio.assets.is_empty() {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("a balance");
+
+    let quote = quote_for(&dispatcher, &mut events, VRSCTEST, DAI, "250").await;
+
+    assert!(quote.ready, "{quote:?}");
+    assert_eq!(quote.get, "133.5245 8143");
+    assert_eq!(quote.via, "Bridge.vETH");
+    assert_eq!(quote.rate, "1 VRSCTEST = 0.5341 DAI.vETH");
+    assert_eq!(quote.slippage, "0.58%");
+    assert_eq!(quote.slippage_tone, "positive");
+    // Two currencies, and each figure says which one it is in.
+    assert_eq!(quote.conversion_fee, "0.1250 0000 VRSCTEST");
+    assert!(quote.minimum.ends_with(" DAI.vETH"), "{}", quote.minimum);
+    assert_eq!(quote.note.code, "");
+
+    // More than the wallet holds is refused here, without a node being asked.
+    let refused = quote_for(&dispatcher, &mut events, VRSCTEST, DAI, "9000").await;
+    assert!(!refused.ready);
+    assert_eq!(refused.note.code, "convert-above-holding");
+
+    // And a currency no started basket holds is refused for a different
+    // reason — one that is about the chain rather than about this wallet.
+    let unroutable = quote_for(
+        &dispatcher,
+        &mut events,
+        VRSCTEST,
+        "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv",
+        "250",
+    )
+    .await;
+    assert!(!unroutable.ready);
+    assert_eq!(unroutable.note.code, "convert-no-route");
+}
+
+/// Send a draft and wait for the quote that answers it.
+async fn quote_for(
+    dispatcher: &pecu_core::Dispatcher,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<pecu_protocol::Event>,
+    from: &str,
+    to: &str,
+    pay: &str,
+) -> pecu_protocol::ConvertQuoteVm {
+    dispatcher.send(pecu_protocol::Command::SetConvertDraft(
+        pecu_protocol::ConvertDraft {
+            from: from.to_string(),
+            to: to.to_string(),
+            pay: pay.to_string(),
+        },
+    ));
+
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match events.recv().await {
+                Some(pecu_protocol::Event::ConvertQuote(quote)) => break *quote,
+                Some(_) => {}
+                None => panic!("the core stopped before pricing {pay}"),
+            }
+        }
+    })
+    .await
+    .expect("a quote")
+}

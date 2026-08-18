@@ -303,6 +303,7 @@ fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_history(ui, dispatcher.clone());
     wire_search(ui, dispatcher.clone());
     wire_markets(ui, dispatcher.clone());
+    wire_convert(ui, dispatcher.clone());
     wire_wallet(ui, dispatcher.clone());
     wire_backup(ui, &dispatcher);
     wire_send(ui, &dispatcher);
@@ -1191,6 +1192,50 @@ fn wire_history(ui: &AppWindow, dispatcher: Dispatcher) {
             kind: kind.to_string(),
         });
     });
+}
+
+/// Composing a conversion.
+///
+/// Nothing here decides anything. The three draft fields go to the core on
+/// every edit and it answers with a whole quote — including whether there is
+/// enough to act on, which is a question about routes and balances and not
+/// about how much text is in a box.
+fn wire_convert(ui: &AppWindow, dispatcher: Dispatcher) {
+    let convert = ui.global::<pecu_ui::ConvertState>();
+
+    {
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        convert.on_edited(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<pecu_ui::ConvertState>();
+            dispatcher.send(Command::SetConvertDraft(pecu_protocol::ConvertDraft {
+                from: state.get_from_address().to_string(),
+                to: state.get_to_address().to_string(),
+                pay: state.get_pay_draft().to_string(),
+            }));
+        });
+    }
+
+    {
+        // The swap is the core's, because what happens to the amount already
+        // typed is a decision about money. The two address fields are written
+        // back here so the boxes turn over on the click rather than after the
+        // round trip; the reply sets the names to match.
+        let weak = ui.as_weak();
+        convert.on_swap(move || {
+            if let Some(ui) = weak.upgrade() {
+                let state = ui.global::<pecu_ui::ConvertState>();
+                let from = state.get_from_address();
+                state.set_from_address(state.get_to_address());
+                state.set_to_address(from);
+                state.set_pay_draft(slint::SharedString::new());
+            }
+            dispatcher.send(Command::SwapConvertLegs);
+        });
+    }
 }
 
 /// Picking a row on the markets screen.

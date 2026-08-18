@@ -48,6 +48,92 @@ use verus_sdk::identity::{FLAG_LOCKED, FLAG_REVOKED};
 use verus_sdk::money::{Amount, Txid, Utxo};
 use verus_sdk::verus_keys::Address;
 
+/// One scripted fractional currency, in the terms its curve is defined in.
+#[derive(Clone, Debug)]
+pub struct MockPool {
+    pub id: String,
+    pub name: String,
+    pub started: bool,
+    pub supply: f64,
+    /// Reserve i-address to (holding, weight).
+    pub reserves: BTreeMap<String, (f64, f64)>,
+}
+
+/// What Verus takes off a conversion, as a fraction of what goes in.
+///
+/// Measured, not chosen: `estimateconversion` on VRSCTEST reported
+/// `netinputamount: 0.9995` for an input of 1, which is this.
+const CONVERSION_FEE: f64 = 0.000_5;
+
+impl MockPool {
+    fn holds(&self, currency: &str) -> bool {
+        self.id == currency || self.reserves.contains_key(currency)
+    }
+
+    /// What this pool would give for `amount` of `from`, in `to`.
+    ///
+    /// # The curve, and why it is here rather than approximated
+    ///
+    /// A fractional currency is a Bancor pool. Putting `d` of a reserve `R` of
+    /// weight `w` into a supply `S` mints `S·((1 + d/R)^w − 1)`; burning `b` of
+    /// that supply against a reserve `R₂` of weight `w₂` yields
+    /// `R₂·(1 − (1 − b/S)^(1/w₂))`. A reserve-to-reserve conversion is both, in
+    /// that order, with the burn seeing the supply the mint just grew.
+    ///
+    /// Returning the mid price instead would have been three lines and would
+    /// have made every slippage figure in the wallet exactly zero — so the one
+    /// number the convert screen exists to show would have been the one number
+    /// the demo build could not show.
+    ///
+    /// Checked against the daemon: 1 VRSCTEST into DAI.vETH through this
+    /// pool's published state gives `0.536946` here where `estimateconversion`
+    /// answered `0.53694578`.
+    fn convert(&self, from: &str, to: &str, amount: f64) -> Option<f64> {
+        let net = amount * (1.0 - CONVERSION_FEE);
+
+        // Into the basket itself: one mint, no burn.
+        if to == self.id {
+            let &(held, weight) = self.reserves.get(from)?;
+            return Some(self.supply * ((1.0 + net / held).powf(weight) - 1.0));
+        }
+
+        // Out of the basket: one burn, against the supply as it stands.
+        if from == self.id {
+            let &(held, weight) = self.reserves.get(to)?;
+            return Some(held * (1.0 - (1.0 - net / self.supply).powf(1.0 / weight)));
+        }
+
+        let &(from_held, from_weight) = self.reserves.get(from)?;
+        let &(to_held, to_weight) = self.reserves.get(to)?;
+        let minted = self.supply * ((1.0 + net / from_held).powf(from_weight) - 1.0);
+        let grown = self.supply + minted;
+        Some(to_held * (1.0 - (1.0 - minted / grown).powf(1.0 / to_weight)))
+    }
+}
+
+/// Coins as an `Amount`, rounded to the satoshi the chain stops at.
+///
+/// The curve above is arithmetic over ratios and has to be done in floating
+/// point; what comes **out** of it is money, and money in this workspace is an
+/// integer count of satoshis. This is the one line where the two meet, and it
+/// is a saturating round rather than a cast so a negative or absurd result
+/// becomes zero instead of wrapping into a fortune.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn coins(value: f64) -> Amount {
+    // The literal rather than `u64::MAX as f64`, which is itself a lossy cast
+    // and would be comparing against a number slightly off the one it names.
+    const CEILING: f64 = 18_446_744_073_709_551_615.0;
+
+    if !value.is_finite() || value <= 0.0 {
+        return Amount::ZERO;
+    }
+    let sats = (value * 100_000_000.0).round();
+    if sats >= CEILING {
+        return Amount::from_sat(u64::MAX);
+    }
+    Amount::from_sat(sats as u64)
+}
+
 /// What the scripted chain will answer with.
 #[derive(Clone, Debug)]
 pub struct MockState {
@@ -106,6 +192,14 @@ pub struct MockState {
     /// where every identity had one would never render the picker that offers
     /// the ones that do not.
     pub currencies: BTreeMap<String, CurrencySummary>,
+    /// The same pools, typed, so the reserve state this chain **publishes** and
+    /// the conversions it **prices** come out of one set of numbers.
+    ///
+    /// Two copies would be two chances to disagree, and the disagreement would
+    /// be invisible: a wallet deriving a mid price from the published state and
+    /// an estimate from somewhere else would show a plausible slippage figure
+    /// that measured nothing.
+    pub pools: BTreeMap<String, MockPool>,
     /// The fractional currencies this chain can price with, and the reserve
     /// state each last published. Keyed by converter i-address.
     ///
@@ -154,6 +248,7 @@ impl Default for MockState {
             identity_outputs: BTreeMap::new(),
             broadcast_attempts: 0,
             currencies: BTreeMap::new(),
+            pools: BTreeMap::new(),
             converters: BTreeMap::new(),
             latency: std::time::Duration::from_millis(140),
             fail_reads: None,
@@ -579,14 +674,56 @@ impl ChainReader for MockChain {
         })
     }
 
+    /// What one conversion through one pool is expected to yield.
+    ///
+    /// `via` is honoured when given and worked out when not — the daemon does
+    /// the same, and a wallet that always sent it would be wrong exactly when
+    /// one side **is** the pool, where naming the destination as the route asks
+    /// the node to go through the thing it is going to.
+    ///
+    /// Refuses the way a daemon refuses: an unroutable pair is `-8`, not an
+    /// estimate of nothing. A zero here would put a conversion on screen that
+    /// yields nothing and looks priced.
     fn estimate_conversion(
         &self,
-        _from: &str,
-        _to: &str,
-        _amount: &str,
-        _via: Option<&str>,
+        from: &str,
+        to: &str,
+        amount: &str,
+        via: Option<&str>,
     ) -> Result<ConversionEstimate, RpcError> {
-        Err(unsupported("estimateconversion"))
+        self.read(|state| {
+            let from_id = state.resolve_currency(from);
+            let to_id = state.resolve_currency(to);
+            let amount: f64 = amount.parse().map_err(|_| RpcError::Node {
+                code: -8,
+                message: "Invalid amount".to_string(),
+            })?;
+
+            let pool = match via {
+                Some(via) => state.pools.get(&state.resolve_currency(via)),
+                None => state
+                    .pools
+                    .values()
+                    .find(|pool| pool.started && pool.holds(&from_id) && pool.holds(&to_id)),
+            }
+            .filter(|pool| pool.started && pool.holds(&from_id) && pool.holds(&to_id))
+            .ok_or_else(|| RpcError::Node {
+                code: -8,
+                message: "Cannot convert".to_string(),
+            })?;
+
+            let out = pool
+                .convert(&from_id, &to_id, amount)
+                .ok_or_else(|| RpcError::Node {
+                    code: -8,
+                    message: "Cannot convert".to_string(),
+                })?;
+
+            Ok(ConversionEstimate {
+                estimated_out: coins(out),
+                fee: Some(coins(amount * CONVERSION_FEE)),
+            })
+        })
     }
 
     fn currency_state(&self, _name_or_id: &str) -> Result<serde_json::Value, RpcError> {
@@ -1211,6 +1348,20 @@ fn seed_pools(state: &mut MockState) {
             })
             .collect();
 
+        state.pools.insert(
+            id.to_string(),
+            MockPool {
+                id: id.to_string(),
+                name: name.to_string(),
+                started: !prelaunch,
+                supply,
+                reserves: reserves
+                    .iter()
+                    .map(|(reserve, _, held, weight)| ((*reserve).to_string(), (*held, *weight)))
+                    .collect(),
+            },
+        );
+
         state.converters.insert(
             id.to_string(),
             CurrencyConverter {
@@ -1375,5 +1526,76 @@ mod tests {
             chain.block_count(),
             Err(RpcError::Transport(reason)) if reason == "scripted outage"
         ));
+    }
+}
+
+#[cfg(test)]
+mod market_tests {
+    use super::*;
+
+    const VRSCTEST: &str = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
+
+    fn chain() -> MockChain {
+        MockChain::demo(&[]).expect("an empty script is a script")
+    }
+
+    /// The number the whole scripted market rests on.
+    ///
+    /// `estimateconversion` on VRSCTEST answered `0.53694578` for one VRSCTEST
+    /// into DAI.vETH through Bridge.vETH at the reserve state this script
+    /// publishes. The curve here reproduces it to seven figures — which is what
+    /// makes a slippage figure derived from it worth showing.
+    #[test]
+    fn one_vrsctest_converts_the_way_the_daemon_says_it_does() {
+        let estimate = chain()
+            .estimate_conversion(VRSCTEST, "DAI.vETH", "1", Some("Bridge.vETH"))
+            .expect("a routable pair");
+
+        let got = estimate.estimated_out.to_sat();
+        assert!(
+            got.abs_diff(53_694_578) < 100,
+            "{got} satoshis, daemon said 53694578",
+        );
+        assert_eq!(estimate.fee.expect("a fee").to_sat(), 50_000);
+    }
+
+    /// Slippage is real, and grows. A mock returning the mid price would make
+    /// the one figure the convert screen exists to show permanently zero.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn a_bigger_conversion_gets_a_worse_rate() {
+        let chain = chain();
+        let rate = |amount: &str| {
+            let out = chain
+                .estimate_conversion(VRSCTEST, "DAI.vETH", amount, None)
+                .expect("routable")
+                .estimated_out
+                .to_sat();
+            out as f64 / amount.parse::<f64>().expect("a number")
+        };
+
+        let small = rate("1");
+        let large = rate("10000");
+        assert!(large < small * 0.9, "small {small}, large {large}");
+    }
+
+    /// Two currencies sharing no pool are refused the way a daemon refuses,
+    /// rather than quoted at nothing.
+    #[test]
+    fn an_unroutable_pair_is_an_error_and_not_a_zero() {
+        let refusal = chain().estimate_conversion(VRSCTEST, "demo.VRSCTEST", "1", None);
+        assert!(
+            matches!(refusal, Err(RpcError::Node { code: -8, .. })),
+            "{refusal:?}"
+        );
+    }
+
+    /// An unlaunched pool prices nothing, on the same rule that keeps its
+    /// five-dollar quote off the markets table.
+    #[test]
+    fn an_unstarted_pool_will_not_convert() {
+        let refusal =
+            chain().estimate_conversion(VRSCTEST, "DAI.vETH", "1", Some("Bridge.Betelgeuse"));
+        assert!(refusal.is_err(), "{refusal:?}");
     }
 }

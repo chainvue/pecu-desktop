@@ -1075,6 +1075,22 @@ pub enum TaskKind {
     CreatingWallet,
 }
 
+/// A conversion somebody is composing.
+///
+/// Currencies by **i-address**, not by name. The pickers hand back what the
+/// chain's own list carries, and two currencies on VRSCTEST can share a name
+/// component — `Bridge.vETH` and `Bridge.CHIPS` are both `Bridge` — so a draft
+/// keyed by name is a draft that can name the wrong thing.
+///
+/// The amount stays as it was typed. Parsing it is a rule, rules live in the
+/// core, and a draft that arrived already parsed could not carry "0.0.1".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvertDraft {
+    pub from: String,
+    pub to: String,
+    pub pay: String,
+}
+
 /// What a conversion would cost, priced but not signed.
 ///
 /// # Why this is net of fees where the markets screen is not
@@ -1094,6 +1110,10 @@ pub struct ConvertQuoteVm {
     pub to: String,
     /// What goes in, as typed and then formatted back.
     pub pay: String,
+    /// What the wallet holds of `from`, spelled here rather than in the
+    /// interface. The convert form needs it under the paying box and the
+    /// portfolio does not carry it in a shape a single leg can read.
+    pub from_balance: String,
     /// What the node expects to come out. Advisory — the SDK says so, and so
     /// does this: the chain does not enforce it.
     pub get: String,
@@ -1115,8 +1135,14 @@ pub struct ConvertQuoteVm {
     /// "positive" · "warning" · "negative". Carried rather than derived from a
     /// threshold here, because the threshold is a rule and rules live in core.
     pub slippage_tone: String,
-    /// Why this cannot be done, or what to be careful of. Empty when neither.
-    pub note: String,
+    /// Why this cannot be done, or what to be careful of. `NoteVm::none()` when
+    /// neither — the core names the reason, `note.slint` has the words.
+    pub note: NoteVm,
+    /// Whether there is enough here to act on. The core's verdict rather than a
+    /// length check in the interface: "enough" means a route exists, the amount
+    /// parses, and the wallet holds it, and none of those is a property of the
+    /// text in a field.
+    pub ready: bool,
 }
 
 /// One currency in the markets table.

@@ -1,10 +1,13 @@
 // Turning one currency into another.
 
+import { ListView } from "std-widgets.slint";
+
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Eyebrow } from "../components/base.slint";
 import { Icon } from "../components/icons.slint";
-import { ConvertState } from "../vm/state.slint";
+import { ConvertState, MarketState } from "../vm/state.slint";
 import { Field, QuoteLine } from "../components/form.slint";
+import { NoteText } from "../components/note.slint";
 
 // The glyph is `⊙`, and it was chosen by looking rather than by taste.
 //
@@ -20,16 +23,12 @@ import { Field, QuoteLine } from "../components/form.slint";
 // it. A glyph is only a glyph if the shipped font has it, and only useful if it
 // means one thing.
 // One side of a conversion: a labelled box with an amount and a currency.
-//
-// The currency is a button and it is disabled, which is deliberate rather than
-// unfinished-looking. Choosing one needs the picker the currency screens
-// already have and a core that can price the result; until both are wired, a
-// control that is visibly present and visibly unavailable is honest, and one
-// that silently does nothing is not.
 export component ConvertLeg inherits VerticalLayout {
     in property <string> label;
     in property <string> currency;
     in property <string> under;
+    // Which leg this is, for the picker to write back to.
+    in property <string> side;
     // Editable on the paying side, a computed estimate on the receiving one.
     in property <bool> editable: false;
     in property <string> estimate;
@@ -72,7 +71,7 @@ export component ConvertLeg inherits VerticalLayout {
                 Btn {
                     text: root.currency == "" ? @tr("Choose") : root.currency;
                     variant: "ghost";
-                    enabled: false;
+                    clicked => { ConvertState.picking = root.side; }
                 }
             }
 
@@ -95,11 +94,13 @@ export component ConvertScreen inherits HorizontalLayout {
 
         ConvertLeg {
             label: @tr("YOU PAY");
+            side: "pay";
             currency: ConvertState.from-name;
             editable: true;
             draft <=> ConvertState.pay-draft;
             under: ConvertState.from-balance == "" ? ""
                 : @tr("Available: ") + ConvertState.from-balance;
+            edited => { ConvertState.edited(); }
         }
 
         // The swap, between the two boxes because that is what it acts on.
@@ -135,19 +136,35 @@ export component ConvertScreen inherits HorizontalLayout {
 
         ConvertLeg {
             label: @tr("YOU GET");
+            side: "get";
             currency: ConvertState.to-name;
             estimate: ConvertState.get-estimate;
             under: @tr("Estimated. The chain does not guarantee it.");
         }
 
-        HorizontalLayout {
-            spacing: Sp.s4;
-            alignment: start;
-            Btn {
-                text: @tr("Review conversion");
-                variant: "primary";
-                enabled: ConvertState.ready && !ConvertState.busy;
-                clicked => { ConvertState.review(); }
+        // Where the Review button goes, once there is something behind it.
+        //
+        // It was here, primary and enabled, wired to a callback nothing
+        // listened to — so the one action on this screen did nothing at all.
+        // Everything above is real: the route, the estimate and the fees come
+        // from the node. Signing does not exist yet, and a button that looks
+        // like it will send money is the worst possible place to be optimistic.
+        if ConvertState.ready: Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s2;
+                Text {
+                    text: @tr("Priced, not signed");
+                    font-size: Typo.body;
+                    font-weight: Typo.w-bold;
+                    color: Theme.text-secondary;
+                }
+                Text {
+                    text: @tr("This wallet can price a conversion and cannot yet make one. Nothing on this screen sends anything.");
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
             }
         }
 
@@ -202,7 +219,7 @@ export component ConvertScreen inherits HorizontalLayout {
             }
         }
 
-        if ConvertState.note != "": Card {
+        if ConvertState.note.code != "": Card {
             VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
@@ -214,11 +231,8 @@ export component ConvertScreen inherits HorizontalLayout {
                         size: 16px;
                         tone: Theme.warning;
                     }
-                    Text {
-                        text: ConvertState.note;
-                        font-size: Typo.caption;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
+                    NoteText {
+                        note: ConvertState.note;
                         horizontal-stretch: 1;
                     }
                 }
@@ -226,5 +240,115 @@ export component ConvertScreen inherits HorizontalLayout {
         }
 
         Rectangle { vertical-stretch: 1; }
+    }
+}
+
+// Choosing a currency for one leg.
+//
+// The list is `MarketState.rows` — the same rows the markets screen shows, with
+// the same prices, because there is no second source for them to disagree with.
+// It is also the exact set of currencies that can be converted at all: a row is
+// there because some pool prices it, and a pool that prices it is a pool that
+// can route it.
+export component ConvertPicker inherits Rectangle {
+    background: Theme.dark ? #0B0C0EE0 : #FBFBFCE0;
+
+    // Swallows clicks aimed at the form behind, and closes on one that lands on
+    // nothing — the same behaviour every other overlay in this build has.
+    TouchArea {
+        clicked => { ConvertState.picking = ""; }
+    }
+
+    Card {
+        elevated: true;
+        width: 460px;
+        height: 520px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        // Over the dismissing area below it, so a click inside does not close.
+        TouchArea {}
+
+        VerticalLayout {
+            padding: Sp.s7;
+            spacing: Sp.s5;
+
+            VerticalLayout {
+                spacing: Sp.s2;
+                Text {
+                    text: ConvertState.picking == "pay"
+                        ? @tr("Choose what to pay with")
+                        : @tr("Choose what to receive");
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-bold;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: @tr("Every currency a started basket can price. One that is not here cannot be converted in a single transaction.");
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            ListView {
+                for row in MarketState.rows: Rectangle {
+                    height: 52px;
+                    border-radius: R.md;
+                    background: pick.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+                    HorizontalLayout {
+                        padding-left: Sp.s4;
+                        padding-right: Sp.s4;
+                        spacing: Sp.s4;
+
+                        Text {
+                            text: row.name;
+                            font-family: Typo.mono;
+                            font-size: Typo.body;
+                            font-weight: Typo.w-bold;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: row.price;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+
+                    pick := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (ConvertState.picking == "pay") {
+                                ConvertState.from-address = row.address;
+                            } else {
+                                ConvertState.to-address = row.address;
+                            }
+                            ConvertState.picking = "";
+                            ConvertState.edited();
+                        }
+                    }
+
+                    accessible-role: button;
+                    accessible-label: row.name + ", " + row.price;
+                    accessible-action-default => {
+                        if (ConvertState.picking == "pay") {
+                            ConvertState.from-address = row.address;
+                        } else {
+                            ConvertState.to-address = row.address;
+                        }
+                        ConvertState.picking = "";
+                        ConvertState.edited();
+                    }
+                }
+            }
+        }
     }
 }

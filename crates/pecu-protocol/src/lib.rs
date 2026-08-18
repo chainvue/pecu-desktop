@@ -36,7 +36,7 @@ pub use event::Event;
 pub use format::{coins, coins_u64};
 pub use models::{
     AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, CurrencyChoicesVm,
-    ConvertQuoteVm, CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm,
+    ConvertDraft, ConvertQuoteVm, CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm,
     CurrencyProblemVm,
     CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,

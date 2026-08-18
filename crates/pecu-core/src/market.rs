@@ -343,6 +343,29 @@ impl Book {
         })
     }
 
+    /// The pool a conversion between these two would go through.
+    ///
+    /// A conversion runs through **one** fractional currency holding both
+    /// sides. Two currencies that share no pool cannot be converted in a single
+    /// transaction at all — they need two, with the intermediate held in
+    /// between — so `None` here is a refusal rather than a routing failure to
+    /// work around.
+    ///
+    /// Deepest first, and started only, for the same reasons `quote_for` uses:
+    /// the deepest pool is where a transaction of any size would land, and an
+    /// unlaunched one is not a market.
+    pub fn route(&self, from: &str, to: &str) -> Option<&Pool> {
+        self.pools
+            .iter()
+            .filter(|pool| pool.started && pool.trades(from) && pool.trades(to))
+            .max_by(|a, b| {
+                let room = |pool: &Pool| pool.depth(from, to).unwrap_or_default();
+                room(a)
+                    .partial_cmp(&room(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
     /// Every pool that trades `target`, started or not, with its own price.
     ///
     /// The unstarted ones are the point of showing this at all: two pools

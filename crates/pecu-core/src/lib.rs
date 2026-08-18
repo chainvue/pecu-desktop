@@ -33,6 +33,7 @@
 //! zeroization. That is a security regression dressed as a modernisation, so
 //! `spawn_blocking` it is.
 
+pub mod convert;
 pub mod currency;
 pub mod identity;
 pub mod launch;
@@ -137,6 +138,10 @@ pub fn start(
         market: market::Book::default(),
         market_names: std::collections::BTreeMap::new(),
         market_open: String::new(),
+        convert: pecu_protocol::ConvertDraft::default(),
+        convert_ticket: 0,
+        convert_ready: None,
+        holdings: std::collections::BTreeMap::new(),
         markets: Markets::Unasked,
         pending_currency_search: None,
         launches: std::collections::HashMap::new(),
@@ -270,6 +275,26 @@ struct Core {
     market_names: std::collections::BTreeMap<String, String>,
     /// Which market row is open, by i-address. Empty means none.
     market_open: String,
+    /// The conversion being composed, as the interface last described it.
+    convert: pecu_protocol::ConvertDraft,
+    /// Which estimate is the current one.
+    ///
+    /// A ticket rather than a flag, because these are keystrokes: the reply to
+    /// "0.5" can land after the reply to "0.53", and applying it would put the
+    /// older number back on screen under the newer text. Only the latest
+    /// ticket's answer is allowed to become a quote.
+    convert_ticket: u64,
+    /// The last draft that passed every offline check, held so the reply to its
+    /// estimate can be turned into a quote. Cleared by nothing: a stale one is
+    /// unreachable because its ticket no longer matches.
+    convert_ready: Option<convert::Ready>,
+    /// What the wallet holds, by currency i-address, including the chain's own.
+    ///
+    /// Kept because converting needs it and a balance read does not retain it —
+    /// the dashboard's assets go straight out as a `PortfolioVm` and are gone.
+    /// Absent means zero here, and only here: a currency with no entry is one
+    /// no output paid us in.
+    holdings: std::collections::BTreeMap<String, verus_sdk::money::Amount>,
     /// Whether the markets have been read yet, and whether one is in flight.
     markets: Markets,
     /// A search that arrived while the catalog was still being fetched, to be
@@ -711,6 +736,24 @@ enum Work {
     /// Every currency on the chain, or why it could not be asked. Fetched once
     /// per session — see `Core::currency_catalog`.
     CurrencyCatalog(Box<Result<Vec<verus_sdk::network::CurrencySummary>, String>>),
+    /// What a node expects one conversion to yield, and what a transaction is
+    /// expected to cost.
+    ///
+    /// Both in one job because both are needed to answer one question, and two
+    /// jobs would let the quote arrive without its fee for a frame.
+    ConvertEstimate {
+        ticket: u64,
+        #[allow(clippy::type_complexity)]
+        result: Box<
+            Result<
+                (
+                    verus_sdk::network::ConversionEstimate,
+                    Option<verus_sdk::money::Amount>,
+                ),
+                String,
+            >,
+        >,
+    },
     /// The markets read: every currency the chain knows, and the pools that
     /// can price them.
     ///
@@ -745,6 +788,14 @@ enum Work {
         open: bool,
         result: Box<Result<identity::Detail, verus_sdk::network::RpcError>>,
     },
+}
+
+/// The name a currency is known by, or its i-address when it is not.
+fn convert_name(names: &std::collections::BTreeMap<String, String>, address: &str) -> String {
+    names
+        .get(address)
+        .cloned()
+        .unwrap_or_else(|| address.to_string())
 }
 
 /// Whether one row answers a search.
@@ -1177,6 +1228,9 @@ impl Core {
             Work::Currencies(read) => self.finish_currencies(read),
             Work::CurrencyCatalog(result) => self.finish_currency_catalog(*result),
             Work::Markets(result) => self.finish_markets(*result),
+            Work::ConvertEstimate { ticket, result } => {
+                self.finish_convert_estimate(ticket, *result);
+            }
             Work::LaunchFees(result) => self.finish_launch_fees(*result),
             Work::LaunchPrepared { ticket, result } => {
                 self.finish_launch_prepared(ticket, *result);
@@ -1210,6 +1264,35 @@ impl Core {
         self.cached.names.clone_from(&reading.names);
         self.spendable = reading.spendable;
         self.native_balance = confirmed_native(reading);
+
+        // What can be converted, which is not what can be spent: a token
+        // balance is spendable in its own currency and invisible to
+        // `self.spendable`, which is the native figure alone.
+        //
+        // Keyed by **i-address**, through `portfolio::i_address`, because that
+        // is what the market book and every currency list use. `CurrencyId`
+        // renders as raw hex through `Display` — so the obvious `to_string()`
+        // here builds a map whose keys match nothing, every lookup misses, and
+        // the convert screen reports a balance of zero for a wallet holding
+        // twelve thousand coins. It did exactly that until this line was fixed.
+        self.holdings.clear();
+        if let Some(native) = reading.native {
+            self.holdings
+                .insert(portfolio::i_address(native), reading.spendable);
+        }
+        for (currency, amount) in &reading.tokens {
+            self.holdings
+                .insert(portfolio::i_address(*currency), *amount);
+        }
+
+        // A conversion being composed while the first balance was still loading
+        // was refused against a wallet that appeared to hold nothing, and
+        // stayed refused until somebody typed another character. Re-price it
+        // now that there is something to price it against.
+        if !self.convert.from.is_empty() {
+            let draft = self.convert.clone();
+            self.set_convert_draft(draft);
+        }
 
         let ticker = self
             .nodes
@@ -1325,6 +1408,8 @@ impl Core {
             Command::RefreshIdentities | Command::RefreshCurrencies => self.refresh_identities(),
             Command::RefreshMarkets => self.refresh_markets(),
             Command::OpenMarket(address) => self.open_market(address),
+            Command::SetConvertDraft(draft) => self.set_convert_draft(draft),
+            Command::SwapConvertLegs => self.swap_convert_legs(),
             Command::LookUpIdentity(typed) => self.look_up_identity(&typed),
             Command::SetIdentityAuthorities {
                 address,
@@ -3853,6 +3938,138 @@ impl Core {
             )))
         };
         let _ = self.events.send(Event::MarketDetail(detail));
+    }
+
+    // ── Convert ─────────────────────────────────────────────────────────────
+
+    /// Price what is being composed, asking a node only when it is worth it.
+    ///
+    /// Everything decidable offline is decided offline, against the book and
+    /// the balances already in hand. `estimateconversion` is one request, and
+    /// this runs on every keystroke — so a draft that cannot be converted at
+    /// all is refused here rather than by a node that would have to be asked
+    /// per character to say the same thing.
+    fn set_convert_draft(&mut self, draft: pecu_protocol::ConvertDraft) {
+        self.wallet.touch();
+        self.convert = draft;
+
+        // Any edit invalidates whatever is in flight. Incrementing before the
+        // check, not after: a draft that just became unpriceable must also
+        // cancel the estimate the previous one asked for, or that answer lands
+        // as a quote for a conversion nobody can make.
+        self.convert_ticket = self.convert_ticket.wrapping_add(1);
+        let ticket = self.convert_ticket;
+
+        let ready = match convert::check(
+            &self.convert,
+            &self.market,
+            &self.holdings,
+            &self.market_names,
+        ) {
+            Ok(ready) => ready,
+            Err(note) => {
+                self.refuse_conversion(note);
+                return;
+            }
+        };
+
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        // The names, not the i-addresses. `estimateconversion` takes either,
+        // and a name is what turns up in the node's log and in a bug report —
+        // the wallet has already resolved which currency it means, so there is
+        // nothing left for a name to be ambiguous about here.
+        let from = convert_name(&self.market_names, &ready.from);
+        let to = convert_name(&self.market_names, &ready.to);
+        let via = ready.via.clone();
+        let amount = ready.amount;
+        self.convert_ready = Some(ready);
+
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                let read = chain
+                    .estimate_conversion(&from, &to, &amount.to_coins_string(), via.as_deref())
+                    .map_err(|error| error.to_string())
+                    // The network fee is a second question and a failed answer
+                    // to it must not cost the first: an estimate with an
+                    // unknown fee beside it is still a quote, and `—` is a
+                    // value this screen can show.
+                    .map(|estimate| (estimate, chain.estimate_fee(1).ok().flatten()));
+                Work::ConvertEstimate {
+                    ticket,
+                    result: Box::new(read),
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_convert_estimate(
+        &mut self,
+        ticket: u64,
+        result: Result<
+            (
+                verus_sdk::network::ConversionEstimate,
+                Option<verus_sdk::money::Amount>,
+            ),
+            String,
+        >,
+    ) {
+        // An answer to a question nobody is still asking. See `convert_ticket`.
+        if ticket != self.convert_ticket {
+            return;
+        }
+        let Some(ready) = self.convert_ready.clone() else {
+            return;
+        };
+
+        match result {
+            Ok((estimate, network_fee)) => {
+                let quote = convert::quote(
+                    &ready,
+                    &self.market_names,
+                    &self.holdings,
+                    estimate.estimated_out,
+                    estimate.fee,
+                    network_fee,
+                );
+                let _ = self.events.send(Event::ConvertQuote(Box::new(quote)));
+            }
+            Err(error) => {
+                tracing::warn!(code = "convert_estimate", %error, "could not price a conversion");
+                self.refuse_conversion(pecu_protocol::NoteVm::plain("convert-unpriced"));
+            }
+        }
+    }
+
+    /// Say why there is no quote, in the shape a quote has.
+    ///
+    /// A whole `ConvertQuoteVm` rather than a note on its own, because every
+    /// field has to be answered: a refusal that left the last conversion's fee
+    /// and floor on screen beside a new pair of currencies would be describing
+    /// something nobody asked for.
+    fn refuse_conversion(&self, note: pecu_protocol::NoteVm) {
+        let quote = convert::refused(&self.convert, &self.market_names, &self.holdings, note);
+        let _ = self.events.send(Event::ConvertQuote(Box::new(quote)));
+    }
+
+    /// Turn the conversion around.
+    ///
+    /// The amount is **cleared**, not carried over. It was typed as a quantity
+    /// of one currency and means nothing as a quantity of the other — a swap
+    /// that kept "100" would turn a hundred VRSCTEST into a hundred dollars
+    /// without anybody typing a digit.
+    fn swap_convert_legs(&mut self) {
+        self.wallet.touch();
+        let swapped = pecu_protocol::ConvertDraft {
+            from: self.convert.to.clone(),
+            to: self.convert.from.clone(),
+            pay: String::new(),
+        };
+        self.set_convert_draft(swapped);
     }
 
     // ── Currencies ──────────────────────────────────────────────────────────

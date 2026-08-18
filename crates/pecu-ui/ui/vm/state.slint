@@ -608,22 +608,39 @@ export global ActivityState {
 // than a promise. So it is a form and then a review, the review is built from
 // something signed, and nothing leaves until the second button.
 export global ConvertState {
-    // "form" | "review" | "converting" | "done"
-    in-out property <string> step: "form";
-    in property <bool> busy: false;
+    // No `step` and no `busy` here yet.
+    //
+    // They were: `"form" | "review" | "converting" | "done"`, and a spinner
+    // flag. Nothing wrote either and nothing read either, because this screen
+    // has one state — a form that prices what is in it. The review and the
+    // sending it leads to do not exist, and a state machine whose other three
+    // states are unreachable describes a screen that was never built. They come
+    // back with the thing they describe.
 
     // The interface's own drafts. Nothing is sent from here until Review — the
     // same arrangement `SendState` uses, and for the reason recorded there: a
     // field held inside an element is a state no fixture can reach.
     in-out property <string> pay-draft: "";
 
-    // Which way round. Chosen here rather than derived, because "what I have"
-    // and "what I want" are two questions and swapping them must not silently
-    // reinterpret the amount already typed.
-    in-out property <string> from-name: "";
-    in-out property <string> to-name: "";
-    // What is available to spend of `from-name`, spelled by the core.
+    // Which way round, by i-address. The interface's own draft, like
+    // `pay-draft` — two currencies on this chain can share a name component
+    // (`Bridge.vETH` and `Bridge.CHIPS` are both `Bridge`), so what gets sent
+    // is the address and never the label beside it.
+    in-out property <string> from-address: "";
+    in-out property <string> to-address: "";
+    // What to call them, from the core. It resolved the address against the
+    // chain's own list; the interface knows nothing about either.
+    in property <string> from-name: "";
+    in property <string> to-name: "";
+    // What is available to convert of `from-name`, spelled by the core.
     in property <string> from-balance: "";
+
+    // Which leg the picker is open for: "" closed, "pay" or "get".
+    //
+    // One field rather than a flag and a side, the same rule
+    // `CurrencyState.picking-reserve` follows — the overlay and the leg it will
+    // write to cannot disagree if there is only one thing to read.
+    in-out property <string> picking: "";
 
     // The quote. Mirrors `ConvertQuoteVm` — see it for why these are net of
     // fees where the markets screen's figures are not.
@@ -635,16 +652,18 @@ export global ConvertState {
     in property <string> minimum: "";
     in property <string> slippage: "";
     in property <string> slippage-tone: "unknown";
-    // Why this cannot be done, or what to be careful of. Empty when neither.
-    in property <string> note: "";
+    // Why this cannot be done, or what to be careful of. A named reason, not a
+    // sentence — see `components/note.slint`.
+    in property <Note> note;
     // Whether the form has enough to price. The core's verdict, not a length
     // check here.
     in property <bool> ready: false;
 
+    // Anything typed or chosen. The app reads all three draft fields and sends
+    // them together: which currency is being paid decides what the amount
+    // means, so a signal carrying one of them says nothing about the other two.
+    callback edited();
     callback swap();
-    callback review();
-    callback confirm();
-    callback cancel();
 }
 
 // The markets screen.
