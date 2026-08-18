@@ -147,9 +147,10 @@ fn apply(ui: &AppWindow, event: Event) {
         Event::SendValidation(vm) => {
             let send = ui.global::<SendState>();
             send.set_to_valid(vm.to_valid);
-            send.set_to_note(vm.to_note.into());
+            send.set_to_note(note(&vm.to_note));
+            send.set_to_label(vm.to_label.into());
             send.set_amount_valid(vm.amount_valid);
-            send.set_amount_note(vm.amount_note.into());
+            send.set_amount_note(note(&vm.amount_note));
             send.set_ready(vm.ready);
         }
 
@@ -1050,6 +1051,23 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
 /// Satoshi counts cross as decimal strings, so "nothing" is a string test.
 fn is_zero(sats: &str) -> bool {
     sats.is_empty() || sats.chars().all(|c| c == '0')
+}
+
+/// A named reason, on its way to the words.
+///
+/// The core decides which sentence applies and supplies its values; the text
+/// lives in `components/note.slint`. See `NoteVm` for why it stopped writing
+/// prose.
+fn note(vm: &pecu_protocol::NoteVm) -> pecu_ui::Note {
+    pecu_ui::Note {
+        code: vm.code.clone().into(),
+        args: slint::ModelRc::new(slint::VecModel::from(
+            vm.args
+                .iter()
+                .map(|arg| slint::SharedString::from(arg.as_str()))
+                .collect::<Vec<_>>(),
+        )),
+    }
 }
 
 fn activity_row(row: &HistoryRowVm) -> ActivityRow {

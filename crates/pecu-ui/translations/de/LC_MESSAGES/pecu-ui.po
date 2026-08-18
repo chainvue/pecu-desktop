@@ -36,3 +36,12 @@ msgstr "Währungen"
 
 msgid "Settings"
 msgstr "Einstellungen"
+
+# From `components/note.slint` — a sentence the core used to write in Rust,
+# where no catalogue could reach it. Translating this one is what proves the
+# refactor did what it claims.
+msgid "More than the {0} you can spend now."
+msgstr "Mehr als die {0}, die du jetzt ausgeben kannst."
+
+msgid "Not a Verus address. They start with R for a key, or i for a VerusID."
+msgstr "Keine Verus-Adresse. Sie beginnen mit R für einen Schlüssel oder i für eine VerusID."

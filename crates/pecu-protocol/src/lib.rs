@@ -41,6 +41,7 @@ pub use models::{
     CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
     LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm,
+    NoteVm,
     PendingVm, PortfolioVm,
     PreallocationDraft, Reachability, RegistrationVm, ReserveDraft, ReviewOutputVm, ScreenId,
     SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, StatVm, TaskKind,

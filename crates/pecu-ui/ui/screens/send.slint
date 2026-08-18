@@ -5,6 +5,7 @@ import { R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money } from "../components/base.slint";
 import { Actions, SendState, WalletState } from "../vm/state.slint";
 import { Field, KeyPicker, QuoteLine } from "../components/form.slint";
+import { NoteText } from "../components/note.slint";
 
 export component SendForm inherits HorizontalLayout {
     spacing: Sp.s7;
@@ -115,11 +116,9 @@ export component SendForm inherits HorizontalLayout {
                     invalid: SendState.to-draft != "" && !SendState.to-valid;
                     edited => { root.check(); }
                 }
-                if SendState.to-note != "": Text {
-                    text: SendState.to-note;
-                    font-size: Typo.caption;
-                    color: SendState.to-valid ? Theme.text-tertiary : Theme.negative;
-                    wrap: word-wrap;
+                if SendState.to-note.code != "": NoteText {
+                    note: SendState.to-note;
+                    problem: !SendState.to-valid;
                 }
             }
 
@@ -147,11 +146,9 @@ export component SendForm inherits HorizontalLayout {
                     edited => { root.check(); }
                     accepted => { root.review(); }
                 }
-                if SendState.amount-note != "": Text {
-                    text: SendState.amount-note;
-                    font-size: Typo.caption;
-                    color: Theme.negative;
-                    wrap: word-wrap;
+                if SendState.amount-note.code != "": NoteText {
+                    note: SendState.amount-note;
+                    problem: true;
                 }
             }
 
@@ -219,7 +216,7 @@ export component SendForm inherits HorizontalLayout {
         // What the core made of the recipient. Worth its own place: it is the
         // only thing on this screen that can catch an address which is valid
         // and still wrong.
-        if SendState.to-note != "": Card {
+        if SendState.to-note.code != "" || SendState.to-label != "": Card {
             VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
@@ -227,11 +224,18 @@ export component SendForm inherits HorizontalLayout {
                     text: SendState.to-valid ? @tr("RECIPIENT") : @tr("PROBLEM");
                     color: SendState.to-valid ? Theme.text-tertiary : Theme.negative;
                 }
-                Text {
-                    text: SendState.to-note;
+                NoteText {
+                    note: SendState.to-note;
+                    problem: !SendState.to-valid;
+                }
+                // The name this wallet gave the address, on its own line. The
+                // core used to glue it onto the sentence with a separator it
+                // could not see the width of.
+                if SendState.to-label != "": Text {
+                    text: SendState.to-label;
                     font-size: Typo.caption;
-                    color: SendState.to-valid ? Theme.text-secondary : Theme.negative;
-                    wrap: word-wrap;
+                    font-weight: Typo.w-bold;
+                    color: Theme.text-primary;
                 }
             }
         }

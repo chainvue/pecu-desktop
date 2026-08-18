@@ -9,7 +9,7 @@
 // Slint code generator became the slowest part of every build. Nothing moved
 // but the text.
 
-import { ActivityRow, AssetRow, ContentEntry, CurrencyField, CurrencyPick, CurrencyProblem, CurrencyRow, CurrencySlice, EligibleIdentity, FlowStep, IdentityRow, KeyRow, KnownAddressRow, MarketRow, NodeRow, PendingRow, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SeedWord, Stat, ToastRow, Venue } from "structs.slint";
+import { ActivityRow, AssetRow, ContentEntry, CurrencyField, CurrencyPick, CurrencyProblem, CurrencyRow, CurrencySlice, EligibleIdentity, FlowStep, IdentityRow, KeyRow, KnownAddressRow, MarketRow, NodeRow, PendingRow, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SeedWord, Stat, ToastRow, Venue, Note } from "structs.slint";
 
 export global WalletState {
     in property <bool> exists: false;
@@ -140,9 +140,14 @@ export global SendState {
 
     // Verdicts from core, which owns address parsing and the fee rules.
     in property <bool> to-valid: false;
-    in property <string> to-note: "";
+    // A named reason, not a sentence — see `components/note.slint`.
+    in property <Note> to-note;
+    // What this wallet has called the recipient's address, if anything. Beside
+    // the note rather than inside it: the separator between the two is
+    // typography, and the core cannot see the line.
+    in property <string> to-label: "";
     in property <bool> amount-valid: false;
-    in property <string> amount-note: "";
+    in property <Note> amount-note;
     in property <bool> ready: false;
 
     // The review, decoded from the signed transaction.

@@ -21,7 +21,7 @@
 
 use pecu_chain::{Chain, SpendPermit};
 use pecu_keystore::{Vault, VaultError};
-use pecu_protocol::{ReviewOutputVm, SendDraft, SendReviewVm};
+use pecu_protocol::{NoteVm, ReviewOutputVm, SendDraft, SendReviewVm};
 use verus_sdk::money::Amount;
 use verus_sdk::network::{self, FlowError, Sent, Unsent};
 use verus_sdk::verus_keys::{Address, AddressKind};
@@ -66,39 +66,38 @@ pub struct Prepared {
 /// the balance: that needs the chain, and a form that goes red because a
 /// refresh is in flight is a form that punishes typing.
 pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftValidationVm {
+    // Codes, not sentences. See `NoteVm`: this decides *what is true about the
+    // address*, which is the core's job, and leaves the wording to the side
+    // that knows how much room the line has and what language it is in.
     let (to_valid, to_note) = match draft.to.trim() {
-        "" => (false, String::new()),
+        "" => (false, NoteVm::none()),
         text => match text.parse::<Address>() {
             Ok(address) => match address.kind() {
-                AddressKind::PubKeyHash => (true, "Transparent address".to_string()),
+                AddressKind::PubKeyHash => (true, NoteVm::plain("address-transparent")),
                 // An identity is a legitimate destination — `prepare_send`
                 // parses one and pays it. Saying so beats a bare tick.
-                AddressKind::Identity => (true, "VerusID".to_string()),
-                AddressKind::ScriptHash => (true, "Script address".to_string()),
+                AddressKind::Identity => (true, NoteVm::plain("address-verusid")),
+                AddressKind::ScriptHash => (true, NoteVm::plain("address-script")),
             },
-            Err(_) => (
-                false,
-                "Not a Verus address. They start with R for a key, or i for a VerusID.".to_string(),
-            ),
+            Err(_) => (false, NoteVm::plain("address-unparsable")),
         },
     };
 
     let (amount_valid, amount_note) = match draft.amount.trim() {
-        "" => (false, String::new()),
+        "" => (false, NoteVm::none()),
         text => match Amount::from_coins_str(text) {
-            Ok(amount) if amount.is_zero() => (false, "Enter an amount above zero.".to_string()),
-            Ok(amount) if amount > spendable => (
-                false,
-                format!("More than the {} you can spend now.", coins(spendable)),
-            ),
-            Ok(_) => (true, String::new()),
+            Ok(amount) if amount.is_zero() => (false, NoteVm::plain("amount-zero")),
+            // The figure travels with the code, already spelled: money is
+            // formatted in exactly one place in this workspace and the
+            // interface is not a second one.
+            Ok(amount) if amount > spendable => {
+                (false, NoteVm::with("amount-above-spendable", [coins(spendable)]))
+            }
+            Ok(_) => (true, NoteVm::none()),
             // The SDK refuses more than eight decimal places rather than
             // rounding, and so does this: a satoshi silently dropped is a
             // satoshi the user did not decide to drop.
-            Err(_) => (
-                false,
-                "Not an amount. Up to eight decimal places, like 1.5 or 0.00000001.".to_string(),
-            ),
+            Err(_) => (false, NoteVm::plain("amount-unparsable")),
         },
     };
 
@@ -107,6 +106,9 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
         to_note,
         amount_valid,
         amount_note,
+        // Filled in by the caller, which is the side that knows what this
+        // wallet has called the address.
+        to_label: String::new(),
         ready: to_valid && amount_valid,
     }
 }
@@ -306,7 +308,7 @@ mod tests {
     fn a_transparent_address_is_accepted_and_named() {
         let verdict = validate(&draft(ADDRESS, "1.5"), Amount::from_sat(1_000_000_000));
         assert!(verdict.to_valid);
-        assert_eq!(verdict.to_note, "Transparent address");
+        assert_eq!(verdict.to_note.code, "address-transparent");
         assert!(verdict.amount_valid);
         assert!(verdict.ready);
     }
@@ -315,7 +317,10 @@ mod tests {
     fn nonsense_is_refused_with_a_reason_rather_than_a_cross() {
         let verdict = validate(&draft("not-an-address", "1"), Amount::from_sat(100_000_000));
         assert!(!verdict.to_valid);
-        assert!(verdict.to_note.contains('R'), "{}", verdict.to_note);
+        // The code, not the wording. What the core decides is *which* refusal
+        // this is; the sentence belongs to the interface and can be rewritten
+        // or translated without this test having an opinion about it.
+        assert_eq!(verdict.to_note.code, "address-unparsable");
         assert!(!verdict.ready);
     }
 
@@ -334,11 +339,10 @@ mod tests {
     fn an_amount_above_the_balance_says_so() {
         let verdict = validate(&draft(ADDRESS, "10"), Amount::from_sat(100_000_000));
         assert!(!verdict.amount_valid);
-        assert!(
-            verdict.amount_note.contains("1.0000 0000"),
-            "{}",
-            verdict.amount_note
-        );
+        assert_eq!(verdict.amount_note.code, "amount-above-spendable");
+        // The figure still travels with it, and still spelled by the core —
+        // money is formatted in one place and this test is what says so.
+        assert_eq!(verdict.amount_note.args, vec!["1.0000 0000".to_string()]);
         assert!(!verdict.ready);
     }
 
@@ -354,19 +358,15 @@ mod tests {
     fn more_precision_than_a_satoshi_is_refused() {
         let verdict = validate(&draft(ADDRESS, "1.234567891"), Amount::from_sat(u64::MAX));
         assert!(!verdict.amount_valid);
-        assert!(
-            verdict.amount_note.contains("eight"),
-            "{}",
-            verdict.amount_note
-        );
+        assert_eq!(verdict.amount_note.code, "amount-unparsable");
     }
 
     /// An empty field is not an error yet — it is a field nobody has filled in.
     #[test]
     fn an_empty_form_is_not_yet_wrong() {
         let verdict = validate(&draft("", ""), Amount::ZERO);
-        assert!(verdict.to_note.is_empty());
-        assert!(verdict.amount_note.is_empty());
+        assert!(verdict.to_note.code.is_empty());
+        assert!(verdict.amount_note.code.is_empty());
         assert!(!verdict.ready);
     }
 

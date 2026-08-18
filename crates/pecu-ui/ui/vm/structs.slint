@@ -113,6 +113,20 @@ export struct ToastRow {
 }
 
 // One VerusID in the list.
+// A sentence the interface writes, named by the core. Mirrors `NoteVm`.
+//
+// The core decides *what is true* — that an address will not parse, that an
+// amount is above the balance — and names it. The words are here, in `@tr`,
+// where they can be translated and where the side that knows how much room the
+// line has gets to choose them.
+export struct Note {
+    // A stable identifier, never shown. Empty means say nothing.
+    code: string,
+    // Values the sentence needs, already formatted by the core. Money is
+    // spelled in exactly one place and this is not it.
+    args: [string],
+}
+
 // One currency in the markets table. Mirrors `MarketRowVm`.
 //
 // Every figure is a formatted string rather than a number: the core owns how

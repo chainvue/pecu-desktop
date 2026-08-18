@@ -888,13 +888,80 @@ pub struct SendDraft {
     pub amount: String,
 }
 
+/// A sentence the **interface** writes, named by the core.
+///
+/// # Why the core stopped writing sentences
+///
+/// It used to return finished English prose — "More than the 12.5 you can spend
+/// now." — and roughly a hundred and forty of those are scattered through
+/// `pecu-core`. That is a translation problem and it is not fixable with a
+/// catalogue: `@tr` reaches `.slint` and nothing else, so every one of those
+/// sentences would have been permanently English no matter how many `.po` files
+/// the project grew.
+///
+/// It is also a layering problem that predates the translation one. Deciding
+/// *what is wrong* is the core's job — it owns the address rules and the fee
+/// rules. Deciding *how to say it* is the interface's, and handing over a
+/// finished sentence takes that decision away from the only side that knows how
+/// much room the line has, what is beside it, and which language it is in.
+///
+/// So the core names the reason and supplies the values; the interface has the
+/// words. An unknown code renders as itself rather than as nothing — a message
+/// nobody wrote is a bug, and a blank line hides it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteVm {
+    /// A stable identifier, never shown to anybody. Empty means "say nothing",
+    /// which is a real answer and not a missing one.
+    pub code: String,
+    /// The values the sentence needs, already formatted by the core — money is
+    /// spelled in exactly one place in this workspace and the interface is not
+    /// a second one.
+    ///
+    /// A list, because the longest of these takes three: a name, the address it
+    /// points at now, and the one it pointed at before. Slint carries this as
+    /// `[string]` inside the struct and a binding can index it — checked by
+    /// compiling it, after the first version of this comment asserted the
+    /// opposite and was wrong.
+    pub args: Vec<String>,
+}
+
+impl NoteVm {
+    /// A note with nothing in it. Say nothing.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// A note with no values in it.
+    pub fn plain(code: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            args: Vec::new(),
+        }
+    }
+
+    /// A note that names some values.
+    pub fn with(code: &str, args: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            code: code.to_string(),
+            args: args.into_iter().collect(),
+        }
+    }
+}
+
+/// What core makes of the two boxes on the send form.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DraftValidationVm {
     pub to_valid: bool,
-    /// "Transparent address" / "VerusID" / the reason it is not one.
-    pub to_note: String,
+    /// What sort of address it is, or why it is not one.
+    pub to_note: NoteVm,
     pub amount_valid: bool,
-    pub amount_note: String,
+    pub amount_note: NoteVm,
+    /// A name this wallet has given the recipient's address, or empty.
+    ///
+    /// Beside the note rather than inside it: the core used to compose
+    /// `"{note} · {label}"`, which decided a separator and a line break on
+    /// behalf of a screen it cannot see.
+    pub to_label: String,
     /// Everything checks out and Review may be pressed.
     pub ready: bool,
 }

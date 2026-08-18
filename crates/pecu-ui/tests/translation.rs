@@ -23,7 +23,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use i_slint_backend_testing::ElementQuery;
-use pecu_ui::{AppWindow, WalletState};
+use pecu_ui::{AppWindow, Note, SendState, WalletState};
 use slint::ComponentHandle;
 
 /// The shell, on screen rather than behind the unlock form.
@@ -44,6 +44,21 @@ fn labels(ui: &AppWindow) -> Vec<String> {
         .iter()
         .filter_map(i_slint_backend_testing::ElementHandle::accessible_label)
         .map(|label| label.to_string())
+        .collect()
+}
+
+/// Every piece of text on the window, label or not.
+///
+/// `accessible_label` misses a plain `Text`, and the notes on the send form are
+/// plain `Text` — so a test that only read labels would have found nothing and
+/// called it a pass.
+fn texts(ui: &AppWindow) -> Vec<String> {
+    ElementQuery::from_root(ui)
+        .match_descendants()
+        .find_all()
+        .iter()
+        .filter_map(|e| e.accessible_label().or_else(|| e.accessible_value()))
+        .map(|t| t.to_string())
         .collect()
 }
 
@@ -114,6 +129,36 @@ fn the_interface_can_be_switched_to_another_language() {
     assert!(
         german.iter().filter(|l| *l == "Übersicht").count() >= 2,
         "the title bar should be translated with the rail; got {german:?}"
+    );
+
+    // A sentence that used to be written in Rust.
+    //
+    // This is the point of `NoteVm`. `pecu-core` decided *and worded* every
+    // refusal, and `@tr` reaches `.slint` and nothing else — so "More than the
+    // 12.5 you can spend now." was permanently English however many catalogues
+    // the project grew. The core names the reason now and the words are in
+    // `components/note.slint`, which is inside `@tr`'s reach.
+    //
+    // Driven through the real path: a fixture puts the code and its figure on
+    // `SendState`, the screen renders it, and this reads the result back out of
+    // the element tree.
+    let send = ui.global::<SendState>();
+    send.set_amount_note(Note {
+        code: "amount-above-spendable".into(),
+        args: slint::ModelRc::new(slint::VecModel::from(vec![slint::SharedString::from(
+            "12.5000 0000",
+        )])),
+    });
+    ui.set_screen("send".into());
+
+    let sentences = labels(&ui);
+    assert!(
+        sentences
+            .iter()
+            .chain(texts(&ui).iter())
+            .any(|t| t.contains("Mehr als die 12.5000 0000")),
+        "the note is still English: {:?}",
+        texts(&ui)
     );
 
     // And back, because a wallet that can only be switched once is a wallet

@@ -1,0 +1,67 @@
+import { Theme, Typo } from "../theme/theme.slint";
+import { Note } from "../vm/structs.slint";
+
+// The words for the reasons the core names.
+//
+// # Why this file exists
+//
+// `pecu-core` used to return finished English prose — "More than the 12.5 you
+// can spend now." — and around a hundred and forty of those are scattered
+// through it. Two problems, and the smaller one is the translation:
+//
+//   * `@tr` reaches `.slint` and nothing else, so every sentence written in
+//     Rust was permanently English however many `.po` files the project grew;
+//   * and deciding *how to say it* was never the core's job. It owns the
+//     address rules and the fee rules, so it knows what is wrong. It does not
+//     know how wide the line is, what is beside it, or what language it is in.
+//
+// So the core names the reason and supplies the values. The words are here.
+//
+// # An unknown code shows itself
+//
+// Rather than rendering as nothing. A code with no sentence is a bug — somebody
+// added a refusal and did not write it down — and a blank line beside a refused
+// field hides it until a person hits that case in the wild. The code is ugly on
+// screen, which is the point.
+export component NoteText inherits Text {
+    in property <Note> note;
+    // What the sentence is *about*, when a caller wants the tone to say so.
+    in property <bool> problem: false;
+
+    // Positional, because a translated sentence puts its values in its own
+    // order — German moves them and English does not, and `{0}` is what lets a
+    // catalogue do that without the core knowing.
+    text: root.note.code == "" ? ""
+
+        // ── The recipient field ─────────────────────────────────────────
+        : root.note.code == "address-transparent" ? @tr("Transparent address")
+        : root.note.code == "address-verusid" ? @tr("VerusID")
+        : root.note.code == "address-script" ? @tr("Script address")
+        : root.note.code == "address-unparsable"
+            ? @tr("Not a Verus address. They start with R for a key, or i for a VerusID.")
+
+        // ── What a node said about a name ───────────────────────────────
+        : root.note.code == "verusid-resolving" ? @tr("Looking this VerusID up…")
+        : root.note.code == "verusid-unknown" ? @tr("No VerusID by that name on this chain.")
+        : root.note.code == "verusid-resolved"
+            ? @tr("VerusID {0} · {1}", root.note.args[0], root.note.args[1])
+        : root.note.code == "verusid-revoked"
+            ? @tr("{0} has been revoked. This wallet will not pay it.", root.note.args[0])
+        : root.note.code == "verusid-moved"
+            ? @tr("{0} now points at {1} — it was {2}. Check this before sending.",
+                  root.note.args[0], root.note.args[1], root.note.args[2])
+
+        // ── The amount field ────────────────────────────────────────────
+        : root.note.code == "amount-zero" ? @tr("Enter an amount above zero.")
+        : root.note.code == "amount-above-spendable"
+            ? @tr("More than the {0} you can spend now.", root.note.args[0])
+        : root.note.code == "amount-unparsable"
+            ? @tr("Not an amount. Up to eight decimal places, like 1.5 or 0.00000001.")
+
+        // A code nobody wrote a sentence for. Visible on purpose.
+        : root.note.code;
+
+    font-size: Typo.caption;
+    color: root.problem ? Theme.negative : Theme.text-tertiary;
+    wrap: word-wrap;
+}

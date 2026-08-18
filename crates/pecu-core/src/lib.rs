@@ -47,7 +47,9 @@ pub mod wallet;
 use std::sync::Arc;
 
 use pecu_chain::{Chain, Network, Node, NodeManager};
-use pecu_protocol::{Command, Event, LockReason, NetworkVm, NodeVm, Reachability, TaskKind};
+use pecu_protocol::{
+    Command, Event, LockReason, NetworkVm, NodeVm, NoteVm, Reachability, TaskKind,
+};
 use tokio::sync::mpsc;
 use verus_sdk::verus_keys::bip39::MnemonicError;
 
@@ -392,23 +394,27 @@ fn some_if_set(text: &str) -> Option<String> {
 /// Ordered by how much it should stop somebody. A name that now points
 /// somewhere else outranks everything: it is the case where the form looks
 /// perfectly ordinary and the money goes to a stranger.
-fn identity_note(identity: &Identity) -> String {
+fn identity_note(identity: &Identity) -> NoteVm {
     if identity.address.is_empty() {
-        return "No VerusID by that name on this chain.".to_string();
+        return NoteVm::plain("verusid-unknown");
     }
     if let Some(previous) = &identity.was {
-        return format!(
-            "{} now points at {} — it was {}. Check this before sending.",
-            identity.name, identity.address, previous,
+        return NoteVm::with(
+            "verusid-moved",
+            [
+                identity.name.clone(),
+                identity.address.clone(),
+                previous.clone(),
+            ],
         );
     }
     if identity.revoked {
-        return format!(
-            "{} has been revoked. This wallet will not pay it.",
-            identity.name
-        );
+        return NoteVm::with("verusid-revoked", [identity.name.clone()]);
     }
-    format!("VerusID {} · {}", identity.name, identity.address)
+    NoteVm::with(
+        "verusid-resolved",
+        [identity.name.clone(), identity.address.clone()],
+    )
 }
 
 /// What a node said a VerusID name points at.
@@ -2794,7 +2800,7 @@ impl Core {
             verdict.to_valid = !identity.address.is_empty() && !identity.revoked;
             verdict.to_note = identity_note(identity);
         } else if self.resolving.as_deref() == Some(draft.to.trim()) {
-            verdict.to_note = "Looking this VerusID up…".to_string();
+            verdict.to_note = NoteVm::plain("verusid-resolving");
         }
         verdict.ready = verdict.to_valid && verdict.amount_valid;
 
@@ -2802,17 +2808,19 @@ impl Core {
         // already says what the address is. That is where somebody checking a
         // pasted address is looking, and "the exchange" tells them more than
         // any amount of checksum arithmetic can.
-        if let Some(label) = self
+        // Carried beside the note rather than glued onto it.
+        //
+        // The core used to build `"{note} · {label}"`. That put two decisions
+        // in the wrong place: the separator is typography, and whether the two
+        // facts belong on one line at all depends on how wide the line is —
+        // neither of which the core can see. It is a second field now, and the
+        // interface decides how to show both.
+        verdict.to_label = self
             .known
             .get(draft.to.trim())
             .filter(|label| !label.is_empty())
-        {
-            verdict.to_note = if verdict.to_note.is_empty() {
-                label.clone()
-            } else {
-                format!("{} · {label}", verdict.to_note)
-            };
-        }
+            .cloned()
+            .unwrap_or_default();
 
         let _ = self.events.send(Event::SendValidation(verdict));
     }
@@ -5314,10 +5322,14 @@ mod tests {
         };
 
         let plain = identity_note(&base);
-        assert!(plain.contains("someone.VRSCTEST@"), "{plain}");
+        assert_eq!(plain.code, "verusid-resolved");
         assert!(
-            plain.contains("iNEW"),
-            "the note hides the address: {plain}"
+            plain.args.contains(&"someone.VRSCTEST@".to_string()),
+            "{plain:?}"
+        );
+        assert!(
+            plain.args.contains(&"iNEW".to_string()),
+            "the note hides the address: {plain:?}"
         );
 
         // Changed AND revoked: the change still wins, and the old address is
@@ -5328,17 +5340,18 @@ mod tests {
             revoked: true,
             ..base.clone()
         });
+        assert_eq!(moved.code, "verusid-moved");
         assert!(
-            moved.contains("iOLD"),
-            "the old address is missing: {moved}"
+            moved.args.contains(&"iOLD".to_string()),
+            "the old address is missing: {moved:?}"
         );
-        assert!(moved.contains("iNEW"), "{moved}");
+        assert!(moved.args.contains(&"iNEW".to_string()), "{moved:?}");
 
         let revoked = identity_note(&Identity {
             revoked: true,
             ..base.clone()
         });
-        assert!(revoked.contains("revoked"), "{revoked}");
+        assert_eq!(revoked.code, "verusid-revoked");
 
         // No address at all is a name this chain does not have. It must not
         // read as a success — the address being empty is exactly the case a
@@ -5347,7 +5360,7 @@ mod tests {
             address: String::new(),
             ..base
         });
-        assert!(missing.contains("No VerusID"), "{missing}");
+        assert_eq!(missing.code, "verusid-unknown");
     }
 
     /// Wait for the next `Event::Network`, ignoring anything else.
@@ -5867,14 +5880,17 @@ mod tests {
             to: address.to_string(),
             amount: "1.0".to_string(),
         }));
-        let note = loop {
+        // The label is its own field now, so this reads the thing itself
+        // rather than looking for a substring of a sentence the core used to
+        // compose.
+        let label = loop {
             match events.recv().await {
-                Some(Event::SendValidation(vm)) => break vm.to_note,
+                Some(Event::SendValidation(vm)) => break vm.to_label,
                 Some(_) => {}
                 None => panic!("the core stopped before validating"),
             }
         };
-        assert!(note.contains("the exchange"), "{note}");
+        assert_eq!(label, "the exchange");
 
         dispatcher.send(Command::Shutdown);
 

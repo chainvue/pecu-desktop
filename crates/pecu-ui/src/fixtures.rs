@@ -25,7 +25,7 @@ use crate::{
     ConvertState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState,
     NetworkState, NodeRow, PendingRow,
     ActivityState, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState,
-    SeedWord, SendState, Stat, TxState, Venue, WalletState,
+    Note, SeedWord, SendState, Stat, TxState, Venue, WalletState,
 };
 
 /// A conversion being priced.
@@ -324,6 +324,16 @@ pub fn searching(ui: &AppWindow) {
             target: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
         },
     ]))));
+}
+
+/// A named reason, the way the core sends one.
+fn note(code: &str, args: &[&str]) -> Note {
+    Note {
+        code: code.into(),
+        args: ModelRc::from(Rc::new(VecModel::from(
+            args.iter().map(|a| SharedString::from(*a)).collect::<Vec<_>>(),
+        ))),
+    }
 }
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
@@ -960,10 +970,18 @@ pub fn sending_too_much(ui: &AppWindow) {
     let send = ui.global::<SendState>();
     send.set_to_draft(SECOND_ADDRESS.into());
     send.set_to_valid(true);
-    send.set_to_note("Paid before · the exchange".into());
+    // Codes the core actually emits, and the label as its own field.
+    //
+    // These used to be invented sentences — "Paid before · the exchange", and
+    // an amount note with wording no version of this wallet has ever produced.
+    // The reference image was therefore a picture of text the product cannot
+    // show, which is the failure the fixtures warn about in three other places.
+    // A code cannot be invented: an unknown one renders as itself.
+    send.set_to_note(note("address-transparent", &[]));
+    send.set_to_label("the exchange".into());
     send.set_amount_draft("99 999.0000 0000".into());
     send.set_amount_valid(false);
-    send.set_amount_note("More than this key can spend — 12 382.4200 0000 available.".into());
+    send.set_amount_note(note("amount-above-spendable", &["12 382.4200 0000"]));
 }
 
 /// The network screen with everything that can be wrong with a node.
