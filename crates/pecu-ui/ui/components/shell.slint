@@ -219,7 +219,7 @@ export component TitleBar inherits Rectangle {
             border-radius: R.full;
             background: Theme.warning-soft;
             mocklabel := Text {
-                text: "MOCK DATA";
+                text: @tr("MOCK DATA");
                 font-size: Typo.micro;
                 font-weight: Typo.w-bold;
                 letter-spacing: 0.6px;
@@ -229,7 +229,7 @@ export component TitleBar inherits Rectangle {
 
         StatusPill {
             state: root.node-state;
-            text: root.network == "" ? "Not connected" : root.network;
+            text: root.network == "" ? @tr("Not connected") : root.network;
             y: (parent.height - self.height) / 2;
         }
 
@@ -245,7 +245,7 @@ export component TitleBar inherits Rectangle {
                 // No spinner: the word changing IS the feedback, and a spinner
                 // that appears for 200ms reads as a flicker rather than
                 // progress.
-                text: root.busy ? "Reading…" : "Refresh";
+                text: root.busy ? @tr("Reading…") : @tr("Refresh");
                 font-size: Typo.caption;
                 font-weight: Typo.w-medium;
                 color: root.busy ? Theme.text-tertiary
@@ -291,7 +291,7 @@ export component TitleBar inherits Rectangle {
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;
-            accessible-label: "Refresh balances";
+            accessible-label: @tr("Refresh balances");
             accessible-enabled: !root.busy;
             accessible-action-default => {
                 if (!root.busy) {
@@ -317,7 +317,7 @@ export component TitleBar inherits Rectangle {
             animate background { duration: Motion.fast; enabled: Motion.enabled; }
 
             locklabel := Text {
-                text: "Lock";
+                text: @tr("Lock");
                 font-size: Typo.caption;
                 font-weight: Typo.w-medium;
                 color: locktouch.has-hover ? Theme.text-primary : Theme.text-secondary;
@@ -352,7 +352,7 @@ export component TitleBar inherits Rectangle {
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;
-            accessible-label: "Lock the wallet";
+            accessible-label: @tr("Lock the wallet");
             accessible-action-default => { root.lock(); }
         }
 
@@ -368,7 +368,7 @@ export component TitleBar inherits Rectangle {
                 // is in — and a word rather than a symbol, because `☀` drew
                 // nothing in the light theme. The dark one rendered fine, so
                 // this was invisible until a light reference image existed.
-                text: Theme.dark ? "Light" : "Dark";
+                text: Theme.dark ? @tr("Light") : @tr("Dark");
                 font-size: Typo.caption;
                 font-weight: Typo.w-medium;
                 color: themetouch.has-hover ? Theme.text-primary : Theme.text-secondary;
@@ -402,7 +402,7 @@ export component TitleBar inherits Rectangle {
                 border-color: Theme.accent-ring;
             }
             accessible-role: button;
-            accessible-label: "Toggle light and dark theme";
+            accessible-label: @tr("Toggle light and dark theme");
             accessible-action-default => { root.toggle-theme(); }
         }
     }
@@ -443,7 +443,7 @@ export component StatusBar inherits Rectangle {
         spacing: Sp.s5;
 
         Text {
-            text: root.tip == "" ? "no block height" : root.tip + " blocks";
+            text: root.tip == "" ? @tr("no block height") : @tr("{} blocks", root.tip);
             font-family: Typo.mono;
             font-size: Typo.micro;
             color: root.syncing ? Theme.warning : Theme.text-tertiary;
@@ -453,7 +453,7 @@ export component StatusBar inherits Rectangle {
         // In words as well as in colour, which is the rule everywhere else in
         // this interface: a reader without colour vision gets the same warning.
         if root.syncing: Text {
-            text: "node is behind the chain";
+            text: @tr("node is behind the chain");
             font-size: Typo.micro;
             color: Theme.warning;
             vertical-alignment: center;

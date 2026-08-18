@@ -67,7 +67,7 @@ export component SendForm inherits HorizontalLayout {
                 spacing: Sp.s3;
                 HorizontalLayout {
                     Text {
-                        text: "From";
+                        text: @tr("From");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         horizontal-stretch: 1;
@@ -94,7 +94,7 @@ export component SendForm inherits HorizontalLayout {
             VerticalLayout {
                 spacing: Sp.s3;
                 Text {
-                    text: "Recipient";
+                    text: @tr("Recipient");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                 }
@@ -111,7 +111,7 @@ export component SendForm inherits HorizontalLayout {
                     // ellipsis is what truncation looks like, and a field that
                     // appears broken before it has been typed in is not a field
                     // anybody trusts.
-                    placeholder: "Address (R…) or name@";
+                    placeholder: @tr("Address (R…) or name@");
                     text <=> SendState.to-draft;
                     invalid: SendState.to-draft != "" && !SendState.to-valid;
                     edited => { root.check(); }
@@ -126,13 +126,13 @@ export component SendForm inherits HorizontalLayout {
                 spacing: Sp.s3;
                 HorizontalLayout {
                     Text {
-                        text: "Amount";
+                        text: @tr("Amount");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         horizontal-stretch: 1;
                     }
                     Text {
-                        text: WalletState.spendable + " spendable";
+                        text: @tr("{} spendable", WalletState.spendable);
                         font-family: Typo.mono;
                         font-size: Typo.num-sm;
                         color: Theme.text-tertiary;
@@ -270,7 +270,7 @@ export component SendScreen inherits VerticalLayout {
                 VerticalLayout {
                     spacing: Sp.s2;
                     Text {
-                        text: "Check this payment";
+                        text: @tr("Check this payment");
                         font-size: Typo.title2;
                         font-weight: Typo.w-bold;
                         color: Theme.text-primary;
@@ -278,7 +278,7 @@ export component SendScreen inherits VerticalLayout {
                     Text {
                         // Says exactly what it is, because that is what makes
                         // this step worth reading.
-                        text: "Read back from the transaction that was signed — not from what you typed.";
+                        text: @tr("Read back from the transaction that was signed — not from what you typed.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
@@ -294,7 +294,7 @@ export component SendScreen inherits VerticalLayout {
                         padding: Sp.s5;
                         spacing: Sp.s2;
                         Text {
-                            text: "You have not paid this address before";
+                            text: @tr("You have not paid this address before");
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: Theme.warning;
@@ -305,7 +305,7 @@ export component SendScreen inherits VerticalLayout {
                             // cannot. A mistyped address that happens to be
                             // valid looks exactly like a correct one, and coins
                             // sent to it are gone.
-                            text: "Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.";
+                            text: @tr("Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -318,7 +318,7 @@ export component SendScreen inherits VerticalLayout {
                 // below are the answer the transaction actually pays.
                 if SendState.recipient-name != "": VerticalLayout {
                     spacing: Sp.s2;
-                    Eyebrow { text: "ADDRESSED TO"; }
+                    Eyebrow { text: @tr("ADDRESSED TO"); }
                     Text {
                         text: SendState.recipient-name;
                         font-family: Typo.mono;
@@ -327,7 +327,7 @@ export component SendScreen inherits VerticalLayout {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "Resolved by the node this wallet is connected to. The address it resolved to is below.";
+                        text: @tr("Resolved by the node this wallet is connected to. The address it resolved to is below.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
@@ -344,7 +344,7 @@ export component SendScreen inherits VerticalLayout {
                 // signed actually spends from.
                 if SendState.from-address != "": VerticalLayout {
                     spacing: Sp.s2;
-                    Eyebrow { text: "PAID FROM"; }
+                    Eyebrow { text: @tr("PAID FROM"); }
                     Text {
                         text: SendState.from-address;
                         font-family: Typo.mono;
@@ -356,7 +356,7 @@ export component SendScreen inherits VerticalLayout {
 
                 VerticalLayout {
                     spacing: Sp.s2;
-                    Eyebrow { text: "OUTPUTS"; }
+                    Eyebrow { text: @tr("OUTPUTS"); }
 
                     // Change is drawn quieter than the payment, and that is a
                     // safety decision rather than a stylistic one.
@@ -382,7 +382,7 @@ export component SendScreen inherits VerticalLayout {
                             horizontal-stretch: 1;
                             spacing: 2px;
                             Text {
-                                text: output.address == "" ? "Unknown destination" : output.address;
+                                text: output.address == "" ? @tr("Unknown destination") : output.address;
                                 font-family: Typo.mono;
                                 font-size: Typo.num-sm;
                                 color: output.address == "" ? Theme.negative
@@ -395,7 +395,7 @@ export component SendScreen inherits VerticalLayout {
                                 // payment to anybody; it is the part that never
                                 // left.
                                 text: output.is-change
-                                    ? "Change · back to your wallet"
+                                    ? @tr("Change · back to your wallet")
                                     : output.kind;
                                 font-size: Typo.caption;
                                 color: output.is-change ? Theme.text-disabled : Theme.text-tertiary;
@@ -421,7 +421,7 @@ export component SendScreen inherits VerticalLayout {
                     spacing: Sp.s3;
                     HorizontalLayout {
                         Text {
-                            text: "Fee";
+                            text: @tr("Fee");
                             font-size: Typo.body;
                             color: Theme.text-secondary;
                             horizontal-stretch: 1;
@@ -430,7 +430,7 @@ export component SendScreen inherits VerticalLayout {
                     }
                     HorizontalLayout {
                         Text {
-                            text: "Leaving your wallet";
+                            text: @tr("Leaving your wallet");
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: Theme.text-primary;
@@ -447,7 +447,7 @@ export component SendScreen inherits VerticalLayout {
                     // is leaving", and the wallet already knew the answer.
                     if SendState.balance-after != "": HorizontalLayout {
                         Text {
-                            text: "Left afterwards";
+                            text: @tr("Left afterwards");
                             font-size: Typo.caption;
                             color: Theme.text-tertiary;
                             horizontal-stretch: 1;
@@ -471,7 +471,7 @@ export component SendScreen inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: Sp.s4;
                     Btn {
-                        text: "Back";
+                        text: @tr("Back");
                         variant: "ghost";
                         clicked => {
                             Actions.cancel-send(SendState.ticket);
@@ -481,7 +481,7 @@ export component SendScreen inherits VerticalLayout {
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Btn {
-                        text: SendState.busy ? "Sending…" : "Send now";
+                        text: SendState.busy ? @tr("Sending…") : @tr("Send now");
                         variant: "primary";
                         enabled: !SendState.busy;
                         clicked => { Actions.confirm-send(SendState.ticket); }
@@ -501,7 +501,7 @@ export component SendScreen inherits VerticalLayout {
                 spacing: Sp.s6;
 
                 Text {
-                    text: SendState.step == "sent" ? "Payment sent" : "We could not confirm your payment was sent";
+                    text: SendState.step == "sent" ? @tr("Payment sent") : @tr("We could not confirm your payment was sent");
                     font-size: Typo.title2;
                     font-weight: Typo.w-bold;
                     color: SendState.step == "sent" ? Theme.positive : Theme.warning;
@@ -511,7 +511,7 @@ export component SendScreen inherits VerticalLayout {
                 // The most important paragraph in the application. Someone who
                 // resends here can pay twice.
                 if SendState.step == "uncertain": Text {
-                    text: "It may already be on its way. Pecu has saved the exact transaction and can check on it. Do not send it again — that could send the money twice.";
+                    text: @tr("It may already be on its way. Pecu has saved the exact transaction and can check on it. Do not send it again — that could send the money twice.");
                     font-size: Typo.body;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -519,7 +519,7 @@ export component SendScreen inherits VerticalLayout {
 
                 VerticalLayout {
                     spacing: Sp.s2;
-                    Eyebrow { text: "TRANSACTION ID"; }
+                    Eyebrow { text: @tr("TRANSACTION ID"); }
                     txid := TextInput {
                         text: SendState.txid;
                         read-only: true;
@@ -533,7 +533,7 @@ export component SendScreen inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: Sp.s4;
                     Btn {
-                        text: "Copy id";
+                        text: @tr("Copy id");
                         clicked => {
                             txid.select-all();
                             txid.copy();
@@ -541,7 +541,7 @@ export component SendScreen inherits VerticalLayout {
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Btn {
-                        text: "Done";
+                        text: @tr("Done");
                         variant: "primary";
                         clicked => {
                             SendState.problem = "";

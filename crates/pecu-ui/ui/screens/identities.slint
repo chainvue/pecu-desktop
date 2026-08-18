@@ -45,13 +45,13 @@ export component LookUpForm inherits VerticalLayout {
         field := Field {
             horizontal-stretch: 1;
             mono: true;
-            placeholder: "name@ or i-address";
+            placeholder: @tr("name@ or i-address");
             text <=> IdentityState.lookup-draft;
             invalid: IdentityState.lookup-problem != "";
             accepted => { root.submit(); }
         }
         Btn {
-            text: "Look up";
+            text: @tr("Look up");
             y: (parent.height - self.height) / 2;
             clicked => { root.submit(); }
         }
@@ -95,18 +95,18 @@ export component RegisterForm inherits VerticalLayout {
     FlowStepper {
         steps: [
             {
-                label: "Choose the name",
+                label: @tr("Choose the name"),
                 state: IdentityState.claim-step == "name" ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Who can take it back",
+                label: @tr("Who can take it back"),
                 state: IdentityState.claim-step == "name" ? "later"
                     : IdentityState.claim-step == "authority" ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Check and claim",
+                label: @tr("Check and claim"),
                 state: IdentityState.claim-step == "review" ? "now" : "later",
                 costs: false,
             },
@@ -117,7 +117,7 @@ export component RegisterForm inherits VerticalLayout {
     if IdentityState.claim-step == "name": VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "The name this identity will be known by. It becomes an address that never changes, and it cannot be renamed later.";
+            text: @tr("The name this identity will be known by. It becomes an address that never changes, and it cannot be renamed later.");
             font-size: Typo.caption;
             color: Theme.text-secondary;
             wrap: word-wrap;
@@ -141,7 +141,7 @@ export component RegisterForm inherits VerticalLayout {
         }
         name := Field {
             mono: true;
-            placeholder: "lowercase, digits, _ and -";
+            placeholder: @tr("lowercase, digits, _ and -");
             text <=> IdentityState.name-draft;
             invalid: name.text != "" && IdentityState.name-problem != "";
             edited => {
@@ -156,7 +156,7 @@ export component RegisterForm inherits VerticalLayout {
             wrap: word-wrap;
         }
         if IdentityState.name-problem == "" && IdentityState.name-fee != "": Text {
-            text: "Free to claim · costs " + IdentityState.name-fee + " " + WalletState.ticker;
+            text: @tr("Free to claim · costs {} {}", IdentityState.name-fee, WalletState.ticker);
             font-size: Typo.caption;
             color: Theme.text-tertiary;
             wrap: word-wrap;
@@ -171,7 +171,7 @@ export component RegisterForm inherits VerticalLayout {
     if IdentityState.claim-step == "authority": VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "If this name is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that can only be set for free now.";
+            text: @tr("If this name is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that can only be set for free now.");
             font-size: Typo.caption;
             color: Theme.text-secondary;
             wrap: word-wrap;
@@ -191,12 +191,12 @@ export component RegisterForm inherits VerticalLayout {
                     padding: Sp.s4;
                     spacing: 2px;
                     Text {
-                        text: "Another identity can recover it";
+                        text: @tr("Another identity can recover it");
                         font-size: Typo.body;
                         color: Theme.text-primary;
                     }
                     Text {
-                        text: "The one to choose if this name matters. Name an identity you also control, or one you trust.";
+                        text: @tr("The one to choose if this name matters. Name an identity you also control, or one you trust.");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -207,7 +207,7 @@ export component RegisterForm inherits VerticalLayout {
                     clicked => { IdentityState.claim-authority = "other"; }
                 }
                 accessible-role: AccessibleRole.button;
-                accessible-label: "Another identity can recover it. The one to choose if this name matters.";
+                accessible-label: @tr("Another identity can recover it. The one to choose if this name matters.");
                 accessible-action-default => { IdentityState.claim-authority = "other"; }
             }
 
@@ -222,12 +222,12 @@ export component RegisterForm inherits VerticalLayout {
                     padding: Sp.s4;
                     spacing: 2px;
                     Text {
-                        text: "Nobody — it can never be revoked";
+                        text: @tr("Nobody — it can never be revoked");
                         font-size: Typo.body;
                         color: Theme.text-primary;
                     }
                     Text {
-                        text: "The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.";
+                        text: @tr("The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -244,7 +244,7 @@ export component RegisterForm inherits VerticalLayout {
                     }
                 }
                 accessible-role: AccessibleRole.button;
-                accessible-label: "Nobody. It can never be revoked.";
+                accessible-label: @tr("Nobody. It can never be revoked.");
                 accessible-action-default => {
                     IdentityState.claim-authority = "none";
                     IdentityState.revocation-draft = "";
@@ -261,13 +261,13 @@ export component RegisterForm inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Sp.s2;
                     Text {
-                        text: "Recovery — required";
+                        text: @tr("Recovery — required");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                     Field {
                         mono: true;
-                        placeholder: "name@ or i-address";
+                        placeholder: @tr("name@ or i-address");
                         text <=> IdentityState.recovery-draft;
                     }
                 }
@@ -275,13 +275,13 @@ export component RegisterForm inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Sp.s2;
                     Text {
-                        text: "Revocation — optional";
+                        text: @tr("Revocation — optional");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                     Field {
                         mono: true;
-                        placeholder: "name@ or i-address";
+                        placeholder: @tr("name@ or i-address");
                         text <=> IdentityState.revocation-draft;
                     }
                 }
@@ -290,7 +290,7 @@ export component RegisterForm inherits VerticalLayout {
             // obvious and it is the reason one field is required and the other
             // is not.
             Text {
-                text: "Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.";
+                text: @tr("Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.");
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
@@ -313,8 +313,8 @@ export component RegisterForm inherits VerticalLayout {
             }
             Text {
                 text: IdentityState.claim-authority == "none"
-                    ? "Nobody can revoke it, ever."
-                    : "Recoverable by " + IdentityState.recovery-draft;
+                    ? @tr("Nobody can revoke it, ever.")
+                    : @tr("Recoverable by {}", IdentityState.recovery-draft);
                 font-size: Typo.body;
                 color: IdentityState.claim-authority == "none"
                     ? Theme.warning : Theme.text-secondary;
@@ -334,21 +334,21 @@ export component RegisterForm inherits VerticalLayout {
             VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
-                Eyebrow { text: "WHAT HAPPENS NEXT · TWO TRANSACTIONS"; }
+                Eyebrow { text: @tr("WHAT HAPPENS NEXT · TWO TRANSACTIONS"); }
                 Text {
-                    text: "1 · The claim is signed and sent, and it costs a fee.";
+                    text: @tr("1 · The claim is signed and sent, and it costs a fee.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
                 }
                 Text {
-                    text: "2 · It has to be mined, which takes a few minutes. Pecu may be closed while that happens — the claim is written down and picked up again.";
+                    text: @tr("2 · It has to be mined, which takes a few minutes. Pecu may be closed while that happens — the claim is written down and picked up again.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
                 }
                 Text {
-                    text: "3 · The name is registered, which costs the rest of the fee. This must happen within about twenty blocks: the deadline is inside the bytes the claim was signed with, so it cannot be extended, and missing it spends the first fee for nothing.";
+                    text: @tr("3 · The name is registered, which costs the rest of the fee. This must happen within about twenty blocks: the deadline is inside the bytes the claim was signed with, so it cannot be extended, and missing it spends the first fee for nothing.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -363,14 +363,14 @@ export component RegisterForm inherits VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s2;
                 Text {
-                    text: "This name will not be revokable";
+                    text: @tr("This name will not be revokable");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.warning;
                     wrap: word-wrap;
                 }
                 Text {
-                    text: "If its keys are ever copied, there is nothing that stops the copy being used. Naming a recovery authority is free right now and costs a transaction afterwards.";
+                    text: @tr("If its keys are ever copied, there is nothing that stops the copy being used. Naming a recovery authority is free right now and costs a transaction afterwards.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -424,7 +424,7 @@ export component RegistrationPanel inherits VerticalLayout {
                 wrap: word-wrap;
             }
             Text {
-                text: "Safe to close Pecu — the claim is written down and will be picked up. Do not start the same name again; that would spend a second fee.";
+                text: @tr("Safe to close Pecu — the claim is written down and will be picked up. Do not start the same name again; that would spend a second fee.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -440,7 +440,7 @@ export component RegistrationPanel inherits VerticalLayout {
     // that was computed, carried and then dropped.
     if IdentityState.reg-fee != "": HorizontalLayout {
         Text {
-            text: "Fee";
+            text: @tr("Fee");
             font-size: Typo.body;
             color: Theme.text-secondary;
             horizontal-stretch: 1;
@@ -454,7 +454,7 @@ export component RegistrationPanel inherits VerticalLayout {
 
     if IdentityState.reg-address != "": VerticalLayout {
         spacing: Sp.s2;
-        Eyebrow { text: "ITS ADDRESS"; }
+        Eyebrow { text: @tr("ITS ADDRESS"); }
         Text {
             text: IdentityState.reg-address;
             font-family: Typo.mono;
@@ -471,14 +471,14 @@ export component RegistrationPanel inherits VerticalLayout {
             padding: Sp.s5;
             spacing: Sp.s2;
             Text {
-                text: "This VerusID cannot be revoked yet";
+                text: @tr("This VerusID cannot be revoked yet");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.warning;
                 wrap: word-wrap;
             }
             Text {
-                text: "It is its own recovery authority. Pointing recovery at another identity is what makes revocation work, and your keys can still do that.";
+                text: @tr("It is its own recovery authority. Pointing recovery at another identity is what makes revocation work, and your keys can still do that.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -490,19 +490,19 @@ export component RegistrationPanel inherits VerticalLayout {
         spacing: Sp.s4;
         alignment: end;
         if IdentityState.reg-step != "done": Btn {
-            text: "Abandon";
+            text: @tr("Abandon");
             variant: "ghost";
             enabled: !IdentityState.reg-busy;
             clicked => { Actions.abandon-registration(); }
         }
         if IdentityState.reg-step == "ready": Btn {
-            text: IdentityState.reg-busy ? "Registering…" : "Register the name";
+            text: IdentityState.reg-busy ? @tr("Registering…") : @tr("Register the name");
             variant: "primary";
             enabled: !IdentityState.reg-busy;
             clicked => { Actions.finish-registration(); }
         }
         if IdentityState.reg-step == "done": Btn {
-            text: "Done";
+            text: @tr("Done");
             variant: "primary";
             clicked => { Actions.abandon-registration(); }
         }
@@ -540,6 +540,7 @@ export component IdentitiesScreen inherits VerticalLayout {
                     border-radius: self.width / 2;
                     background: Theme.accent;
                     Text {
+                        // A separator glyph, not a word.
                         text: "@";
                         font-family: Typo.mono;
                         font-size: Typo.title2;
@@ -615,7 +616,7 @@ export component IdentitiesScreen inherits VerticalLayout {
             }
         }
         Btn {
-            text: IdentityState.busy ? "Reading…" : "Refresh";
+            text: IdentityState.busy ? @tr("Reading…") : @tr("Refresh");
             enabled: !IdentityState.busy;
             y: (parent.height - self.height) / 2;
             clicked => { Actions.refresh-identities(); }
@@ -624,7 +625,7 @@ export component IdentitiesScreen inherits VerticalLayout {
         // thing it opens is already on screen and a button that does nothing
         // is a button somebody presses twice wondering why.
         if !IdentityState.claiming && IdentityState.reg-step == "": Btn {
-            text: "Claim a name";
+            text: @tr("Claim a name");
             variant: "primary";
             y: (parent.height - self.height) / 2;
             clicked => {
@@ -652,7 +653,7 @@ export component IdentitiesScreen inherits VerticalLayout {
                 EmptyState {
                     glyph: "◇";
                     title: @tr("No VerusIDs yet");
-                    body: "A VerusID is a name you own on the chain. It can receive payments, hold currencies, and publish data. You can also look up anybody else's below.";
+                    body: @tr("A VerusID is a name you own on the chain. It can receive payments, hold currencies, and publish data. You can also look up anybody else's below.");
                 }
             }
 
@@ -719,7 +720,7 @@ export component IdentitiesScreen inherits VerticalLayout {
     if IdentityState.claiming || IdentityState.reg-step != "": VerticalLayout {
         spacing: Sp.s4;
         Eyebrow {
-            text: IdentityState.reg-step == "" ? "CLAIM A NAME" : "CLAIMING A NAME";
+            text: IdentityState.reg-step == "" ? @tr("CLAIM A NAME") : @tr("CLAIMING A NAME");
         }
         Card {
             VerticalLayout {
@@ -732,7 +733,7 @@ export component IdentitiesScreen inherits VerticalLayout {
 
     VerticalLayout {
         spacing: Sp.s4;
-        Eyebrow { text: "LOOK ONE UP"; }
+        Eyebrow { text: @tr("LOOK ONE UP"); }
         Card {
             VerticalLayout {
                 padding: Sp.card-pad;
@@ -749,12 +750,12 @@ export component IdentitiesScreen inherits VerticalLayout {
         HorizontalLayout {
             spacing: Sp.s5;
             Eyebrow {
-                text: "LOOKED UP · NOT YOURS";
+                text: @tr("LOOKED UP · NOT YOURS");
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
             Btn {
-                text: "Clear";
+                text: @tr("Clear");
                 variant: "ghost";
                 y: (parent.height - self.height) / 2;
                 clicked => { Actions.clear-lookups(); }
@@ -800,7 +801,7 @@ export component IdentitiesScreen inherits VerticalLayout {
                         Rectangle {
                             width: 88px;
                             Btn {
-                                text: "Remove";
+                                text: @tr("Remove");
                                 variant: "ghost";
                                 x: parent.width - self.width;
                                 y: (parent.height - self.height) / 2;
@@ -833,7 +834,7 @@ export component ContentRow inherits VerticalLayout {
         padding-top: Sp.s4;
         spacing: 2px;
         Text {
-            text: root.entry.name != "" ? root.entry.name : "Unnamed key";
+            text: root.entry.name != "" ? root.entry.name : @tr("Unnamed key");
             font-size: Typo.caption;
             font-weight: Typo.w-medium;
             color: Theme.text-primary;
@@ -849,7 +850,7 @@ export component ContentRow inherits VerticalLayout {
             // Not "we could not look it up yet". A VDXF key is a one-way hash
             // of a name, so for a key somebody else published there is nothing
             // to look up and never will be.
-            text: "This key's name cannot be recovered — VDXF keys are one-way hashes.";
+            text: @tr("This key's name cannot be recovered — VDXF keys are one-way hashes.");
             font-size: Typo.micro;
             color: Theme.text-tertiary;
             wrap: word-wrap;
@@ -906,7 +907,7 @@ export component TryKeyForm inherits VerticalLayout {
     Text {
         // Says plainly what it is. The SDK's own words: trying candidate names
         // against the derivation is a search, not a lookup.
-        text: "A key is a hash of a name, so it cannot be read backwards. Type a name you expect and see whether this identity published under it.";
+        text: @tr("A key is a hash of a name, so it cannot be read backwards. Type a name you expect and see whether this identity published under it.");
         font-size: Typo.caption;
         color: Theme.text-secondary;
         wrap: word-wrap;
@@ -917,12 +918,12 @@ export component TryKeyForm inherits VerticalLayout {
         key := Field {
             horizontal-stretch: 1;
             mono: true;
-            placeholder: "vrsc::identity.profile";
+            placeholder: @tr("vrsc::identity.profile");
             text <=> IdentityState.key-draft;
             accepted => { Actions.derive-content-key(key.text); }
         }
         Btn {
-            text: "Try it";
+            text: @tr("Try it");
             y: (parent.height - self.height) / 2;
             clicked => { Actions.derive-content-key(key.text); }
         }
@@ -939,8 +940,8 @@ export component TryKeyForm inherits VerticalLayout {
         }
         Text {
             text: IdentityState.derived-present
-                ? "This identity has published under that name."
-                : "This identity has nothing under that name.";
+                ? @tr("This identity has published under that name.")
+                : @tr("This identity has nothing under that name.");
             font-size: Typo.caption;
             color: IdentityState.derived-present ? Theme.positive : Theme.text-tertiary;
             wrap: word-wrap;
@@ -979,7 +980,7 @@ export component IdentityChangeReview inherits Rectangle {
             VerticalLayout {
                 spacing: Sp.s2;
                 Text {
-                    text: "Check this change";
+                    text: @tr("Check this change");
                     font-size: Typo.title2;
                     font-weight: Typo.w-bold;
                     color: Theme.text-primary;
@@ -1003,7 +1004,7 @@ export component IdentityChangeReview inherits Rectangle {
 
             HorizontalLayout {
                 Text {
-                    text: "Fee";
+                    text: @tr("Fee");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     horizontal-stretch: 1;
@@ -1027,14 +1028,14 @@ export component IdentityChangeReview inherits Rectangle {
                         padding: Sp.s5;
                         spacing: Sp.s2;
                         Text {
-                            text: "This cannot be undone from here";
+                            text: @tr("This cannot be undone from here");
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: Theme.negative;
                             wrap: word-wrap;
                         }
                         Text {
-                            text: "Only the recovery authority can bring a revoked identity back — and if that authority is the identity itself, nobody can.";
+                            text: @tr("Only the recovery authority can bring a revoked identity back — and if that authority is the identity itself, nobody can.");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -1042,7 +1043,7 @@ export component IdentityChangeReview inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "Type " + IdentityState.change-confirmation + " to confirm";
+                    text: @tr("Type {} to confirm", IdentityState.change-confirmation);
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                 }
@@ -1057,7 +1058,7 @@ export component IdentityChangeReview inherits Rectangle {
                 spacing: Sp.s4;
                 alignment: end;
                 Btn {
-                    text: "Back";
+                    text: @tr("Back");
                     variant: "ghost";
                     clicked => { Actions.cancel-identity-change(IdentityState.change-ticket); }
                 }
@@ -1071,7 +1072,7 @@ export component IdentityChangeReview inherits Rectangle {
                 // that the confirmation is a formality, which is the opposite
                 // of what a confirmation is for.
                 Btn {
-                    text: IdentityState.change-busy ? "Sending…" : "Send it";
+                    text: IdentityState.change-busy ? @tr("Sending…") : @tr("Send it");
                     variant: IdentityState.change-confirmation != "" ? "destructive" : "primary";
                     enabled: !IdentityState.change-busy
                         && (IdentityState.change-confirmation == ""
@@ -1138,7 +1139,7 @@ export component IdentitySheet inherits Rectangle {
                         }
                     }
                     Btn {
-                        text: "Close";
+                        text: @tr("Close");
                         y: 0;
                         clicked => { Actions.close-identity(); }
                     }
@@ -1166,7 +1167,7 @@ export component IdentitySheet inherits Rectangle {
                         padding: Sp.s5;
                         spacing: Sp.s2;
                         Text {
-                            text: "This VerusID cannot be revoked";
+                            text: @tr("This VerusID cannot be revoked");
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: Theme.warning;
@@ -1175,7 +1176,7 @@ export component IdentitySheet inherits Rectangle {
                         Text {
                             // The default a fresh registration lands on, and
                             // the one nobody is told about at the time.
-                            text: "Its recovery authority is itself, and the chain refuses a revocation whose subject is its own recovery authority. Setting a different recovery authority is what makes it revocable.";
+                            text: @tr("Its recovery authority is itself, and the chain refuses a revocation whose subject is its own recovery authority. Setting a different recovery authority is what makes it revocable.");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -1187,7 +1188,7 @@ export component IdentitySheet inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "WHO CAN SIGN"; }
+                    Eyebrow { text: @tr("WHO CAN SIGN"); }
                     for address in IdentityState.primary-addresses: Text {
                         text: address;
                         font-family: Typo.mono;
@@ -1196,7 +1197,7 @@ export component IdentitySheet inherits Rectangle {
                         wrap: char-wrap;
                     }
                     Text {
-                        text: IdentityState.signatures-required + " signatures required";
+                        text: @tr("{} signatures required", IdentityState.signatures-required);
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                     }
@@ -1212,11 +1213,11 @@ export component IdentitySheet inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "WHO CAN TAKE IT AWAY"; }
+                    Eyebrow { text: @tr("WHO CAN TAKE IT AWAY"); }
                     HorizontalLayout {
                         spacing: Sp.s5;
                         Text {
-                            text: "Revocation";
+                            text: @tr("Revocation");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             width: 96px;
@@ -1233,7 +1234,7 @@ export component IdentitySheet inherits Rectangle {
                     HorizontalLayout {
                         spacing: Sp.s5;
                         Text {
-                            text: "Recovery";
+                            text: @tr("Recovery");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             width: 96px;
@@ -1264,7 +1265,7 @@ export component IdentitySheet inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     Btn {
-                        text: "Change the authorities";
+                        text: @tr("Change the authorities");
                         clicked => { IdentityState.changing-authorities = true; }
                     }
                 }
@@ -1272,9 +1273,9 @@ export component IdentitySheet inherits Rectangle {
                 if IdentityState.can-sign && IdentityState.changing-authorities:
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "POINT THE AUTHORITIES SOMEWHERE ELSE"; }
+                    Eyebrow { text: @tr("POINT THE AUTHORITIES SOMEWHERE ELSE"); }
                     Text {
-                        text: "Whoever you name here can take this identity from you, and this wallet cannot take it back. That is the point of them — and the reason it is worth being sure.";
+                        text: @tr("Whoever you name here can take this identity from you, and this wallet cannot take it back. That is the point of them — and the reason it is worth being sure.");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -1285,13 +1286,13 @@ export component IdentitySheet inherits Rectangle {
                             horizontal-stretch: 1;
                             spacing: Sp.s2;
                             Text {
-                                text: "Revocation";
+                                text: @tr("Revocation");
                                 font-size: Typo.caption;
                                 color: Theme.text-secondary;
                             }
                             Field {
                                 mono: true;
-                                placeholder: "i-address";
+                                placeholder: @tr("i-address");
                                 text <=> IdentityState.new-revocation;
                             }
                         }
@@ -1299,13 +1300,13 @@ export component IdentitySheet inherits Rectangle {
                             horizontal-stretch: 1;
                             spacing: Sp.s2;
                             Text {
-                                text: "Recovery";
+                                text: @tr("Recovery");
                                 font-size: Typo.caption;
                                 color: Theme.text-secondary;
                             }
                             Field {
                                 mono: true;
-                                placeholder: "i-address";
+                                placeholder: @tr("i-address");
                                 text <=> IdentityState.new-recovery;
                             }
                         }
@@ -1314,7 +1315,7 @@ export component IdentitySheet inherits Rectangle {
                         alignment: end;
                         spacing: Sp.s3;
                         Btn {
-                            text: "Cancel";
+                            text: @tr("Cancel");
                             variant: "ghost";
                             enabled: !IdentityState.change-busy;
                             clicked => {
@@ -1327,7 +1328,7 @@ export component IdentitySheet inherits Rectangle {
                             }
                         }
                         Btn {
-                            text: "Review this change";
+                            text: @tr("Review this change");
                             enabled: !IdentityState.change-busy
                                 && (IdentityState.new-revocation != ""
                                     || IdentityState.new-recovery != "");
@@ -1346,7 +1347,7 @@ export component IdentitySheet inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "TIMELOCK"; }
+                    Eyebrow { text: @tr("TIMELOCK"); }
                     Text {
                         // Never "locked: true". The two locked states behave
                         // nothing alike and only one of them ends on its own.
@@ -1361,13 +1362,16 @@ export component IdentitySheet inherits Rectangle {
                         blocks := Field {
                             horizontal-stretch: 1;
                             mono: true;
+                            // `status` is compared against a word the CORE
+                            // produces, so that side stays a literal. What is
+                            // shown does not.
                             placeholder: IdentityState.status == "Locked"
-                                ? "extra blocks on top of the delay"
-                                : "blocks to wait once unlocking is asked for";
+                                ? @tr("extra blocks on top of the delay")
+                                : @tr("blocks to wait once unlocking is asked for");
                             text <=> IdentityState.lock-blocks;
                         }
                         if IdentityState.status != "Locked": Btn {
-                            text: "Lock";
+                            text: @tr("Lock");
                             y: (parent.height - self.height) / 2;
                             enabled: !IdentityState.change-busy && blocks.text != "";
                             clicked => {
@@ -1375,7 +1379,7 @@ export component IdentitySheet inherits Rectangle {
                             }
                         }
                         if IdentityState.status == "Locked": Btn {
-                            text: "Start unlocking";
+                            text: @tr("Start unlocking");
                             y: (parent.height - self.height) / 2;
                             enabled: !IdentityState.change-busy;
                             clicked => {
@@ -1392,18 +1396,18 @@ export component IdentitySheet inherits Rectangle {
                 // somebody might have come here to read.
                 if IdentityState.can-sign: VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "TAKE IT OUT OF SERVICE"; }
+                    Eyebrow { text: @tr("TAKE IT OUT OF SERVICE"); }
                     HorizontalLayout {
                         spacing: Sp.s4;
                         alignment: start;
                         if IdentityState.status != "Revoked": Btn {
-                            text: "Revoke";
+                            text: @tr("Revoke");
                             variant: "destructive";
                             enabled: !IdentityState.change-busy;
                             clicked => { Actions.revoke-identity(IdentityState.address); }
                         }
                         if IdentityState.status == "Revoked": Btn {
-                            text: "Recover";
+                            text: @tr("Recover");
                             variant: "primary";
                             enabled: !IdentityState.change-busy;
                             clicked => { Actions.recover-identity(IdentityState.address); }
@@ -1415,28 +1419,28 @@ export component IdentitySheet inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Sp.s4;
-                    Eyebrow { text: "PUBLISHED CONTENT"; }
+                    Eyebrow { text: @tr("PUBLISHED CONTENT"); }
                     Segmented {
                         width: 320px;
-                        options: ["Now", "Over time"];
+                        options: [@tr("Now"), @tr("Over time")];
                         index <=> IdentityState.content-view;
                     }
                     Text {
                         text: IdentityState.content-view == 0
-                            ? "What this identity holds right now."
-                            : "Every value it has ever published, oldest first — a key written twice appears twice.";
+                            ? @tr("What this identity holds right now.")
+                            : @tr("Every value it has ever published, oldest first — a key written twice appears twice.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
                     }
 
                     if IdentityState.content-view == 0 && IdentityState.content.length == 0: Text {
-                        text: "Nothing published.";
+                        text: @tr("Nothing published.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                     }
                     if IdentityState.content-view == 1 && IdentityState.content-history.length == 0: Text {
-                        text: "No history available — this node does not answer for it.";
+                        text: @tr("No history available — this node does not answer for it.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
@@ -1456,7 +1460,7 @@ export component IdentitySheet inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "TRY A KEY"; }
+                    Eyebrow { text: @tr("TRY A KEY"); }
                     TryKeyForm {}
                 }
             }

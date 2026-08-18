@@ -20,7 +20,7 @@ export component AddNodeForm inherits VerticalLayout {
             horizontal-stretch: 1;
             spacing: Sp.s3;
             Text {
-                text: "Address";
+                text: @tr("Address");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
             }
@@ -37,12 +37,12 @@ export component AddNodeForm inherits VerticalLayout {
             width: 200px;
             spacing: Sp.s3;
             Text {
-                text: "Name (optional)";
+                text: @tr("Name (optional)");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
             }
             name := Field {
-                placeholder: "my node";
+                placeholder: @tr("my node");
                 text <=> NetworkState.draft-label;
                 accepted => { root.submit(); }
             }
@@ -62,14 +62,14 @@ export component AddNodeForm inherits VerticalLayout {
             horizontal-stretch: 1;
             // The one sentence worth having here. Someone typing an address in
             // is about to be told "no" by a rule they cannot see otherwise.
-            text: "Pecu only talks to encrypted endpoints, so an https:// address is required unless the node is on this machine. It never sends a key to a node.";
+            text: @tr("Pecu only talks to encrypted endpoints, so an https:// address is required unless the node is on this machine. It never sends a key to a node.");
             font-size: Typo.caption;
             color: Theme.text-tertiary;
             wrap: word-wrap;
             vertical-alignment: center;
         }
         Btn {
-            text: "Add node";
+            text: @tr("Add node");
             variant: "primary";
             enabled: url.text != "";
             y: (parent.height - self.height) / 2;
@@ -102,15 +102,19 @@ export component NodesScreen inherits VerticalLayout {
             Text {
                 // The distinction that matters: what you asked for versus what
                 // the node says it is. Only the second decides anything.
+                // Whole sentences, not fragments glued together: a language
+                // that puts the verb last cannot be built from "Requested " +
+                // a name + " · connected to " + another one.
                 text: NetworkState.effective == ""
-                    ? "Requested " + NetworkState.requested + " · no node has answered yet"
-                    : "Requested " + NetworkState.requested + " · connected to " + NetworkState.effective;
+                    ? @tr("Requested {} · no node has answered yet", NetworkState.requested)
+                    : @tr("Requested {} · connected to {}",
+                          NetworkState.requested, NetworkState.effective);
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
             }
         }
         Btn {
-            text: "Probe nodes";
+            text: @tr("Probe nodes");
             y: (parent.height - self.height) / 2;
             clicked => { Actions.probe-nodes(); }
         }
@@ -121,21 +125,21 @@ export component NodesScreen inherits VerticalLayout {
     // whose only effect is to lose the demo.
     if !NetworkState.mock-mode: VerticalLayout {
         spacing: Sp.s2;
-        Eyebrow { text: "CHAIN"; }
+        Eyebrow { text: @tr("CHAIN"); }
         Card {
             VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
                 Segmented {
                     width: 320px;
-                    options: ["Testnet", "Mainnet"];
+                    options: [@tr("Testnet"), @tr("Mainnet")];
                     index <=> NetworkState.chain-index;
                     changed(i) => {
                         Actions.set-requested-network(i == 1 ? "VRSC" : "VRSCTEST");
                     }
                 }
                 Text {
-                    text: "Each chain is a separate wallet: its own keys, its own history, its own saved nodes. Nothing is shared between them, and changing chains locks the wallet.";
+                    text: @tr("Each chain is a separate wallet: its own keys, its own history, its own saved nodes. Nothing is shared between them, and changing chains locks the wallet.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -152,8 +156,8 @@ export component NodesScreen inherits VerticalLayout {
                 height: 120px;
                 EmptyState {
                     glyph: "◌";
-                    title: "No nodes configured";
-                    body: "Pecu needs a Verus RPC endpoint to read the chain. It never sends a key to one.";
+                    title: @tr("No nodes configured");
+                    body: @tr("Pecu needs a Verus RPC endpoint to read the chain. It never sends a key to one.");
                 }
             }
 
@@ -217,7 +221,13 @@ export component NodesScreen inherits VerticalLayout {
                     StatusPill {
                         width: 88px;
                         state: node.status;
-                        text: node.status;
+                        // The core names the state; the words are here. Four
+                        // values, so a ternary rather than a component — the
+                        // same rule `note.slint` applies to a refusal.
+                        text: node.status == "online" ? @tr("online")
+                            : node.status == "degraded" ? @tr("degraded")
+                            : node.status == "offline" ? @tr("offline")
+                            : node.status;
                         y: (parent.height - self.height) / 2;
                     }
 
@@ -235,7 +245,7 @@ export component NodesScreen inherits VerticalLayout {
                         // it, and offering a button that cannot work is worse
                         // than not offering one.
                         if !node.builtin: Btn {
-                            text: "Remove";
+                            text: @tr("Remove");
                             x: parent.width - self.width;
                             y: (parent.height - self.height) / 2;
                             clicked => { Actions.remove-node(node.id); }
@@ -248,7 +258,7 @@ export component NodesScreen inherits VerticalLayout {
 
     VerticalLayout {
         spacing: Sp.s4;
-        Eyebrow { text: "ADD A NODE"; }
+        Eyebrow { text: @tr("ADD A NODE"); }
         Card {
             VerticalLayout {
                 padding: Sp.card-pad;

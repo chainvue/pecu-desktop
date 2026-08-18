@@ -33,7 +33,7 @@ export component PassphraseForm inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: root.mode == "create" ? "Set up Pecu" : "Welcome back";
+            text: root.mode == "create" ? @tr("Set up Pecu") : @tr("Welcome back");
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
@@ -44,7 +44,7 @@ export component PassphraseForm inherits VerticalLayout {
             Text {
                 width: 420px;
                 text: root.mode == "create"
-                    ? "Choose a passphrase. It encrypts your keys on this machine, and nobody can recover it for you."
+                    ? @tr("Choose a passphrase. It encrypts your keys on this machine, and nobody can recover it for you.")
                     : root.wallet-name;
                 font-size: Typo.body;
                 color: Theme.text-secondary;
@@ -63,8 +63,8 @@ export component PassphraseForm inherits VerticalLayout {
             // indistinguishable from a box that is broken. The sentence above
             // explains what a passphrase IS; this says what to put here.
             placeholder: root.mode == "create"
-                ? "A passphrase you will remember"
-                : "Passphrase";
+                ? @tr("A passphrase you will remember")
+                : @tr("Passphrase");
             invalid: root.problem != "";
             accepted => { root.submit(); }
         }
@@ -93,7 +93,7 @@ export component PassphraseForm inherits VerticalLayout {
         Field {
             width: 360px;
             password: true;
-            placeholder: "Type it again";
+            placeholder: @tr("Type it again");
             text <=> root.again;
             invalid: root.mismatch;
             accepted => { root.submit(); }
@@ -101,7 +101,7 @@ export component PassphraseForm inherits VerticalLayout {
     }
 
     if root.mismatch: Text {
-        text: "The two do not match.";
+        text: @tr("The two do not match.");
         font-size: Typo.caption;
         color: Theme.negative;
         horizontal-alignment: center;
@@ -118,8 +118,8 @@ export component PassphraseForm inherits VerticalLayout {
         alignment: center;
         Btn {
             text: root.busy
-                ? "Working…"
-                : root.mode == "create" ? "Create wallet" : "Unlock";
+                ? @tr("Working…")
+                : root.mode == "create" ? @tr("Create wallet") : @tr("Unlock");
             variant: "primary";
             enabled: !root.busy && field.text != "" && root.matched;
             clicked => { root.submit(); }
@@ -131,14 +131,14 @@ export component PassphraseForm inherits VerticalLayout {
     if root.mode == "create": HorizontalLayout {
         alignment: center;
         Btn {
-            text: "I already have a wallet";
+            text: @tr("I already have a wallet");
             variant: "ghost";
             clicked => { root.restore(); }
         }
     }
 
     if root.mode == "create": Text {
-        text: "Pecu starts on testnet. Spending real coins stays off until you turn it on.";
+        text: @tr("Pecu starts on testnet. Spending real coins stays off until you turn it on.");
         font-size: Typo.caption;
         color: Theme.text-tertiary;
         horizontal-alignment: center;
@@ -178,7 +178,7 @@ export component RestoreForm inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Restore your wallet";
+            text: @tr("Restore your wallet");
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
@@ -188,7 +188,7 @@ export component RestoreForm inherits VerticalLayout {
             alignment: center;
             Text {
                 width: 460px;
-                text: "Enter what you wrote down. Pecu checks a recovery phrase before it creates anything, so a typo costs you a second attempt rather than an empty wallet.";
+                text: @tr("Enter what you wrote down. Pecu checks a recovery phrase before it creates anything, so a typo costs you a second attempt rather than an empty wallet.");
                 font-size: Typo.body;
                 color: Theme.text-secondary;
                 horizontal-alignment: center;
@@ -204,7 +204,7 @@ export component RestoreForm inherits VerticalLayout {
             // "Free text" is offered rather than hidden because Verus hashes a
             // transparent phrase verbatim: some wallets really do hold a key
             // made from a sentence, and refusing it would strand those funds.
-            options: ["Recovery phrase", "Free text", "Private key"];
+            options: [@tr("Recovery phrase"), @tr("Free text"), @tr("Private key")];
         }
     }
 
@@ -217,10 +217,15 @@ export component RestoreForm inherits VerticalLayout {
             mono: true;
             // An empty bordered box with the hint underneath it is a box that
             // could be anything. The placeholder says what shape goes in.
+            // Two of the three are translated and the third is not, on
+            // purpose. A BIP-39 phrase is **English by specification** — the
+            // wordlist this wallet accepts has "abandon" in it and no
+            // translation of it, so a hint showing German words would be a hint
+            // showing input the field will refuse.
             placeholder: kind.index == 2
-                ? "U…"
+                ? @tr("U…")
                 : kind.index == 1
-                ? "The exact text you used"
+                ? @tr("The exact text you used")
                 : "abandon abandon abandon …";
             invalid: root.problem != "";
         }
@@ -231,10 +236,10 @@ export component RestoreForm inherits VerticalLayout {
         Text {
             width: 420px;
             text: kind.index == 2
-                ? "A Verus private key, starting with U."
+                ? @tr("A Verus private key, starting with U.")
                 : kind.index == 1
-                ? "Hashed exactly as typed, including spacing. Nothing can check it for you."
-                : "12, 15, 18, 21 or 24 words, separated by spaces.";
+                ? @tr("Hashed exactly as typed, including spacing. Nothing can check it for you.")
+                : @tr("12, 15, 18, 21 or 24 words, separated by spaces.");
             font-size: Typo.caption;
             color: Theme.text-tertiary;
             wrap: word-wrap;
@@ -263,7 +268,7 @@ export component RestoreForm inherits VerticalLayout {
             alignment: center;
             Text {
                 width: 420px;
-                text: "New passphrase for this machine";
+                text: @tr("New passphrase for this machine");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
             }
@@ -273,7 +278,7 @@ export component RestoreForm inherits VerticalLayout {
             pass := Field {
                 width: 420px;
                 password: true;
-                placeholder: "A passphrase you will remember";
+                placeholder: @tr("A passphrase you will remember");
             }
         }
         // The third place this wallet asked for an unrecoverable secret once
@@ -288,7 +293,7 @@ export component RestoreForm inherits VerticalLayout {
             again := Field {
                 width: 420px;
                 password: true;
-                placeholder: "Type it again";
+                placeholder: @tr("Type it again");
                 invalid: root.mismatch;
                 accepted => { root.submit(); }
             }
@@ -297,7 +302,7 @@ export component RestoreForm inherits VerticalLayout {
             alignment: center;
             Text {
                 width: 420px;
-                text: "The two do not match.";
+                text: @tr("The two do not match.");
                 font-size: Typo.caption;
                 color: Theme.negative;
             }
@@ -308,7 +313,7 @@ export component RestoreForm inherits VerticalLayout {
         alignment: center;
         spacing: Sp.s4;
         Btn {
-            text: "Back";
+            text: @tr("Back");
             variant: "ghost";
             clicked => {
                 root.clear();
@@ -316,7 +321,7 @@ export component RestoreForm inherits VerticalLayout {
             }
         }
         Btn {
-            text: root.busy ? "Working…" : "Restore wallet";
+            text: root.busy ? @tr("Working…") : @tr("Restore wallet");
             variant: "primary";
             enabled: !root.busy && material.text != "" && pass.text != "" && root.matched;
             clicked => { root.submit(); }
@@ -451,8 +456,12 @@ export component WordCheck inherits VerticalLayout {
     HorizontalLayout {
         spacing: Sp.s2;
         alignment: start;
+        // The number beside this is a separate `Text` because it is set in
+        // the mono face, so the two cannot be one `@tr("Word {}", …)`. A
+        // language that puts the number first — "7. Wort" — cannot be spelled
+        // here, and that is a real limit rather than an oversight.
         Text {
-            text: "Word";
+            text: @tr("Word");
             font-size: Typo.caption;
             color: Theme.text-secondary;
         }
@@ -486,7 +495,7 @@ export component BackupPassphrase inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Show your recovery phrase";
+            text: @tr("Show your recovery phrase");
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
@@ -496,7 +505,7 @@ export component BackupPassphrase inherits VerticalLayout {
             alignment: center;
             Text {
                 width: 460px;
-                text: "Enter your passphrase again. Pecu asks every time these words are shown, rather than once per session.";
+                text: @tr("Enter your passphrase again. Pecu asks every time these words are shown, rather than once per session.");
                 font-size: Typo.body;
                 color: Theme.text-secondary;
                 horizontal-alignment: center;
@@ -510,7 +519,7 @@ export component BackupPassphrase inherits VerticalLayout {
         field := Field {
             width: 360px;
             password: true;
-            placeholder: "Passphrase";
+            placeholder: @tr("Passphrase");
             invalid: SeedState.problem != "";
             accepted => { root.submit(); }
         }
@@ -527,12 +536,12 @@ export component BackupPassphrase inherits VerticalLayout {
         alignment: center;
         spacing: Sp.s4;
         Btn {
-            text: "Not now";
+            text: @tr("Not now");
             variant: "ghost";
             clicked => { root.closed(); }
         }
         Btn {
-            text: "Show phrase";
+            text: @tr("Show phrase");
             variant: "primary";
             enabled: field.text != "" && !SeedState.busy;
             clicked => { root.submit(); }
@@ -570,7 +579,7 @@ export component BackupPhrase inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Write down your recovery phrase";
+            text: @tr("Write down your recovery phrase");
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
@@ -583,7 +592,7 @@ export component BackupPhrase inherits VerticalLayout {
             alignment: center;
             Text {
                 width: 520px;
-                text: "These words are the only way to restore this wallet, and anyone who reads them can spend your coins.";
+                text: @tr("These words are the only way to restore this wallet, and anyone who reads them can spend your coins.");
                 font-size: Typo.body;
                 color: Theme.text-secondary;
                 horizontal-alignment: center;
@@ -616,7 +625,7 @@ export component BackupPhrase inherits VerticalLayout {
             animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
 
             hold-label := Text {
-                text: hold.pressed ? "Release to hide" : "Hold to reveal";
+                text: hold.pressed ? @tr("Release to hide") : @tr("Hold to reveal");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
@@ -642,7 +651,7 @@ export component BackupPhrase inherits VerticalLayout {
             }
 
             accessible-role: AccessibleRole.button;
-            accessible-label: "Hold to reveal the recovery phrase";
+            accessible-label: @tr("Hold to reveal the recovery phrase");
         }
     }
 
@@ -650,7 +659,7 @@ export component BackupPhrase inherits VerticalLayout {
         alignment: center;
         Text {
             width: 560px;
-            text: "Write them on paper. There is no Copy button and no Save to file, on purpose — those are the two ways a phrase usually ends up somewhere it can be read by something else.";
+            text: @tr("Write them on paper. There is no Copy button and no Save to file, on purpose — those are the two ways a phrase usually ends up somewhere it can be read by something else.");
             font-size: Typo.caption;
             color: Theme.text-tertiary;
             horizontal-alignment: center;
@@ -662,12 +671,12 @@ export component BackupPhrase inherits VerticalLayout {
         alignment: center;
         spacing: Sp.s4;
         Btn {
-            text: "Later";
+            text: @tr("Later");
             variant: "ghost";
             clicked => { root.closed(); }
         }
         Btn {
-            text: "I've written it down";
+            text: @tr("I've written it down");
             variant: "primary";
             enabled: root.seen;
             clicked => { root.written-down(); }
@@ -677,7 +686,7 @@ export component BackupPhrase inherits VerticalLayout {
     if !root.seen: HorizontalLayout {
         alignment: center;
         Text {
-            text: "Hold the button above to see the words first.";
+            text: @tr("Hold the button above to see the words first.");
             font-size: Typo.caption;
             color: Theme.text-tertiary;
         }
@@ -692,14 +701,14 @@ export component BackupVerify inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Check your copy";
+            text: @tr("Check your copy");
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
         Text {
-            text: "Type three of the words back, from what you wrote down.";
+            text: @tr("Type three of the words back, from what you wrote down.");
             font-size: Typo.body;
             color: Theme.text-secondary;
             horizontal-alignment: center;
@@ -743,12 +752,12 @@ export component BackupVerify inherits VerticalLayout {
         alignment: center;
         spacing: Sp.s4;
         Btn {
-            text: "Show the words again";
+            text: @tr("Show the words again");
             variant: "ghost";
             clicked => { root.back(); }
         }
         Btn {
-            text: "Confirm";
+            text: @tr("Confirm");
             variant: "primary";
             enabled: first.text != "" && second.text != "" && third.text != "";
             clicked => { root.submit(); }

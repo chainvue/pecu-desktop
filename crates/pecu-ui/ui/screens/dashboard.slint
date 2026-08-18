@@ -12,7 +12,7 @@ import { Actions, ChartState, MarketState, SeedState, SendState, WalletState } f
 // is the tempting one.
 export component PendingPayments inherits VerticalLayout {
     spacing: Sp.s4;
-    Eyebrow { text: "UNCONFIRMED"; }
+    Eyebrow { text: @tr("UNCONFIRMED"); }
 
     Card {
         VerticalLayout {
@@ -43,8 +43,8 @@ export component PendingPayments inherits VerticalLayout {
                         spacing: 2px;
                         Text {
                             text: row.state == "absent"
-                                ? "This payment has not appeared on the network"
-                                : "We could not confirm this payment was sent";
+                                ? @tr("This payment has not appeared on the network")
+                                : @tr("We could not confirm this payment was sent");
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
                             color: Theme.warning;
@@ -52,8 +52,8 @@ export component PendingPayments inherits VerticalLayout {
                         }
                         Text {
                             text: row.state == "absent"
-                                ? "Asked " + row.checks + " times and the node has never seen it. Sending the same transaction again is safe — it is the same bytes, so it cannot pay twice."
-                                : "It may already be on its way. Do not send it again yet — that could send the money twice. Pecu is checking.";
+                                ? @tr("Asked {} times and the node has never seen it. Sending the same transaction again is safe — it is the same bytes, so it cannot pay twice.", row.checks)
+                                : @tr("It may already be on its way. Do not send it again yet — that could send the money twice. Pecu is checking.");
                             font-size: Typo.caption;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -77,30 +77,30 @@ export component PendingPayments inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: Sp.s4;
                     Btn {
-                        text: "Check now";
+                        text: @tr("Check now");
                         clicked => { Actions.resolve-pending(row.id, "check"); }
                     }
                     // Only once the node has been asked repeatedly and never
                     // seen it. Offering this earlier would be offering the one
                     // action that can pay twice.
                     if row.state == "absent": Btn {
-                        text: "Send the same transaction again";
+                        text: @tr("Send the same transaction again");
                         variant: "primary";
                         clicked => { Actions.resolve-pending(row.id, "resend"); }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     if !confirming: Btn {
-                        text: "Stop tracking";
+                        text: @tr("Stop tracking");
                         variant: "ghost";
                         clicked => { confirming = true; }
                     }
                     if confirming: Btn {
-                        text: "Keep it";
+                        text: @tr("Keep it");
                         variant: "ghost";
                         clicked => { confirming = false; }
                     }
                     if confirming: Btn {
-                        text: "Discard the record";
+                        text: @tr("Discard the record");
                         variant: "destructive";
                         clicked => {
                             confirming = false;
@@ -110,7 +110,7 @@ export component PendingPayments inherits VerticalLayout {
                 }
 
                 if confirming: Text {
-                    text: "Pecu will stop asking about this payment and will drop the signed transaction it kept. If it never reached the network, there is then no way to send it that is guaranteed not to pay twice.";
+                    text: @tr("Pecu will stop asking about this payment and will drop the signed transaction it kept. If it never reached the network, there is then no way to send it that is guaranteed not to pay twice.");
                     font-size: Typo.caption;
                     color: Theme.warning;
                     wrap: word-wrap;
@@ -269,7 +269,7 @@ export component BalanceChart inherits VerticalLayout {
             // the two useful together.
             Text {
                 text: ChartState.hover >= 0
-                    ? ChartState.hover-amount + " " + ChartState.ticker
+                    ? @tr("{} {}", ChartState.hover-amount, ChartState.ticker)
                     : ChartState.change;
                 font-family: Typo.mono;
                 font-size: Typo.num-sm;
@@ -294,7 +294,7 @@ export component BalanceChart inherits VerticalLayout {
             alignment: center;
             spacing: 2px;
             Text {
-                text: ChartState.span-from == "" ? "" : ChartState.span-from + " → now";
+                text: ChartState.span-from == "" ? "" : @tr("{} → now", ChartState.span-from);
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 horizontal-alignment: right;
@@ -500,6 +500,7 @@ export component DashboardScreen inherits VerticalLayout {
                     border-radius: R.full;
                     background: Theme.warning-soft;
                     Text {
+                        // A warning glyph, not a word.
                         text: "!";
                         font-size: 15px;
                         font-weight: Typo.w-bold;
@@ -512,20 +513,20 @@ export component DashboardScreen inherits VerticalLayout {
                     alignment: center;
                     spacing: 2px;
                     Text {
-                        text: "Your recovery phrase is not written down";
+                        text: @tr("Your recovery phrase is not written down");
                         font-size: Typo.body;
                         font-weight: Typo.w-medium;
                         color: Theme.text-primary;
                     }
                     Text {
-                        text: "Without it, nothing can restore this wallet — not us, not anyone.";
+                        text: @tr("Without it, nothing can restore this wallet — not us, not anyone.");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                 }
 
                 Btn {
-                    text: "Back up now";
+                    text: @tr("Back up now");
                     variant: "primary";
                     y: (parent.height - self.height) / 2;
                     clicked => {
@@ -627,7 +628,7 @@ export component DashboardScreen inherits VerticalLayout {
                                 // longer sentence.
                                 text: WalletState.matures-in == ""
                                     ? @tr("maturing")
-                                    : @tr("maturing · ") + WalletState.matures-in;
+                                    : @tr("maturing · {}", WalletState.matures-in);
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                             }

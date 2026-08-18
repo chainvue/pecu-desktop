@@ -121,7 +121,7 @@ export component CommandPalette inherits Rectangle {
                     }
 
                     accessible-role: button;
-                    accessible-label: hit.label + ", " + hit.kind;
+                    accessible-label: @tr("{}, {}", hit.label, hit.kind);
                     accessible-action-default => { SearchState.pick(hit); root.dismissed(); }
                 }
             }
@@ -192,7 +192,7 @@ export component ToastHost inherits Rectangle {
                             // problem, and forty cards is a wallet nobody can
                             // use.
                             text: entry.count > 1
-                                ? entry.title + " (" + entry.count + "×)"
+                                ? @tr("{} ({}×)", entry.title, entry.count)
                                 : entry.title;
                             font-size: Typo.body;
                             font-weight: Typo.w-medium;
@@ -211,7 +211,7 @@ export component ToastHost inherits Rectangle {
                     }
 
                     Btn {
-                        text: "Close";
+                        text: @tr("Close");
                         variant: "ghost";
                         y: 0;
                         clicked => { ToastState.dismiss(i); }
@@ -230,7 +230,7 @@ export component ToastHost inherits Rectangle {
                 padding-right: Sp.card-pad;
                 alignment: end;
                 Btn {
-                    text: "Dismiss all";
+                    text: @tr("Dismiss all");
                     variant: "ghost";
                     clicked => { ToastState.dismiss-all(); }
                 }

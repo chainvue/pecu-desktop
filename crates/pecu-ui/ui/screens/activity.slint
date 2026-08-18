@@ -105,10 +105,13 @@ export component ActivityRowItem inherits VerticalLayout {
                 if root.settled: Text {
                     // Derived, never stored: `tip - height + 1`. A new block
                     // changes one number and every row here follows.
+                    // `@tr`'s plural form rather than a hand-rolled
+                    // `== 1` branch: English has two cases and Polish has
+                    // three, and which ones exist is a property of the
+                    // language rather than of this line.
                     text: WalletState.tip-height == 0 ? ""
-                        : root.depth == 1 ? "1 confirmation"
-                        : root.depth > 999 ? "999+ confirmations"
-                        : root.depth + " confirmations";
+                        : root.depth > 999 ? @tr("999+ confirmations")
+                        : @tr("{n} confirmation" | "{n} confirmations" % root.depth);
                     font-size: Typo.micro;
                     color: Theme.text-disabled;
                     horizontal-alignment: right;
@@ -246,14 +249,14 @@ export component ActivityScreen inherits VerticalLayout {
     if WalletState.history.length > 0 && !WalletState.history-complete: HorizontalLayout {
         alignment: center;
         Btn {
-            text: WalletState.loading-history ? "Reading…" : "Load older transactions";
+            text: WalletState.loading-history ? @tr("Reading…") : @tr("Load older transactions");
             enabled: !WalletState.loading-history;
             clicked => { Actions.load-older(); }
         }
     }
 
     if WalletState.history.length > 0 && WalletState.history-complete: Text {
-        text: "That is everything on the chain for this wallet.";
+        text: @tr("That is everything on the chain for this wallet.");
         font-size: Typo.caption;
         color: Theme.text-tertiary;
         horizontal-alignment: center;
@@ -272,7 +275,7 @@ export component ActivityScreen inherits VerticalLayout {
 // something else.
 export component ExplorerLink inherits VerticalLayout {
     spacing: Sp.s3;
-    Eyebrow { text: "LOOK IT UP"; }
+    Eyebrow { text: @tr("LOOK IT UP"); }
 
     HorizontalLayout {
         spacing: Sp.s4;
@@ -286,7 +289,7 @@ export component ExplorerLink inherits VerticalLayout {
             wrap: char-wrap;
         }
         Btn {
-            text: "Copy link";
+            text: @tr("Copy link");
             y: 0;
             clicked => {
                 link.select-all();
@@ -328,9 +331,9 @@ export component TxSheet inherits Rectangle {
                         horizontal-stretch: 1;
                         spacing: Sp.s2;
                         Text {
-                            text: TxState.direction == "in" ? "Received"
-                                : TxState.direction == "out" ? "Sent"
-                                : "Moved between your own addresses";
+                            text: TxState.direction == "in" ? @tr("Received")
+                                : TxState.direction == "out" ? @tr("Sent")
+                                : @tr("Moved between your own addresses");
                             font-size: Typo.title2;
                             font-weight: Typo.w-bold;
                             color: Theme.text-primary;
@@ -342,7 +345,7 @@ export component TxSheet inherits Rectangle {
                         }
                     }
                     Btn {
-                        text: "Close";
+                        text: @tr("Close");
                         variant: "ghost";
                         y: 0;
                         clicked => { TxState.txid = ""; }
@@ -374,13 +377,13 @@ export component TxSheet inherits Rectangle {
 
                     HorizontalLayout {
                         Text {
-                            text: "Confirmations";
+                            text: @tr("Confirmations");
                             font-size: Typo.body;
                             color: Theme.text-secondary;
                             horizontal-stretch: 1;
                         }
                         Text {
-                            text: TxState.confirmations == "" ? "unconfirmed" : TxState.confirmations;
+                            text: TxState.confirmations == "" ? @tr("unconfirmed") : TxState.confirmations;
                             font-family: Typo.mono;
                             font-size: Typo.num;
                             color: TxState.confirmations == "" ? Theme.warning : Theme.text-primary;
@@ -389,13 +392,13 @@ export component TxSheet inherits Rectangle {
 
                     HorizontalLayout {
                         Text {
-                            text: "Block";
+                            text: @tr("Block");
                             font-size: Typo.body;
                             color: Theme.text-secondary;
                             horizontal-stretch: 1;
                         }
                         Text {
-                            text: TxState.height == "0" ? "not mined yet" : TxState.height;
+                            text: TxState.height == "0" ? @tr("not mined yet") : TxState.height;
                             font-family: Typo.mono;
                             font-size: Typo.num;
                             color: Theme.text-primary;
@@ -404,7 +407,7 @@ export component TxSheet inherits Rectangle {
 
                     HorizontalLayout {
                         Text {
-                            text: "Fee";
+                            text: @tr("Fee");
                             font-size: Typo.body;
                             color: Theme.text-secondary;
                             horizontal-stretch: 1;
@@ -414,7 +417,7 @@ export component TxSheet inherits Rectangle {
                             // inputs minus outputs, and the input values live
                             // in other transactions — a wallet that printed 0
                             // here would be stating something it does not know.
-                            text: TxState.fee == "" ? "not reported by this node" : TxState.fee;
+                            text: TxState.fee == "" ? @tr("not reported by this node") : TxState.fee;
                             font-family: TxState.fee == "" ? "" : Typo.mono;
                             font-size: TxState.fee == "" ? Typo.caption : Typo.num;
                             color: TxState.fee == "" ? Theme.text-tertiary : Theme.text-primary;
@@ -430,7 +433,7 @@ export component TxSheet inherits Rectangle {
                 // then used the other for the field above it.
                 VerticalLayout {
                     spacing: Sp.s3;
-                    Eyebrow { text: "TRANSACTION ID"; }
+                    Eyebrow { text: @tr("TRANSACTION ID"); }
                     HorizontalLayout {
                         spacing: Sp.s4;
                         txid := TextInput {
@@ -443,7 +446,7 @@ export component TxSheet inherits Rectangle {
                             wrap: char-wrap;
                         }
                         Btn {
-                            text: "Copy id";
+                            text: @tr("Copy id");
                             y: 0;
                             clicked => {
                                 txid.select-all();
@@ -461,7 +464,7 @@ export component TxSheet inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     Btn {
-                        text: TxState.advanced ? "Hide raw transaction" : "Show raw transaction";
+                        text: TxState.advanced ? @tr("Hide raw transaction") : @tr("Show raw transaction");
                         variant: "ghost";
                         clicked => { TxState.advanced = !TxState.advanced; }
                     }
@@ -475,7 +478,7 @@ export component TxSheet inherits Rectangle {
                     Flickable {
                         viewport-height: raw.preferred-height;
                         raw := Text {
-                            text: TxState.raw == "" ? "Waiting for the node…" : TxState.raw;
+                            text: TxState.raw == "" ? @tr("Waiting for the node…") : TxState.raw;
                             font-family: Typo.mono;
                             font-size: Typo.micro;
                             color: Theme.text-secondary;

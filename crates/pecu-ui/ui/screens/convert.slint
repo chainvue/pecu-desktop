@@ -337,7 +337,7 @@ export component ConvertPicker inherits Rectangle {
                     }
 
                     accessible-role: button;
-                    accessible-label: row.name + ", " + row.price;
+                    accessible-label: @tr("{}, {}", row.name, row.price);
                     accessible-action-default => {
                         if (ConvertState.picking == "pay") {
                             ConvertState.from-address = row.address;

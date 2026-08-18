@@ -203,7 +203,7 @@ export component FlowStepper inherits HorizontalLayout {
                         color: step.state == "later" ? Theme.text-tertiary : Theme.text-primary;
                     }
                     if step.costs: Text {
-                        text: "costs a fee";
+                        text: @tr("costs a fee");
                         font-size: Typo.micro;
                         color: Theme.warning;
                     }

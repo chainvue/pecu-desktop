@@ -72,7 +72,7 @@ export component MarketRowItem inherits Rectangle {
     }
 
     accessible-role: button;
-    accessible-label: root.entry.name + ", " + root.entry.price + ", " + root.entry.change;
+    accessible-label: @tr("{}, {}, {}", root.entry.name, root.entry.price, root.entry.change);
     accessible-action-default => { root.picked(); }
 }
 

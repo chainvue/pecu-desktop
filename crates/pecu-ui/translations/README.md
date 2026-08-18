@@ -60,16 +60,37 @@ translations that are still current and marks the rest fuzzy:
 msgmerge --update translations/de/LC_MESSAGES/pecu-ui.po translations/pecu-ui.pot
 ```
 
-## What is not covered
+## Nothing in `.slint` escapes any more, and a test says so
 
-`@tr` reaches `.slint` and nothing else. Around 140 user-visible sentences are
-built in Rust — refusals and explanations from `pecu-core`, formatted values
-from `pecu-protocol` — and they arrive at the interface as strings that are
-already written. Slint cannot translate those, and neither can this directory.
+`tests/translatable.rs` reads every `.slint` source and fails on a literal in a
+user-visible property that is not inside a `@tr(…)`. It exists because the
+failure is silent in every other direction: a string that missed `@tr` renders
+perfectly, reviews perfectly and photographs identically to one that did — the
+only difference is that no catalogue can ever reach it. By the time anybody
+counted there were around three hundred and forty of them, four screens with not
+one `@tr` in the file.
 
-That is a design question rather than a missing feature: the core should hand
-the interface a *reason* it can render, instead of a sentence it can only
-display. It is not answered yet, and no amount of `.po` files will answer it.
+Two kinds of literal are exempt and both are recognised rather than tolerated:
+
+- **Anything being compared.** `kind == "login" ? @tr("Signed in") : …` has two
+  strings and one message. Translating the other would not produce a bad
+  sentence, it would take the wrong branch — quietly. The scan drops every
+  literal that follows a `==` or `!=`.
+- **The listed exceptions**, in `ALLOWED`, each with the reason beside it.
+  Glyphs, the product name, an example URL, a font licence, and `mainnet` —
+  which the *core* compares the typed confirmation against, so a translated one
+  would ask for a word the wallet then refuses.
+
+## What is still not covered
+
+`@tr` reaches `.slint` and nothing else. Around a hundred user-visible sentences
+are still built in Rust — refusals and explanations from `pecu-core` — and they
+arrive at the interface already written. Slint cannot translate those, and
+neither can this directory.
+
+The answer is the one `components/note.slint` already demonstrates: the core
+names a **reason** and supplies the values, and the words live in `.slint`. The
+send and convert forms work that way now; the rest of the core does not yet.
 
 ## The German catalogue here is a fixture
 

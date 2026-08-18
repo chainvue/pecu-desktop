@@ -47,7 +47,7 @@ export component ReceiveScreen inherits VerticalLayout {
                         }
 
                         if WalletState.address == "": Text {
-                            text: "No address yet";
+                            text: @tr("No address yet");
                             font-size: Typo.caption;
                             color: #6E747E;
                         }
@@ -57,7 +57,7 @@ export component ReceiveScreen inherits VerticalLayout {
                 VerticalLayout {
                     spacing: Sp.s3;
 
-                    Eyebrow { text: "YOUR " + WalletState.ticker + " ADDRESS"; }
+                    Eyebrow { text: @tr("YOUR {} ADDRESS", WalletState.ticker); }
 
                     // Selectable, monospace, and wrapping mid-string: an
                     // address is read character by character when it is checked
@@ -87,7 +87,7 @@ export component ReceiveScreen inherits VerticalLayout {
                         // reader saying raw base58 at speaking speed produces
                         // something nobody can transcribe or check.
                         accessible-role: AccessibleRole.text;
-                        accessible-label: "Receive address";
+                        accessible-label: @tr("Receive address");
                         accessible-value: WalletState.address-spoken;
                     }
                 }
@@ -95,7 +95,7 @@ export component ReceiveScreen inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: Sp.s4;
                     Btn {
-                        text: "Copy address";
+                        text: @tr("Copy address");
                         variant: "primary";
                         horizontal-stretch: 1;
                         clicked => {
@@ -127,10 +127,15 @@ export component ReceiveScreen inherits VerticalLayout {
                     VerticalLayout {
                         padding: Sp.s4;
                         Text {
+                            // One sentence with the chain in it, not a
+                            // sentence sawn in half around a name — the second
+                            // clause lands in a different place in most
+                            // languages, including the one this is being
+                            // translated into first.
                             text: NetworkState.effective == ""
-                                ? "No node has confirmed which chain this is — check before sharing it."
-                                : "This address is on " + NetworkState.effective
-                                  + ". Coins from any other chain sent here are lost.";
+                                ? @tr("No node has confirmed which chain this is — check before sharing it.")
+                                : @tr("This address is on {}. Coins from any other chain sent here are lost.",
+                                      NetworkState.effective);
                             font-size: Typo.caption;
                             font-weight: Typo.w-medium;
                             color: NetworkState.effective == ""

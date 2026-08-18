@@ -71,6 +71,8 @@ export { AppIcon }
 // touches no `WalletState`: there is no core behind this window, and it must be
 // constructible before anything has been opened.
 export component AlreadyRunning inherits Window {
+    // The application's own name — the same word in every language, and what a
+    // window manager and a task switcher match on.
     title: "Pecu";
     background: Theme.bg-base;
     default-font-family: Typo.ui;
@@ -86,14 +88,14 @@ export component AlreadyRunning inherits Window {
         alignment: center;
 
         Text {
-            text: "Pecu is already open";
+            text: @tr("Pecu is already open");
             font-size: Typo.title2;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
         Text {
-            text: "Only one copy at a time can use this wallet. Two would each keep their own idea of what has been sent and what is waiting, and the last one to write would win — including for a name registration that has already been paid for.";
+            text: @tr("Only one copy at a time can use this wallet. Two would each keep their own idea of what has been sent and what is waiting, and the last one to write would win — including for a name registration that has already been paid for.");
             font-size: Typo.caption;
             color: Theme.text-secondary;
             horizontal-alignment: center;
@@ -102,7 +104,7 @@ export component AlreadyRunning inherits Window {
         HorizontalLayout {
             alignment: center;
             Btn {
-                text: "Close";
+                text: @tr("Close");
                 variant: "primary";
                 clicked => { root.dismissed(); }
             }
@@ -111,6 +113,8 @@ export component AlreadyRunning inherits Window {
 }
 
 export component AppWindow inherits Window {
+    // The application's own name — the same word in every language, and what a
+    // window manager and a task switcher match on.
     title: "Pecu";
     background: Theme.bg-base;
     // Set once, here, so every element that leaves `font-family` unset gets the
@@ -525,41 +529,42 @@ export component AppWindow inherits Window {
                     // transactions, and naming one of them would understate the
                     // press by the larger half.
                     cost: CurrencyState.fee == ""
-                        ? "The fee is not known yet"
+                        ? @tr("The fee is not known yet")
                         : CurrencyState.claiming && CurrencyState.new-name-fee != ""
-                            ? "The name costs " + CurrencyState.new-name-fee + " " + WalletState.ticker
-                                + " and the launch " + CurrencyState.fee + " " + WalletState.ticker
-                            : CurrencyState.fee + " " + WalletState.ticker + " · half of it burned";
+                            ? @tr("The name costs {0} {1} and the launch {2} {1}",
+                                  CurrencyState.new-name-fee, WalletState.ticker, CurrencyState.fee)
+                            : @tr("{0} {1} · half of it burned",
+                                  CurrencyState.fee, WalletState.ticker);
                     // Why the button is off, per step, because per step there is
                     // exactly one answer missing. Only the last two steps quote a
                     // count: by then the sentences are on screen beside the
                     // fields they are about, and repeating one here would put
                     // half a problem in two places.
                     note: CurrencyState.form-step == "kind"
-                        ? "Nothing is spent yet."
+                        ? @tr("Nothing is spent yet.")
                         : CurrencyState.form-step == "under"
                             ? (CurrencyState.claiming
                                 ? (CurrencyState.new-name == ""
-                                    ? "Type a name to continue"
+                                    ? @tr("Type a name to continue")
                                     : CurrencyState.new-name-problem != ""
                                         ? CurrencyState.new-name-problem
-                                        : "Nothing is spent yet.")
+                                        : @tr("Nothing is spent yet."))
                                 : CurrencyState.identity == ""
-                                    ? "Choose an identity, or claim a new name."
-                                    : "Nothing is spent yet.")
+                                    ? @tr("Choose an identity, or claim a new name.")
+                                    : @tr("Nothing is spent yet."))
                             : CurrencyState.form-step == "authority"
                                 ? (CurrencyState.new-authority == ""
-                                    ? "Choose one. This cannot be changed for free later."
+                                    ? @tr("Choose one. This cannot be changed for free later.")
                                     : CurrencyState.new-authority == "other"
                                         && CurrencyState.new-recovery == ""
-                                        ? "Name the recovery authority, or choose the other answer."
-                                        : "Nothing is spent yet.")
+                                        ? @tr("Name the recovery authority, or choose the other answer.")
+                                        : @tr("Nothing is spent yet."))
                                 : CurrencyState.blocking-count > 0
-                                    ? (CurrencyState.blocking-count == 1
-                                        ? "1 thing to fix, above"
-                                        : CurrencyState.blocking-count + " things to fix, above")
+                                    ? @tr("{n} thing to fix, above"
+                                          | "{n} things to fix, above"
+                                          % CurrencyState.blocking-count)
                                     : CurrencyState.form-step == "setup"
-                                        ? "Nothing is spent yet."
+                                        ? @tr("Nothing is spent yet.")
                                         // Not the same sentence on both paths.
                                         // Under an identity that exists, the
                                         // next screen is a review and nothing
@@ -571,8 +576,8 @@ export component AppWindow inherits Window {
                                         // above a button that spends a hundred
                                         // coins.
                                         : CurrencyState.claiming
-                                            ? "This press claims the name and pays for it. The launch is reviewed after."
-                                            : "Nothing is blocking it. The next screen is a review — nothing is spent yet.";
+                                            ? @tr("This press claims the name and pays for it. The launch is reviewed after.")
+                                            : @tr("Nothing is blocking it. The next screen is a review — nothing is spent yet.");
                     note-bad: CurrencyState.form-step == "under"
                         ? (CurrencyState.claiming
                             ? CurrencyState.new-name-problem != ""
@@ -580,7 +585,7 @@ export component AppWindow inherits Window {
                         : CurrencyState.form-step == "authority"
                             ? CurrencyState.new-authority == ""
                             : CurrencyState.blocking-count > 0;
-                    back-text: CurrencyState.form-step == "kind" ? "Cancel" : "Back";
+                    back-text: CurrencyState.form-step == "kind" ? @tr("Cancel") : @tr("Back");
                     // Three different last presses, because they commit to
                     // different things. Under an identity that exists the last
                     // one signs and shows a review, and nothing has been spent
@@ -589,10 +594,10 @@ export component AppWindow inherits Window {
                     // said the same word for both would be describing the safe
                     // one.
                     primary-text: CurrencyState.form-step != "review"
-                        ? "Next"
+                        ? @tr("Next")
                         : CurrencyState.claiming
-                            ? "Claim the name and start"
-                            : "Review the launch";
+                            ? @tr("Claim the name and start")
+                            : @tr("Review the launch");
                     // Each step gates on its own answer. The last two gate on
                     // the core's verdict — warnings do not count, they are
                     // things to read rather than things to fix.
@@ -652,29 +657,30 @@ export component AppWindow inherits Window {
                 if root.screen == "identities" && WalletState.exists && !WalletState.locked
                     && IdentityState.claiming && IdentityState.reg-step == "": ActionBar {
                     cost: IdentityState.name-fee == ""
-                        ? "The fee is not known yet"
-                        : IdentityState.name-fee + " " + WalletState.ticker + " · in two transactions";
+                        ? @tr("The fee is not known yet")
+                        : @tr("{} {} · in two transactions",
+                              IdentityState.name-fee, WalletState.ticker);
                     note: IdentityState.claim-step == "name"
                         ? (IdentityState.name-draft == ""
-                            ? "Type a name to continue"
+                            ? @tr("Type a name to continue")
                             : IdentityState.name-problem != ""
                                 ? IdentityState.name-problem
-                                : "Nothing is spent yet.")
+                                : @tr("Nothing is spent yet."))
                         : IdentityState.claim-step == "authority"
                             ? (IdentityState.claim-authority == ""
-                                ? "Choose one. This cannot be changed for free later."
+                                ? @tr("Choose one. This cannot be changed for free later.")
                                 : IdentityState.claim-authority == "other"
                                     && IdentityState.recovery-draft == ""
-                                    ? "Name the recovery authority, or choose the other answer."
-                                    : "Nothing is spent yet.")
-                            : "This press signs and sends the first transaction.";
+                                    ? @tr("Name the recovery authority, or choose the other answer.")
+                                    : @tr("Nothing is spent yet."))
+                            : @tr("This press signs and sends the first transaction.");
                     note-bad: IdentityState.claim-step == "name"
                         ? IdentityState.name-problem != ""
                         : IdentityState.claim-step == "authority" && IdentityState.claim-authority == "";
-                    back-text: IdentityState.claim-step == "name" ? "Cancel" : "Back";
+                    back-text: IdentityState.claim-step == "name" ? @tr("Cancel") : @tr("Back");
                     primary-text: IdentityState.claim-step == "review"
-                        ? (IdentityState.reg-busy ? "Working…" : "Claim this name")
-                        : "Next";
+                        ? (IdentityState.reg-busy ? @tr("Working…") : @tr("Claim this name"))
+                        : @tr("Next");
                     primary-enabled: IdentityState.claim-step == "name"
                         ? (IdentityState.name-draft != "" && IdentityState.name-problem == "")
                         : IdentityState.claim-step == "authority"

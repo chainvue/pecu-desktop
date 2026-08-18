@@ -105,7 +105,7 @@ export component ChoiceRow inherits Rectangle {
     // reason in its label, rather than being silently inert.
     accessible-role: AccessibleRole.button;
     accessible-enabled: root.enabled;
-    accessible-label: root.body == "" ? root.title : root.title + ". " + root.body;
+    accessible-label: root.body == "" ? root.title : @tr("{}. {}", root.title, root.body);
     accessible-action-default => {
         if (root.enabled) {
             root.chosen();
@@ -342,22 +342,22 @@ export component CurrencyForm inherits VerticalLayout {
     if !CurrencyState.claiming: FlowStepper {
         steps: [
             {
-                label: "Kind",
+                label: @tr("Kind"),
                 state: root.at == 0 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Identity",
+                label: @tr("Identity"),
                 state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Set it up",
+                label: @tr("Set it up"),
                 state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Check and launch",
+                label: @tr("Check and launch"),
                 state: root.at < 3 ? "later" : "now",
                 costs: false,
             },
@@ -366,27 +366,27 @@ export component CurrencyForm inherits VerticalLayout {
     if CurrencyState.claiming: FlowStepper {
         steps: [
             {
-                label: "Kind",
+                label: @tr("Kind"),
                 state: root.at == 0 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Name",
+                label: @tr("Name"),
                 state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Who can take it back",
+                label: @tr("Who can take it back"),
                 state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Set it up",
+                label: @tr("Set it up"),
                 state: root.at < 3 ? "later" : root.at == 3 ? "now" : "done",
                 costs: false,
             },
             {
-                label: "Check and launch",
+                label: @tr("Check and launch"),
                 state: root.at < 4 ? "later" : "now",
                 costs: false,
             },
@@ -400,13 +400,13 @@ export component CurrencyForm inherits VerticalLayout {
         spacing: Sp.s4;
 
         StepHead {
-            title: "What kind of currency?";
-            body: "This decides what the rest of the form asks for, and it is fixed at launch.";
+            title: @tr("What kind of currency?");
+            body: @tr("This decides what the rest of the form asks for, and it is fixed at launch.");
         }
 
         ChoiceRow {
-            title: "Token";
-            body: "A plain token. It exists in whatever quantity you allocate at launch, or that you mint later.";
+            title: @tr("Token");
+            body: @tr("A plain token. It exists in whatever quantity you allocate at launch, or that you mint later.");
             selected: CurrencyState.kind == "token";
             chosen => {
                 CurrencyState.kind = "token";
@@ -414,8 +414,8 @@ export component CurrencyForm inherits VerticalLayout {
             }
         }
         ChoiceRow {
-            title: "Basket";
-            body: "Holds reserves of other currencies and converts between them. You set each reserve's share of the whole, and consensus reads those shares exactly.";
+            title: @tr("Basket");
+            body: @tr("Holds reserves of other currencies and converts between them. You set each reserve's share of the whole, and consensus reads those shares exactly.");
             selected: CurrencyState.kind == "basket";
             chosen => {
                 CurrencyState.kind = "basket";
@@ -423,8 +423,8 @@ export component CurrencyForm inherits VerticalLayout {
             }
         }
         ChoiceRow {
-            title: "NFT";
-            body: "A single indivisible unit. No supply to set and no reserves to hold.";
+            title: @tr("NFT");
+            body: @tr("A single indivisible unit. No supply to set and no reserves to hold.");
             selected: CurrencyState.kind == "nft";
             chosen => {
                 CurrencyState.kind = "nft";
@@ -450,8 +450,8 @@ export component CurrencyForm inherits VerticalLayout {
         spacing: Sp.s4;
 
         StepHead {
-            title: "Which name will it use?";
-            body: "The currency takes that identity's address and its name, and that identity can never define another one.";
+            title: @tr("Which name will it use?");
+            body: @tr("The currency takes that identity's address and its name, and that identity can never define another one.");
         }
 
         // Collapsed the moment it is answered.
@@ -473,7 +473,7 @@ export component CurrencyForm inherits VerticalLayout {
                     spacing: 2px;
                     Text {
                         text: CurrencyState.claiming
-                            ? "A new name, claimed as part of this launch"
+                            ? @tr("A new name, claimed as part of this launch")
                             : CurrencyState.identity-name == ""
                                 ? CurrencyState.identity
                                 : CurrencyState.identity-name;
@@ -491,7 +491,7 @@ export component CurrencyForm inherits VerticalLayout {
                 }
             }
             Btn {
-                text: "Change";
+                text: @tr("Change");
                 variant: "ghost";
                 y: (parent.height - self.height) / 2;
                 clicked => {
@@ -532,8 +532,8 @@ export component CurrencyForm inherits VerticalLayout {
             // same list rather than a link somewhere below, because it answers
             // the same question the rows above it do.
             ChoiceRow {
-                title: "A new name";
-                body: "Claim one as part of this launch. The identity and the currency share the name and the address, and the wallet does the two in order.";
+                title: @tr("A new name");
+                body: @tr("Claim one as part of this launch. The identity and the currency share the name and the address, and the wallet does the two in order.");
                 selected: CurrencyState.claiming;
                 chosen => {
                     CurrencyState.claiming = true;
@@ -571,13 +571,13 @@ export component CurrencyForm inherits VerticalLayout {
                 }
             }
             Text {
-                text: "The name to claim";
+                text: @tr("The name to claim");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
             }
             newname := Field {
                 mono: true;
-                placeholder: "lowercase, digits, _ and -";
+                placeholder: @tr("lowercase, digits, _ and -");
                 text <=> CurrencyState.new-name;
                 invalid: newname.text != "" && CurrencyState.new-name-problem != "";
                 edited => {
@@ -599,8 +599,8 @@ export component CurrencyForm inherits VerticalLayout {
             // transactions and a screen that showed one of them would understate
             // what this commits to by the larger half.
             if CurrencyState.new-name-problem == "" && CurrencyState.new-name-fee != "": Text {
-                text: "Free to claim · the name costs " + CurrencyState.new-name-fee + " " + WalletState.ticker
-                    + ", and the launch costs " + CurrencyState.fee + " " + WalletState.ticker + " on top.";
+                text: @tr("Free to claim · the name costs {0} {1}, and the launch costs {2} {1} on top.",
+                          CurrencyState.new-name-fee, WalletState.ticker, CurrencyState.fee);
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
@@ -619,20 +619,20 @@ export component CurrencyForm inherits VerticalLayout {
         spacing: Sp.s4;
 
         StepHead {
-            title: "Who can take this name back?";
-            body: "If it is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that is free to set only now.";
+            title: @tr("Who can take this name back?");
+            body: @tr("If it is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that is free to set only now.");
         }
 
         ChoiceRow {
-            title: "Another identity can recover it";
-            body: "The one to choose if this name matters. Name an identity you also control, or one you trust.";
+            title: @tr("Another identity can recover it");
+            body: @tr("The one to choose if this name matters. Name an identity you also control, or one you trust.");
             selected: CurrencyState.new-authority == "other";
             chosen => { CurrencyState.new-authority = "other"; }
         }
         ChoiceRow {
-            title: "Nobody — it can never be revoked";
+            title: @tr("Nobody — it can never be revoked");
             tone: "warning";
-            body: "The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.";
+            body: @tr("The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.");
             selected: CurrencyState.new-authority == "none";
             chosen => {
                 CurrencyState.new-authority = "none";
@@ -651,13 +651,13 @@ export component CurrencyForm inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Sp.s2;
                     Text {
-                        text: "Recovery — required";
+                        text: @tr("Recovery — required");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                     Field {
                         mono: true;
-                        placeholder: "name@ or i-address";
+                        placeholder: @tr("name@ or i-address");
                         text <=> CurrencyState.new-recovery;
                     }
                 }
@@ -665,13 +665,13 @@ export component CurrencyForm inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Sp.s2;
                     Text {
-                        text: "Revocation — optional";
+                        text: @tr("Revocation — optional");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                     Field {
                         mono: true;
-                        placeholder: "name@ or i-address";
+                        placeholder: @tr("name@ or i-address");
                         text <=> CurrencyState.new-revocation;
                     }
                 }
@@ -680,7 +680,7 @@ export component CurrencyForm inherits VerticalLayout {
             // obvious and it is the reason one field is required and the other
             // is not.
             Text {
-                text: "Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.";
+                text: @tr("Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.");
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
@@ -698,12 +698,12 @@ export component CurrencyForm inherits VerticalLayout {
         spacing: Sp.s6;
 
         StepHead {
-            title: CurrencyState.kind == "basket" ? "Set up the basket"
-                : CurrencyState.kind == "nft" ? "Set up the NFT"
-                : "Set up the token";
+            title: CurrencyState.kind == "basket" ? @tr("Set up the basket")
+                : CurrencyState.kind == "nft" ? @tr("Set up the NFT")
+                : @tr("Set up the token");
             body: CurrencyState.kind == "nft"
-                ? "An NFT is one indivisible unit, so there is no supply to allocate and no reserve to hold."
-                : "Everything here is fixed at launch.";
+                ? @tr("An NFT is one indivisible unit, so there is no supply to allocate and no reserve to hold.")
+                : @tr("Everything here is fixed at launch.");
         }
 
         // Reserves — a basket only.
@@ -711,7 +711,7 @@ export component CurrencyForm inherits VerticalLayout {
             spacing: Sp.s3;
             HorizontalLayout {
                 Text {
-                    text: "Reserves";
+                    text: @tr("Reserves");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.text-primary;
@@ -719,12 +719,12 @@ export component CurrencyForm inherits VerticalLayout {
                     vertical-alignment: center;
                 }
                 Btn {
-                    text: "Add a reserve";
+                    text: @tr("Add a reserve");
                     clicked => { Actions.add-reserve(); }
                 }
             }
             Text {
-                text: "The weights are shares of one whole and must add to 100%. Consensus reads them exactly, and a basket launched with the wrong ones has the wrong prices in it forever.";
+                text: @tr("The weights are shares of one whole and must add to 100%. Consensus reads them exactly, and a basket launched with the wrong ones has the wrong prices in it forever.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -735,13 +735,13 @@ export component CurrencyForm inherits VerticalLayout {
             if CurrencyState.reserve-rows.length > 0: HorizontalLayout {
                 spacing: Sp.s4;
                 Text {
-                    text: "CURRENCY";
+                    text: @tr("CURRENCY");
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: "SHARE %";
+                    text: @tr("SHARE %");
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                     width: 120px;
@@ -779,7 +779,7 @@ export component CurrencyForm inherits VerticalLayout {
                             spacing: 0px;
                             Text {
                                 text: entry.name == ""
-                                    ? (entry.currency == "" ? "Choose a currency" : entry.currency)
+                                    ? (entry.currency == "" ? @tr("Choose a currency") : entry.currency)
                                     : entry.name;
                                 font-size: Typo.body;
                                 color: entry.currency == "" ? Theme.text-disabled : Theme.text-primary;
@@ -838,8 +838,8 @@ export component CurrencyForm inherits VerticalLayout {
 
                     accessible-role: AccessibleRole.button;
                     accessible-label: entry.name == ""
-                        ? "Choose a currency for this reserve"
-                        : "Reserve currency, " + entry.name + ". Choose a different one.";
+                        ? @tr("Choose a currency for this reserve")
+                        : @tr("Reserve currency, {}. Choose a different one.", entry.name);
                     accessible-action-default => {
                         CurrencyState.picking-reserve = i;
                         Actions.search-currencies("");
@@ -867,7 +867,7 @@ export component CurrencyForm inherits VerticalLayout {
                     }
                 }
                 Btn {
-                    text: "Remove";
+                    text: @tr("Remove");
                     variant: "ghost";
                     width: 108px;
                     clicked => { Actions.remove-reserve(i); }
@@ -878,7 +878,7 @@ export component CurrencyForm inherits VerticalLayout {
             HorizontalLayout {
                 height: 16px;
                 Eyebrow {
-                    text: "SHARES OF THE WHOLE";
+                    text: @tr("SHARES OF THE WHOLE");
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -894,7 +894,7 @@ export component CurrencyForm inherits VerticalLayout {
             }
             ProportionBar {
                 slices: CurrencyState.slices;
-                empty-note: "No reserves yet. A basket without them holds nothing.";
+                empty-note: @tr("No reserves yet. A basket without them holds nothing.");
             }
         }
 
@@ -904,7 +904,7 @@ export component CurrencyForm inherits VerticalLayout {
             spacing: Sp.s3;
             HorizontalLayout {
                 Text {
-                    text: "Starting supply";
+                    text: @tr("Starting supply");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.text-primary;
@@ -912,12 +912,12 @@ export component CurrencyForm inherits VerticalLayout {
                     vertical-alignment: center;
                 }
                 Btn {
-                    text: "Allocate to an identity";
+                    text: @tr("Allocate to an identity");
                     clicked => { Actions.add-preallocation(); }
                 }
             }
             Text {
-                text: "Allocations go to identities, not to addresses. Nothing here means the currency starts empty — which is only useful if it can be minted.";
+                text: @tr("Allocations go to identities, not to addresses. Nothing here means the currency starts empty — which is only useful if it can be minted.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -925,13 +925,13 @@ export component CurrencyForm inherits VerticalLayout {
             if CurrencyState.supply-rows.length > 0: HorizontalLayout {
                 spacing: Sp.s4;
                 Text {
-                    text: "IDENTITY";
+                    text: @tr("IDENTITY");
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: "AMOUNT";
+                    text: @tr("AMOUNT");
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                     width: 160px;
@@ -943,7 +943,7 @@ export component CurrencyForm inherits VerticalLayout {
                 Field {
                     horizontal-stretch: 1;
                     mono: true;
-                    placeholder: "name@ or i-address";
+                    placeholder: @tr("name@ or i-address");
                     init => { self.text = entry.recipient; }
                     edited => {
                         CurrencyState.supply-rows[i].recipient = self.text;
@@ -961,7 +961,7 @@ export component CurrencyForm inherits VerticalLayout {
                     }
                 }
                 Btn {
-                    text: "Remove";
+                    text: @tr("Remove");
                     variant: "ghost";
                     width: 108px;
                     clicked => { Actions.remove-preallocation(i); }
@@ -970,7 +970,7 @@ export component CurrencyForm inherits VerticalLayout {
             HorizontalLayout {
                 height: 16px;
                 Eyebrow {
-                    text: "ALLOCATED AT LAUNCH";
+                    text: @tr("ALLOCATED AT LAUNCH");
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -984,7 +984,7 @@ export component CurrencyForm inherits VerticalLayout {
             }
             ProportionBar {
                 slices: CurrencyState.supply-slices;
-                empty-note: "Nothing allocated. The currency starts empty.";
+                empty-note: @tr("Nothing allocated. The currency starts empty.");
             }
         }
 
@@ -994,14 +994,14 @@ export component CurrencyForm inherits VerticalLayout {
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "Can more be minted later?";
+                text: @tr("Can more be minted later?");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
             }
             ChoiceRow {
-                title: "No — fixed at launch";
-                body: "The supply is what it is, and nothing can add to it, ever.";
+                title: @tr("No — fixed at launch");
+                body: @tr("The supply is what it is, and nothing can add to it, ever.");
                 selected: !CurrencyState.mintable;
                 chosen => {
                     CurrencyState.mintable = false;
@@ -1009,8 +1009,8 @@ export component CurrencyForm inherits VerticalLayout {
                 }
             }
             ChoiceRow {
-                title: "Yes — this identity can mint more";
-                body: "Whoever controls the identity can create more at any time. Whoever holds the currency is trusting that.";
+                title: @tr("Yes — this identity can mint more");
+                body: @tr("Whoever controls the identity can create more at any time. Whoever holds the currency is trusting that.");
                 selected: CurrencyState.mintable;
                 chosen => {
                     CurrencyState.mintable = true;
@@ -1024,7 +1024,7 @@ export component CurrencyForm inherits VerticalLayout {
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "When does it start?";
+                text: @tr("When does it start?");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
@@ -1036,14 +1036,15 @@ export component CurrencyForm inherits VerticalLayout {
                     alignment: center;
                     spacing: 2px;
                     Text {
-                        text: "Blocks from now";
+                        text: @tr("Blocks from now");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                     }
                     Text {
                         text: CurrencyState.start-block == ""
-                            ? "Consensus refuses a currency that begins at or before the current block."
-                            : "Block " + CurrencyState.start-block + ", roughly " + CurrencyState.start-delay + " minutes away.";
+                            ? @tr("Consensus refuses a currency that begins at or before the current block.")
+                            : @tr("Block {}, roughly {} minutes away.",
+                                  CurrencyState.start-block, CurrencyState.start-delay);
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
@@ -1091,8 +1092,8 @@ export component CurrencyForm inherits VerticalLayout {
         spacing: Sp.s5;
 
         StepHead {
-            title: "Check it, then launch";
-            body: "Every value here is fixed when the definition is mined. An identity defines one currency, once.";
+            title: @tr("Check it, then launch");
+            body: @tr("Every value here is fixed when the definition is mined. An identity defines one currency, once.");
         }
 
         Rectangle {
@@ -1104,7 +1105,7 @@ export component CurrencyForm inherits VerticalLayout {
                 // Said once, here, rather than tagged on every row. Every field
                 // of a currency definition is permanent, and a "permanent" mark
                 // beside all six of them is six copies of one sentence.
-                Eyebrow { text: "WHAT GOES ON THE CHAIN · ALL OF IT PERMANENT"; }
+                Eyebrow { text: @tr("WHAT GOES ON THE CHAIN · ALL OF IT PERMANENT"); }
                 DefinitionPreview { fields: CurrencyState.preview; }
             }
         }
@@ -1114,7 +1115,7 @@ export component CurrencyForm inherits VerticalLayout {
             HorizontalLayout {
                 height: 16px;
                 Eyebrow {
-                    text: "RESERVES";
+                    text: @tr("RESERVES");
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -1130,7 +1131,7 @@ export component CurrencyForm inherits VerticalLayout {
             }
             ProportionBar {
                 slices: CurrencyState.slices;
-                empty-note: "No reserves. A basket without them holds nothing.";
+                empty-note: @tr("No reserves. A basket without them holds nothing.");
             }
         }
 
@@ -1139,7 +1140,7 @@ export component CurrencyForm inherits VerticalLayout {
             HorizontalLayout {
                 height: 16px;
                 Eyebrow {
-                    text: "STARTING SUPPLY";
+                    text: @tr("STARTING SUPPLY");
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -1153,7 +1154,7 @@ export component CurrencyForm inherits VerticalLayout {
             }
             ProportionBar {
                 slices: CurrencyState.supply-slices;
-                empty-note: "Nothing allocated. The currency starts empty.";
+                empty-note: @tr("Nothing allocated. The currency starts empty.");
             }
         }
 
@@ -1161,7 +1162,7 @@ export component CurrencyForm inherits VerticalLayout {
             spacing: Sp.s2;
             HorizontalLayout {
                 Text {
-                    text: "Launch fee";
+                    text: @tr("Launch fee");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.text-primary;
@@ -1178,7 +1179,7 @@ export component CurrencyForm inherits VerticalLayout {
             // shows 205 in, 105 out and 100 unaccounted for, and the miner fee
             // is on top of all of it.
             Text {
-                text: "Half of this becomes the new currency's reserve deposit and half is burned. The miner fee is on top and is not included here.";
+                text: @tr("Half of this becomes the new currency's reserve deposit and half is burned. The miner fee is on top and is not included here.");
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
@@ -1197,9 +1198,13 @@ export component CurrencyForm inherits VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
                 Eyebrow {
+                    // The one-step case reads "ONE TRANSACTION" rather than
+                    // "1 STEPS", and `@tr`'s plural form is what lets a
+                    // language with three of them say so too.
                     text: CurrencyState.steps.length == 1
-                        ? "WHAT HAPPENS NEXT · ONE TRANSACTION"
-                        : "WHAT HAPPENS NEXT · " + CurrencyState.steps.length + " STEPS";
+                        ? @tr("WHAT HAPPENS NEXT · ONE TRANSACTION")
+                        : @tr("WHAT HAPPENS NEXT · {n} STEP" | "WHAT HAPPENS NEXT · {n} STEPS"
+                              % CurrencyState.steps.length);
                 }
                 for step[i] in CurrencyState.steps: HorizontalLayout {
                     spacing: Sp.s3;
@@ -1217,7 +1222,7 @@ export component CurrencyForm inherits VerticalLayout {
                         wrap: word-wrap;
                     }
                     if step.costs: Text {
-                        text: "costs a fee";
+                        text: @tr("costs a fee");
                         font-size: Typo.micro;
                         color: Theme.warning;
                         vertical-alignment: center;
@@ -1233,7 +1238,7 @@ export component CurrencyForm inherits VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s2;
                 Text {
-                    text: "This cannot be undone or repeated";
+                    text: @tr("This cannot be undone or repeated");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.warning;
@@ -1241,8 +1246,8 @@ export component CurrencyForm inherits VerticalLayout {
                 }
                 Text {
                     text: CurrencyState.claiming
-                        ? "The next press claims the name and pays for it. The launch itself is reviewed afterwards, once the name is on the chain."
-                        : "The next press builds and signs the definition and shows the exact fee. Nothing is sent until that review is agreed to.";
+                        ? @tr("The next press claims the name and pays for it. The launch itself is reviewed afterwards, once the name is on the chain.")
+                        : @tr("The next press builds and signs the definition and shows the exact fee. Nothing is sent until that review is agreed to.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -1294,7 +1299,7 @@ export component LaunchReview inherits Rectangle {
             VerticalLayout {
                 spacing: Sp.s2;
                 Text {
-                    text: "Launch this currency";
+                    text: @tr("Launch this currency");
                     font-size: Typo.title2;
                     font-weight: Typo.w-bold;
                     color: Theme.text-primary;
@@ -1321,7 +1326,7 @@ export component LaunchReview inherits Rectangle {
                 spacing: Sp.s3;
                 HorizontalLayout {
                     Text {
-                        text: "Launch fee";
+                        text: @tr("Launch fee");
                         font-size: Typo.body;
                         font-weight: Typo.w-medium;
                         color: Theme.text-primary;
@@ -1335,7 +1340,7 @@ export component LaunchReview inherits Rectangle {
                 }
                 HorizontalLayout {
                     Text {
-                        text: "of which, the currency's reserve deposit";
+                        text: @tr("of which, the currency's reserve deposit");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         horizontal-stretch: 1;
@@ -1350,7 +1355,7 @@ export component LaunchReview inherits Rectangle {
                 }
                 HorizontalLayout {
                     Text {
-                        text: "of which, burned";
+                        text: @tr("of which, burned");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         horizontal-stretch: 1;
@@ -1364,7 +1369,7 @@ export component LaunchReview inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "The miner fee is on top of this and is not included.";
+                    text: @tr("The miner fee is on top of this and is not included.");
                     font-size: Typo.caption;
                     color: Theme.text-tertiary;
                     wrap: word-wrap;
@@ -1377,7 +1382,7 @@ export component LaunchReview inherits Rectangle {
             // hour as a failed launch.
             HorizontalLayout {
                 Text {
-                    text: "Begins at block";
+                    text: @tr("Begins at block");
                     font-size: Typo.body;
                     font-weight: Typo.w-medium;
                     color: Theme.text-primary;
@@ -1398,14 +1403,14 @@ export component LaunchReview inherits Rectangle {
                     padding: Sp.s5;
                     spacing: Sp.s2;
                     Text {
-                        text: "This cannot be undone or repeated";
+                        text: @tr("This cannot be undone or repeated");
                         font-size: Typo.body;
                         font-weight: Typo.w-medium;
                         color: Theme.warning;
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "An identity defines one currency, once. Every value in this definition is fixed at launch.";
+                        text: @tr("An identity defines one currency, once. Every value in this definition is fixed at launch.");
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -1417,13 +1422,13 @@ export component LaunchReview inherits Rectangle {
                 spacing: Sp.s4;
                 alignment: end;
                 Btn {
-                    text: "Back";
+                    text: @tr("Back");
                     variant: "ghost";
                     enabled: !CurrencyState.launch-busy;
                     clicked => { Actions.cancel-launch(CurrencyState.launch-ticket); }
                 }
                 Btn {
-                    text: CurrencyState.launch-busy ? "Sending…" : "Launch it";
+                    text: CurrencyState.launch-busy ? @tr("Sending…") : @tr("Launch it");
                     variant: "primary";
                     enabled: !CurrencyState.launch-busy;
                     clicked => { Actions.confirm-launch(CurrencyState.launch-ticket); }
@@ -1496,13 +1501,13 @@ export component ReservePicker inherits Rectangle {
             VerticalLayout {
                 spacing: Sp.s2;
                 Text {
-                    text: "Choose a reserve";
+                    text: @tr("Choose a reserve");
                     font-size: Typo.title2;
                     font-weight: Typo.w-bold;
                     color: Theme.text-primary;
                 }
                 Text {
-                    text: "Every currency this chain knows about. What goes into the definition is the address, not the name — which is why this is a list rather than a field.";
+                    text: @tr("Every currency this chain knows about. What goes into the definition is the address, not the name — which is why this is a list rather than a field.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -1523,7 +1528,7 @@ export component ReservePicker inherits Rectangle {
             }
 
             query := Field {
-                placeholder: "Search by name or address";
+                placeholder: @tr("Search by name or address");
                 text <=> CurrencyState.choices-query;
                 // Focused on open, so the list can be narrowed by typing
                 // without reaching for the pointer first.
@@ -1535,7 +1540,7 @@ export component ReservePicker inherits Rectangle {
             }
 
             if CurrencyState.choices-busy: Text {
-                text: "Asking the node for the chain's currency list. This is one large reply and it is only fetched once.";
+                text: @tr("Asking the node for the chain's currency list. This is one large reply and it is only fetched once.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -1556,7 +1561,7 @@ export component ReservePicker inherits Rectangle {
                     HorizontalLayout {
                         alignment: start;
                         Btn {
-                            text: "Try again";
+                            text: @tr("Try again");
                             clicked => { Actions.search-currencies(CurrencyState.choices-query); }
                         }
                     }
@@ -1566,8 +1571,8 @@ export component ReservePicker inherits Rectangle {
             if !CurrencyState.choices-busy && CurrencyState.choices-problem == ""
                 && CurrencyState.choices.length == 0: Text {
                 text: CurrencyState.choices-query == ""
-                    ? "This chain lists no currencies that are not already reserves of this basket."
-                    : "Nothing on this chain matches that.";
+                    ? @tr("This chain lists no currencies that are not already reserves of this basket.")
+                    : @tr("Nothing on this chain matches that.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -1633,7 +1638,7 @@ export component ReservePicker inherits Rectangle {
                         }
 
                         accessible-role: AccessibleRole.button;
-                        accessible-label: row.name + ", " + row.kind
+                        accessible-label: @tr("{}, {}", row.name, row.kind)
                             + (row.note == "" ? "" : ", " + row.note);
                         accessible-action-default => {
                             Actions.choose-reserve(
@@ -1648,7 +1653,7 @@ export component ReservePicker inherits Rectangle {
             // saying so reads as "that is all there is" while holding back the
             // currency somebody came here for.
             if CurrencyState.choices-more > 0: Text {
-                text: CurrencyState.choices-more + " more match. Narrow the search to see them.";
+                text: @tr("{n} more match. Narrow the search to see them." | "{n} more match. Narrow the search to see them." % CurrencyState.choices-more);
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
@@ -1657,7 +1662,7 @@ export component ReservePicker inherits Rectangle {
             HorizontalLayout {
                 alignment: end;
                 Btn {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "ghost";
                     clicked => { root.dismiss(); }
                 }
@@ -1693,7 +1698,7 @@ export component ActionBar inherits Rectangle {
     // Whether that note is a refusal. Decides its colour, so a screen cannot
     // say "1 thing to fix" in the tone of an aside.
     in property <bool> note-bad: false;
-    in property <string> back-text: "Cancel";
+    in property <string> back-text: @tr("Cancel");
     in property <string> primary-text;
     in property <bool> primary-enabled: true;
     callback back();
@@ -1783,17 +1788,16 @@ export component CurrenciesScreen inherits VerticalLayout {
             spacing: Sp.s2;
             Text {
                 text: CurrencyState.rows.length == 0
-                    ? "No currencies yet"
-                    : CurrencyState.rows.length == 1
-                        ? "1 currency your identities define"
-                        : CurrencyState.rows.length + " currencies your identities define";
+                    ? @tr("No currencies yet")
+                    : @tr("{n} currency your identities define"
+                          | "{n} currencies your identities define" % CurrencyState.rows.length);
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
         }
         Btn {
-            text: CurrencyState.busy ? "Reading…" : "Refresh";
+            text: CurrencyState.busy ? @tr("Reading…") : @tr("Refresh");
             enabled: !CurrencyState.busy;
             y: (parent.height - self.height) / 2;
             clicked => { Actions.refresh-currencies(); }
@@ -1804,7 +1808,7 @@ export component CurrenciesScreen inherits VerticalLayout {
         // make a reader stop and work out which is which, and the answer is
         // that there is no difference.
         if !(CurrencyState.rows.length == 0 && !CurrencyState.busy): Btn {
-            text: "Define a currency";
+            text: @tr("Define a currency");
             variant: "primary";
             y: (parent.height - self.height) / 2;
             clicked => { root.open-form(); }
@@ -1826,9 +1830,9 @@ export component CurrenciesScreen inherits VerticalLayout {
                 height: 200px;
                 EmptyState {
                     glyph: "⊙";
-                    title: "None of your identities defines a currency";
-                    body: "A currency in Verus is a name you already own, wearing a second hat — its address is the identity's. Defining one is permanent, and an identity can do it once.";
-                    action-text: "Define a currency";
+                    title: @tr("None of your identities defines a currency");
+                    body: @tr("A currency in Verus is a name you already own, wearing a second hat — its address is the identity's. Defining one is permanent, and an identity can do it once.");
+                    action-text: @tr("Define a currency");
                     action => { root.open-form(); }
                 }
             }
@@ -1860,7 +1864,7 @@ export component CurrenciesScreen inherits VerticalLayout {
                             // Whether the supply can still grow is a different
                             // promise to whoever holds it, and it is permanent.
                             if row.mintable: Text {
-                                text: "mintable";
+                                text: @tr("mintable");
                                 font-size: Typo.micro;
                                 color: Theme.warning;
                                 vertical-alignment: center;
@@ -1876,7 +1880,7 @@ export component CurrenciesScreen inherits VerticalLayout {
                         // exactly as it shows one that has been running for a
                         // month. Said only while it is true.
                         if !row.started: Text {
-                            text: "Starts at block " + row.start-block;
+                            text: @tr("Starts at block {}", row.start-block);
                             font-size: Typo.caption;
                             color: Theme.warning;
                             horizontal-alignment: right;
@@ -1901,7 +1905,7 @@ export component CurrenciesScreen inherits VerticalLayout {
     // different currency. That is not a thing to leave a person to discover.
     if CurrencyState.pending-identity != "" && !CurrencyState.defining: VerticalLayout {
         spacing: Sp.s4;
-        Eyebrow { text: "UNFINISHED"; }
+        Eyebrow { text: @tr("UNFINISHED"); }
         Card {
             VerticalLayout {
                 padding: Sp.card-pad;
@@ -1926,12 +1930,12 @@ export component CurrenciesScreen inherits VerticalLayout {
                     spacing: Sp.s3;
                     alignment: end;
                     Btn {
-                        text: "Abandon";
+                        text: @tr("Abandon");
                         variant: "ghost";
                         clicked => { Actions.abandon-launch(); }
                     }
                     if CurrencyState.pending-can-continue: Btn {
-                        text: "Define the currency";
+                        text: @tr("Define the currency");
                         variant: "primary";
                         clicked => { Actions.resume-launch(); }
                     }
@@ -1943,7 +1947,7 @@ export component CurrenciesScreen inherits VerticalLayout {
     // Configuring one. The form is the screen while it is open.
     if CurrencyState.defining: VerticalLayout {
         spacing: Sp.s4;
-        Eyebrow { text: "DEFINE A CURRENCY"; }
+        Eyebrow { text: @tr("DEFINE A CURRENCY"); }
         // Capped, not stretched. A question at a time does not need a second
         // column beside it, and a line of body text running the full width of a
         // 1400px window is a line nobody finishes.
@@ -1978,7 +1982,7 @@ export component CurrenciesScreen inherits VerticalLayout {
     // including the ones that may not, and why.
     if CurrencyState.eligible.length > 0 && !CurrencyState.defining: VerticalLayout {
         spacing: Sp.s4;
-        Eyebrow { text: "YOUR IDENTITIES"; }
+        Eyebrow { text: @tr("YOUR IDENTITIES"); }
         Card {
             VerticalLayout {
                 padding: Sp.s3;
@@ -1998,7 +2002,7 @@ export component CurrenciesScreen inherits VerticalLayout {
                             alignment: center;
                             Text {
                                 text: entry.refusal == ""
-                                    ? "Free to define a currency"
+                                    ? @tr("Free to define a currency")
                                     : entry.refusal;
                                 font-size: Typo.caption;
                                 color: entry.refusal == ""

@@ -40,13 +40,15 @@ export component MainnetArm inherits HorizontalLayout {
     confirm := Field {
         horizontal-stretch: 1;
         mono: true;
+        // Not translated, and not translatable: the core compares the typed
+        // text against this exact word.
         placeholder: "mainnet";
         accepted => { root.arm(); }
     }
     Btn {
         // The word is checked in the CORE, not here. A confirmation the UI
         // could skip would be theatre.
-        text: "Type mainnet to enable";
+        text: @tr("Type {} to enable", "mainnet");
         enabled: confirm.text != "";
         y: (parent.height - self.height) / 2;
         clicked => { root.arm(); }
@@ -70,14 +72,14 @@ export component MainnetToggle inherits VerticalLayout {
             spacing: 2px;
             Text {
                 text: NetworkState.allow-mainnet-spend
-                    ? "Spending on mainnet is ON"
-                    : "Spending on mainnet is off";
+                    ? @tr("Spending on mainnet is ON")
+                    : @tr("Spending on mainnet is off");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: NetworkState.allow-mainnet-spend ? Theme.warning : Theme.text-primary;
             }
             Text {
-                text: "Reading a mainnet balance is always allowed. This is only about signing away real coins, and it turns itself off again every time Pecu starts.";
+                text: @tr("Reading a mainnet balance is always allowed. This is only about signing away real coins, and it turns itself off again every time Pecu starts.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -85,7 +87,7 @@ export component MainnetToggle inherits VerticalLayout {
         }
 
         if NetworkState.allow-mainnet-spend: Btn {
-            text: "Turn off";
+            text: @tr("Turn off");
             variant: "destructive";
             y: (parent.height - self.height) / 2;
             clicked => { Actions.set-mainnet-spend(false, ""); }
@@ -112,13 +114,13 @@ export component PassphraseChange inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Change passphrase";
+            text: @tr("Change passphrase");
             font-size: Typo.body;
             font-weight: Typo.w-medium;
             color: Theme.text-primary;
         }
         Text {
-            text: "The vault is re-encrypted with the new one. The old passphrase stops working, and nobody can recover the new one for you.";
+            text: @tr("The vault is re-encrypted with the new one. The old passphrase stops working, and nobody can recover the new one for you.");
             font-size: Typo.caption;
             color: Theme.text-secondary;
             wrap: word-wrap;
@@ -128,26 +130,26 @@ export component PassphraseChange inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "Current passphrase";
+            text: @tr("Current passphrase");
             font-size: Typo.caption;
             color: Theme.text-secondary;
         }
         current := Field {
             password: true;
-            placeholder: "Passphrase";
+            placeholder: @tr("Passphrase");
         }
     }
 
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "New passphrase";
+            text: @tr("New passphrase");
             font-size: Typo.caption;
             color: Theme.text-secondary;
         }
         fresh := Field {
             password: true;
-            placeholder: "A new passphrase";
+            placeholder: @tr("A new passphrase");
         }
     }
 
@@ -162,18 +164,18 @@ export component PassphraseChange inherits VerticalLayout {
     VerticalLayout {
         spacing: Sp.s3;
         Text {
-            text: "New passphrase again";
+            text: @tr("New passphrase again");
             font-size: Typo.caption;
             color: root.mismatch ? Theme.negative : Theme.text-secondary;
         }
         again := Field {
             password: true;
-            placeholder: "Type it again";
+            placeholder: @tr("Type it again");
             invalid: root.mismatch;
             accepted => { root.submit(); }
         }
         if root.mismatch: Text {
-            text: "The two do not match.";
+            text: @tr("The two do not match.");
             font-size: Typo.caption;
             color: Theme.negative;
         }
@@ -182,7 +184,7 @@ export component PassphraseChange inherits VerticalLayout {
     HorizontalLayout {
         alignment: end;
         Btn {
-            text: "Change passphrase";
+            text: @tr("Change passphrase");
             variant: "primary";
             enabled: current.text != "" && fresh.text != "" && root.matched;
             clicked => { root.submit(); }
@@ -215,13 +217,13 @@ export component RenameKeyForm inherits VerticalLayout {
         field := Field {
             horizontal-stretch: 1;
             mono: true;
-            placeholder: "savings";
+            placeholder: @tr("savings");
             text <=> WalletState.rename-draft;
             accepted => { root.submit(); }
         }
 
         Btn {
-            text: "Save";
+            text: @tr("Save");
             variant: "primary";
             enabled: field.text != "" && field.text != root.label;
             y: (parent.height - self.height) / 2;
@@ -229,7 +231,7 @@ export component RenameKeyForm inherits VerticalLayout {
         }
 
         Btn {
-            text: "Cancel";
+            text: @tr("Cancel");
             variant: "ghost";
             y: (parent.height - self.height) / 2;
             clicked => {
@@ -266,13 +268,13 @@ export component AddKeyForm inherits HorizontalLayout {
     field := Field {
         horizontal-stretch: 1;
         mono: true;
-        placeholder: "savings";
+        placeholder: @tr("savings");
         text <=> WalletState.new-key-draft;
         accepted => { root.submit(); }
     }
 
     Btn {
-        text: "Generate a key";
+        text: @tr("Generate a key");
         enabled: field.text != "";
         y: (parent.height - self.height) / 2;
         clicked => { root.submit(); }
@@ -314,7 +316,7 @@ export component KeyRowItem inherits VerticalLayout {
             // somebody has already dismissed.
             if !root.entry.backed-up: StatusPill {
                 state: "pending";
-                text: "not backed up";
+                text: @tr("not backed up");
                 y: (parent.height - self.height) / 2;
             }
 
@@ -322,7 +324,7 @@ export component KeyRowItem inherits VerticalLayout {
             // down and nothing to warn about. Saying it once here is what
             // stops it reading as a missing backup.
             if root.entry.origin == "wif": Text {
-                text: "no recovery phrase";
+                text: @tr("no recovery phrase");
                 font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
@@ -334,7 +336,7 @@ export component KeyRowItem inherits VerticalLayout {
             Rectangle {
                 width: 100px;
                 Btn {
-                    text: "Rename";
+                    text: @tr("Rename");
                     x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     clicked => {
@@ -362,20 +364,20 @@ export component NameAddressForm inherits HorizontalLayout {
 
     field := Field {
         horizontal-stretch: 1;
-        placeholder: "the exchange";
+        placeholder: @tr("the exchange");
         text <=> SendState.name-draft;
         accepted => { root.submit(); }
     }
 
     Btn {
-        text: "Save";
+        text: @tr("Save");
         variant: "primary";
         y: (parent.height - self.height) / 2;
         clicked => { root.submit(); }
     }
 
     Btn {
-        text: "Cancel";
+        text: @tr("Cancel");
         variant: "ghost";
         y: (parent.height - self.height) / 2;
         clicked => { SendState.naming = ""; }
@@ -417,7 +419,7 @@ export component KnownAddressItem inherits VerticalLayout {
             Rectangle {
                 width: 88px;
                 Btn {
-                    text: root.entry.label == "" ? "Name" : "Rename";
+                    text: root.entry.label == "" ? @tr("Name") : @tr("Rename");
                     x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     clicked => {
@@ -435,7 +437,7 @@ export component KnownAddressItem inherits VerticalLayout {
                     // on the chain. What it does is make the review warn about
                     // that address again, which is what somebody removing it
                     // is asking for.
-                    text: "Forget";
+                    text: @tr("Forget");
                     x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     clicked => { Actions.forget-address(root.entry.address); }
@@ -474,7 +476,7 @@ export component SettingsScreen inherits VerticalLayout {
         alignment: start;
         Segmented {
             width: 460px;
-            options: ["Security", "Keys", "Addresses", "General"];
+            options: [@tr("Security"), @tr("Keys"), @tr("Addresses"), @tr("General")];
             index <=> root.tab;
         }
     }
@@ -489,18 +491,18 @@ export component SettingsScreen inherits VerticalLayout {
     }
 
     if root.tab == 0: Section {
-        title: "SECURITY";
+        title: @tr("SECURITY");
 
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "Lock after";
+                text: @tr("Lock after");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
             }
             Text {
-                text: "Locking drops the key that decrypts your wallet, so every key in it becomes unreadable until you enter the passphrase again.";
+                text: @tr("Locking drops the key that decrypts your wallet, so every key in it becomes unreadable until you enter the passphrase again.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -509,9 +511,9 @@ export component SettingsScreen inherits VerticalLayout {
                 spacing: Sp.s3;
                 alignment: start;
                 for minutes in root.lock-choices: Btn {
-                    text: minutes == 0 ? "Never"
-                        : minutes == 60 ? "1 hour"
-                        : minutes + " min";
+                    text: minutes == 0 ? @tr("Never")
+                        : minutes == 60 ? @tr("1 hour")
+                        : @tr("{} min", minutes);
                     variant: WalletState.auto-lock == minutes ? "primary" : "secondary";
                     clicked => { Actions.set-auto-lock(minutes); }
                 }
@@ -524,8 +526,8 @@ export component SettingsScreen inherits VerticalLayout {
     }
 
     if root.tab == 1: Section {
-        title: "KEYS";
-        body: "A Pecu wallet holds any number of keys, and the dashboard adds up all of them. One passphrase protects the lot — adding a key does not ask for it again.";
+        title: @tr("KEYS");
+        body: @tr("A Pecu wallet holds any number of keys, and the dashboard adds up all of them. One passphrase protects the lot — adding a key does not ask for it again.");
 
         for entry in WalletState.keys: KeyRowItem {
             entry: entry;
@@ -536,7 +538,7 @@ export component SettingsScreen inherits VerticalLayout {
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "Add a key";
+                text: @tr("Add a key");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
@@ -546,7 +548,7 @@ export component SettingsScreen inherits VerticalLayout {
                 // one phrase is one key. Somebody who expects a second key to
                 // fall out of the phrase they already wrote down needs to hear
                 // otherwise before they generate one, not after.
-                text: "A new key comes with its own recovery phrase, and you will be asked to write it down. Verus keys are not derived from one another — the phrase you already have does not restore this one.";
+                text: @tr("A new key comes with its own recovery phrase, and you will be asked to write it down. Verus keys are not derived from one another — the phrase you already have does not restore this one.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -565,11 +567,11 @@ export component SettingsScreen inherits VerticalLayout {
     }
 
     if root.tab == 2: Section {
-        title: "ADDRESSES";
-        body: "Who this wallet has paid. Pecu records a recipient once a node has accepted the payment, so it can tell you when you are paying somewhere new — the one check it can make that a checksum cannot.";
+        title: @tr("ADDRESSES");
+        body: @tr("Who this wallet has paid. Pecu records a recipient once a node has accepted the payment, so it can tell you when you are paying somewhere new — the one check it can make that a checksum cannot.");
 
         if SendState.known.length == 0: Text {
-            text: "Nothing yet. An address appears here the first time you pay it.";
+            text: @tr("Nothing yet. An address appears here the first time you pay it.");
             font-size: Typo.caption;
             color: Theme.text-tertiary;
         }
@@ -580,12 +582,12 @@ export component SettingsScreen inherits VerticalLayout {
     }
 
     if root.tab == 3: Section {
-        title: "APPEARANCE";
+        title: @tr("APPEARANCE");
 
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "Theme";
+                text: @tr("Theme");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
@@ -594,12 +596,12 @@ export component SettingsScreen inherits VerticalLayout {
                 spacing: Sp.s3;
                 alignment: start;
                 Btn {
-                    text: "Dark";
+                    text: @tr("Dark");
                     variant: Theme.dark ? "primary" : "secondary";
                     clicked => { root.appearance(true, !Motion.enabled); }
                 }
                 Btn {
-                    text: "Light";
+                    text: @tr("Light");
                     variant: Theme.dark ? "secondary" : "primary";
                     clicked => { root.appearance(false, !Motion.enabled); }
                 }
@@ -611,7 +613,7 @@ export component SettingsScreen inherits VerticalLayout {
         VerticalLayout {
             spacing: Sp.s3;
             Text {
-                text: "Motion";
+                text: @tr("Motion");
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.text-primary;
@@ -620,7 +622,7 @@ export component SettingsScreen inherits VerticalLayout {
                 // What "reduced" actually means here, because the usual
                 // implementation of this switch is "nothing happens at all"
                 // and that is not what this one does.
-                text: "Reduced motion removes movement, scaling and the chart's draw-in. Cross-fades stay: opacity is not a vestibular trigger, and a hard swap is jarring for motion-sensitive people too.";
+                text: @tr("Reduced motion removes movement, scaling and the chart's draw-in. Cross-fades stay: opacity is not a vestibular trigger, and a hard swap is jarring for motion-sensitive people too.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -629,12 +631,12 @@ export component SettingsScreen inherits VerticalLayout {
                 spacing: Sp.s3;
                 alignment: start;
                 Btn {
-                    text: "Full motion";
+                    text: @tr("Full motion");
                     variant: Motion.enabled ? "primary" : "secondary";
                     clicked => { root.appearance(Theme.dark, false); }
                 }
                 Btn {
-                    text: "Reduced";
+                    text: @tr("Reduced");
                     variant: Motion.enabled ? "secondary" : "primary";
                     clicked => { root.appearance(Theme.dark, true); }
                 }
@@ -643,19 +645,19 @@ export component SettingsScreen inherits VerticalLayout {
     }
 
     if root.tab == 3: Section {
-        title: "NETWORK";
+        title: @tr("NETWORK");
         MainnetToggle {}
     }
 
     if root.tab == 3: Section {
-        title: "ABOUT";
+        title: @tr("ABOUT");
 
         VerticalLayout {
             spacing: Sp.s4;
 
             HorizontalLayout {
                 Text {
-                    text: "Wallet file";
+                    text: @tr("Wallet file");
                     font-size: Typo.body;
                     color: Theme.text-secondary;
                     horizontal-stretch: 1;
@@ -671,7 +673,7 @@ export component SettingsScreen inherits VerticalLayout {
 
             HorizontalLayout {
                 Text {
-                    text: "Logs";
+                    text: @tr("Logs");
                     font-size: Typo.body;
                     color: Theme.text-secondary;
                     horizontal-stretch: 1;
@@ -691,7 +693,7 @@ export component SettingsScreen inherits VerticalLayout {
             // line is that notice. See `ui/fonts/README.md`.
             HorizontalLayout {
                 Text {
-                    text: "Typeset in";
+                    text: @tr("Typeset in");
                     font-size: Typo.body;
                     color: Theme.text-secondary;
                     horizontal-stretch: 1;

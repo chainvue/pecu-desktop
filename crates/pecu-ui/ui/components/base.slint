@@ -316,7 +316,7 @@ export component Money inherits HorizontalLayout {
     // two unrelated items, and an amount without its currency is not an
     // amount.
     accessible-role: AccessibleRole.text;
-    accessible-label: root.amount + " " + root.currency;
+    accessible-label: @tr("{} {}", root.amount, root.currency);
     in property <length> size: Typo.num;
     // "neutral" | "positive" | "negative" | "muted"
     //
@@ -372,7 +372,7 @@ export component StatusPill inherits HorizontalLayout {
     // beside it is often just the chain name. Saying both is what makes the
     // colour redundant rather than load-bearing.
     accessible-role: AccessibleRole.text;
-    accessible-label: root.text + ", " + root.state;
+    accessible-label: @tr("{}, {}", root.text, root.state);
 
     property <brush> tone: root.state == "online" ? Theme.positive
         : root.state == "degraded" || root.state == "pending" || root.state == "probing" ? Theme.warning
@@ -551,7 +551,7 @@ export component ListRow inherits Rectangle {
     // which is the distinction a reader needs anyway.
     accessible-role: AccessibleRole.button;
     accessible-enabled: root.interactive;
-    accessible-label: root.subtitle == "" ? root.title : root.title + ", " + root.subtitle;
+    accessible-label: root.subtitle == "" ? root.title : @tr("{}, {}", root.title, root.subtitle);
     // Opening a row — a transaction, an identity, a node — from a screen
     // reader. Same omission as `Btn`: announced as a button and inert.
     accessible-action-default => {
