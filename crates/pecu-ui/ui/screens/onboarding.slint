@@ -1,0 +1,813 @@
+// Creating, restoring and backing up a wallet — everything that happens before
+// there is a wallet to look at, and the one screen that must never be behind
+// anything else.
+
+import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, Segmented } from "../components/base.slint";
+import { Actions, SeedState } from "../vm/state.slint";
+import { Field } from "../components/form.slint";
+
+// Choosing a passphrase, or entering it again.
+export component PassphraseForm inherits VerticalLayout {
+    // "create" | "unlock"
+    in property <string> mode;
+    in property <string> wallet-name;
+    in property <bool> busy;
+    in property <string> problem;
+    callback restore();
+
+    // Whether the two boxes agree, and whether to say so yet.
+    //
+    // `matched` is true while unlocking, where there is only one box. `mismatch`
+    // stays quiet until the second box has something in it — complaining at the
+    // first keystroke of a confirmation nobody has finished typing is a form
+    // shouting at somebody for not having finished.
+    // Held here rather than read off the field, because the field lives inside
+    // an `if` and Slint cannot address an element through one.
+    property <string> again;
+    property <bool> matched: root.mode != "create" || field.text == root.again;
+    property <bool> mismatch: root.mode == "create" && root.again != "" && !root.matched;
+
+    spacing: Sp.s7;
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: root.mode == "create" ? "Set up Pecu" : "Welcome back";
+            font-size: Typo.title1;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 420px;
+                text: root.mode == "create"
+                    ? "Choose a passphrase. It encrypts your keys on this machine, and nobody can recover it for you."
+                    : root.wallet-name;
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        field := Field {
+            width: 360px;
+            password: true;
+            // A masked box with nothing in it and no label above it is
+            // indistinguishable from a box that is broken. The sentence above
+            // explains what a passphrase IS; this says what to put here.
+            placeholder: root.mode == "create"
+                ? "A passphrase you will remember"
+                : "Passphrase";
+            invalid: root.problem != "";
+            accepted => { root.submit(); }
+        }
+    }
+
+    // Typed twice, and only when a wallet is being made.
+    //
+    // # Why this is not a formality
+    //
+    // The sentence above says nobody can recover this, and that is literally
+    // true: the passphrase is the only input to the key that decrypts the
+    // vault, and there is no reset, no hint and no second copy anywhere. A
+    // single mistyped character in a masked box therefore produces a wallet
+    // that opens exactly once — for the rest of this session, because the key
+    // is already in memory — and never again.
+    //
+    // That is the worst possible failure shape: it does not announce itself at
+    // the moment of the mistake, it announces itself at the next launch, by
+    // which time somebody has generated a phrase, written it down, and put
+    // money in. The wallet was asking for a secret it could not check, and then
+    // acting on the first answer.
+    //
+    // Unlocking asks once, because there the vault itself is the check.
+    if root.mode == "create": HorizontalLayout {
+        alignment: center;
+        Field {
+            width: 360px;
+            password: true;
+            placeholder: "Type it again";
+            text <=> root.again;
+            invalid: root.mismatch;
+            accepted => { root.submit(); }
+        }
+    }
+
+    if root.mismatch: Text {
+        text: "The two do not match.";
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: center;
+    }
+
+    if root.problem != "": Text {
+        text: root.problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: center;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Btn {
+            text: root.busy
+                ? "Working…"
+                : root.mode == "create" ? "Create wallet" : "Unlock";
+            variant: "primary";
+            enabled: !root.busy && field.text != "" && root.matched;
+            clicked => { root.submit(); }
+        }
+    }
+
+    // Only offered before a wallet exists. Restoring into an existing one is a
+    // different act — adding a key — and belongs with the key list, not here.
+    if root.mode == "create": HorizontalLayout {
+        alignment: center;
+        Btn {
+            text: "I already have a wallet";
+            variant: "ghost";
+            clicked => { root.restore(); }
+        }
+    }
+
+    if root.mode == "create": Text {
+        text: "Pecu starts on testnet. Spending real coins stays off until you turn it on.";
+        font-size: Typo.caption;
+        color: Theme.text-tertiary;
+        horizontal-alignment: center;
+    }
+
+    // Read the field, hand it over, and blank the property IN THE SAME
+    // callback. Slint's `SharedString` is refcounted and cannot be wiped from
+    // Rust, so clearing it here is the only reach we have — the residual is
+    // documented on `pecu_protocol::Secret`.
+    function submit() {
+        if (field.text == "") { return; }
+        if (root.mode == "create") {
+            if (!root.matched) { return; }
+            Actions.create-wallet(field.text);
+        } else {
+            Actions.unlock(field.text);
+        }
+        field.text = "";
+        // The confirmation is a copy of the same secret and gets the same
+        // treatment. Blanked whatever the mode, since a stale value here would
+        // otherwise decide `matched` for the next wallet.
+        root.again = "";
+    }
+}
+
+// Restoring a wallet that already exists somewhere else.
+export component RestoreForm inherits VerticalLayout {
+    in property <bool> busy;
+    in property <string> problem;
+    callback cancelled();
+
+    property <bool> matched: pass.text == again.text;
+    property <bool> mismatch: again.text != "" && !root.matched;
+
+    spacing: Sp.s6;
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Restore your wallet";
+            font-size: Typo.title1;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 460px;
+                text: "Enter what you wrote down. Pecu checks a recovery phrase before it creates anything, so a typo costs you a second attempt rather than an empty wallet.";
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        kind := Segmented {
+            width: 420px;
+            // "Free text" is offered rather than hidden because Verus hashes a
+            // transparent phrase verbatim: some wallets really do hold a key
+            // made from a sentence, and refusing it would strand those funds.
+            options: ["Recovery phrase", "Free text", "Private key"];
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        material := Field {
+            width: 420px;
+            height: 92px;
+            multiline: true;
+            mono: true;
+            // An empty bordered box with the hint underneath it is a box that
+            // could be anything. The placeholder says what shape goes in.
+            placeholder: kind.index == 2
+                ? "U…"
+                : kind.index == 1
+                ? "The exact text you used"
+                : "abandon abandon abandon …";
+            invalid: root.problem != "";
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            width: 420px;
+            text: kind.index == 2
+                ? "A Verus private key, starting with U."
+                : kind.index == 1
+                ? "Hashed exactly as typed, including spacing. Nothing can check it for you."
+                : "12, 15, 18, 21 or 24 words, separated by spaces.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    // Under the box it is about.
+    //
+    // This sat below the passphrase field, two controls away from the phrase it
+    // describes — so "there is a typo in that phrase" appeared to be a
+    // complaint about the passphrase somebody had just chosen.
+    if root.problem != "": HorizontalLayout {
+        alignment: center;
+        Text {
+            width: 420px;
+            text: root.problem;
+            font-size: Typo.caption;
+            color: Theme.negative;
+            wrap: word-wrap;
+        }
+    }
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 420px;
+                text: "New passphrase for this machine";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            pass := Field {
+                width: 420px;
+                password: true;
+                placeholder: "A passphrase you will remember";
+            }
+        }
+        // The third place this wallet asked for an unrecoverable secret once
+        // and believed the answer.
+        //
+        // Restoring is the case where it stings most. Somebody arrives here
+        // holding a phrase precisely because something went wrong last time —
+        // and a typo in this box hands them a vault sealed with a string they
+        // have never seen, on top of the phrase they came to rescue.
+        HorizontalLayout {
+            alignment: center;
+            again := Field {
+                width: 420px;
+                password: true;
+                placeholder: "Type it again";
+                invalid: root.mismatch;
+                accepted => { root.submit(); }
+            }
+        }
+        if root.mismatch: HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 420px;
+                text: "The two do not match.";
+                font-size: Typo.caption;
+                color: Theme.negative;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s4;
+        Btn {
+            text: "Back";
+            variant: "ghost";
+            clicked => {
+                root.clear();
+                root.cancelled();
+            }
+        }
+        Btn {
+            text: root.busy ? "Working…" : "Restore wallet";
+            variant: "primary";
+            enabled: !root.busy && material.text != "" && pass.text != "" && root.matched;
+            clicked => { root.submit(); }
+        }
+    }
+
+    // Both secrets leave in one call and every field is blanked before it
+    // returns, same as every other secret-bearing path here.
+    function submit() {
+        if (material.text == "" || pass.text == "" || !root.matched) { return; }
+        Actions.restore-wallet(
+            kind.index == 2 ? "wif" : kind.index == 1 ? "text" : "phrase",
+            material.text,
+            pass.text,
+        );
+        root.clear();
+    }
+
+    function clear() {
+        material.text = "";
+        pass.text = "";
+        again.text = "";
+    }
+}
+
+export component Onboarding inherits Rectangle {
+    // "create" | "unlock"
+    in property <string> mode;
+    in property <string> wallet-name;
+    in property <bool> busy;
+    in property <string> problem;
+
+    // Which of the two forms is up. Pure navigation — there is no wallet state
+    // that corresponds to "is currently typing a phrase" — but `in-out` rather
+    // than private, for the same reason `screen` is: a snapshot has to be able
+    // to put the window into this state, and a state no test can reach is a
+    // state that quietly rots.
+    in-out property <bool> restoring: false;
+
+    background: Theme.bg-base;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Sp.s7;
+        padding: Sp.s8;
+
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                text: "◆";
+                font-family: Typo.mono;
+                font-size: 34px;
+                color: Theme.accent;
+            }
+        }
+
+        if !root.restoring: PassphraseForm {
+            mode: root.mode;
+            wallet-name: root.wallet-name;
+            busy: root.busy;
+            problem: root.problem;
+            restore => { root.restoring = true; }
+        }
+
+        if root.restoring: RestoreForm {
+            busy: root.busy;
+            problem: root.problem;
+            cancelled => { root.restoring = false; }
+        }
+    }
+}
+
+// The 24 words, laid out in a grid.
+//
+// Absolute positions computed from the row index rather than a `GridLayout`,
+// because the words arrive as a flat model and Slint's grid wants elements
+// declared per cell. The arithmetic is the entire trick.
+export component PhraseGrid inherits Rectangle {
+    property <float> columns: 4;
+    property <length> cell-height: 36px;
+
+    height: Math.ceil(SeedState.words.length / root.columns) * root.cell-height;
+
+    for word[i] in SeedState.words: Rectangle {
+        x: Math.mod(i, root.columns) * (root.width / root.columns);
+        y: Math.floor(i / root.columns) * root.cell-height;
+        width: root.width / root.columns;
+        height: root.cell-height;
+
+        HorizontalLayout {
+            padding-left: Sp.s3;
+            padding-right: Sp.s3;
+            spacing: Sp.s4;
+
+            Text {
+                text: word.index;
+                font-family: Typo.mono;
+                font-size: Typo.num-sm;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                width: 22px;
+                // Not announced. A screen reader reciting a recovery phrase in
+                // a shared office is a real failure mode, and the words must be
+                // read aloud only when someone asks for it — an opt-in button
+                // that is NOT built yet. Until it is, silence is the safe side.
+                accessible-role: AccessibleRole.none;
+            }
+
+            Text {
+                text: word.word;
+                font-family: Typo.mono;
+                font-size: Typo.num;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: AccessibleRole.none;
+            }
+        }
+    }
+}
+
+// One word of the confirmation step.
+export component WordCheck inherits VerticalLayout {
+    in property <int> position;
+    in property <bool> invalid: false;
+    in-out property <string> text <=> field.text;
+    callback accepted();
+
+    spacing: Sp.s3;
+
+    HorizontalLayout {
+        spacing: Sp.s2;
+        alignment: start;
+        Text {
+            text: "Word";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+        }
+        Text {
+            text: root.position;
+            font-family: Typo.mono;
+            font-size: Typo.caption;
+            color: Theme.text-primary;
+        }
+    }
+
+    field := Field {
+        invalid: root.invalid;
+        accepted => { root.accepted(); }
+    }
+}
+
+// ── The three steps of a backup ─────────────────────────────────────────────
+//
+// Each is its own component because each owns an input, and an input declared
+// inside an `if` cannot be reached from outside it. Splitting them is what lets
+// every field be read and blanked in the same callback — and it means leaving a
+// step destroys its fields rather than leaving them holding what was typed.
+
+// Prove who you are. Only on the way back to a backup that was interrupted:
+// a phrase just generated is already in front of the person who generated it.
+export component BackupPassphrase inherits VerticalLayout {
+    callback closed();
+    spacing: Sp.s6;
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Show your recovery phrase";
+            font-size: Typo.title1;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 460px;
+                text: "Enter your passphrase again. Pecu asks every time these words are shown, rather than once per session.";
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        field := Field {
+            width: 360px;
+            password: true;
+            placeholder: "Passphrase";
+            invalid: SeedState.problem != "";
+            accepted => { root.submit(); }
+        }
+    }
+
+    if SeedState.problem != "": Text {
+        text: SeedState.problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: center;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s4;
+        Btn {
+            text: "Not now";
+            variant: "ghost";
+            clicked => { root.closed(); }
+        }
+        Btn {
+            text: "Show phrase";
+            variant: "primary";
+            enabled: field.text != "" && !SeedState.busy;
+            clicked => { root.submit(); }
+        }
+    }
+
+    function submit() {
+        if (field.text == "") { return; }
+        Actions.reveal-backup(field.text);
+        field.text = "";
+    }
+}
+
+// Read the words.
+export component BackupPhrase inherits VerticalLayout {
+    callback closed();
+    callback written-down();
+
+    // Whether the words have ever been on screen in this sitting.
+    //
+    // "I've written it down" used to be enabled from the moment the screen
+    // appeared, so the whole step could be cleared with one click by somebody
+    // who never saw a single word — and the sentence on the button is a claim
+    // they would be making about themselves. The verify step behind it does
+    // catch the lie, but a primary button that invites the wrong answer is
+    // still a primary button that invites the wrong answer.
+    //
+    // Not persisted, and deliberately: coming back to this screen means being
+    // asked to look again, which is the correct answer to "have you got these
+    // written down" when the wallet cannot know.
+    property <bool> seen: false;
+
+    spacing: Sp.s6;
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Write down your recovery phrase";
+            font-size: Typo.title1;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        // Wrapped by an explicit width rather than `max-width`: inside a
+        // vertical layout the text is handed the full column and wraps against
+        // that, so a max-width alone let this run the width of the window.
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                width: 520px;
+                text: "These words are the only way to restore this wallet, and anyone who reads them can spend your coins.";
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Card {
+            width: 660px;
+            VerticalLayout {
+                padding: Sp.s5;
+                PhraseGrid {}
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            height: 36px;
+            width: hold-label.preferred-width + Sp.s7 * 2;
+            border-radius: R.md;
+            border-width: 1px;
+            border-color: hold.pressed ? Theme.accent : Theme.border-default;
+            background: hold.pressed ? Theme.accent-soft : Theme.bg-surface;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+            animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+            hold-label := Text {
+                text: hold.pressed ? "Release to hide" : "Hold to reveal";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            // Press asks core for the words, release throws them away. This
+            // watches `pressed` rather than handling a click because `pressed`
+            // also goes false when the pointer is released outside the button
+            // or the gesture is cancelled — and every one of those has to
+            // conceal the phrase.
+            hold := TouchArea {
+                mouse-cursor: pointer;
+                changed pressed => {
+                    if (hold.pressed) {
+                        root.seen = true;
+                        Actions.reveal-phrase();
+                    } else {
+                        Actions.hide-phrase();
+                    }
+                }
+            }
+
+            accessible-role: AccessibleRole.button;
+            accessible-label: "Hold to reveal the recovery phrase";
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            width: 560px;
+            text: "Write them on paper. There is no Copy button and no Save to file, on purpose — those are the two ways a phrase usually ends up somewhere it can be read by something else.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s4;
+        Btn {
+            text: "Later";
+            variant: "ghost";
+            clicked => { root.closed(); }
+        }
+        Btn {
+            text: "I've written it down";
+            variant: "primary";
+            enabled: root.seen;
+            clicked => { root.written-down(); }
+        }
+    }
+
+    if !root.seen: HorizontalLayout {
+        alignment: center;
+        Text {
+            text: "Hold the button above to see the words first.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+        }
+    }
+}
+
+// Type three of them back.
+export component BackupVerify inherits VerticalLayout {
+    callback back();
+    spacing: Sp.s6;
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Check your copy";
+            font-size: Typo.title1;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Type three of the words back, from what you wrote down.";
+            font-size: Typo.body;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s5;
+
+        first := WordCheck {
+            width: 180px;
+            position: SeedState.challenge[0];
+            invalid: SeedState.problem != "";
+            accepted => { root.submit(); }
+        }
+        second := WordCheck {
+            width: 180px;
+            position: SeedState.challenge[1];
+            invalid: SeedState.problem != "";
+            accepted => { root.submit(); }
+        }
+        third := WordCheck {
+            width: 180px;
+            position: SeedState.challenge[2];
+            invalid: SeedState.problem != "";
+            accepted => { root.submit(); }
+        }
+    }
+
+    if SeedState.problem != "": Text {
+        // Which word was wrong is never said. Saying it would turn this screen
+        // into a checker that could be fed guesses one position at a time.
+        text: SeedState.problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: center;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s4;
+        Btn {
+            text: "Show the words again";
+            variant: "ghost";
+            clicked => { root.back(); }
+        }
+        Btn {
+            text: "Confirm";
+            variant: "primary";
+            enabled: first.text != "" && second.text != "" && third.text != "";
+            clicked => { root.submit(); }
+        }
+    }
+
+    // Hand the words over and blank the fields in the same callback, exactly as
+    // the passphrase inputs do.
+    function submit() {
+        if (first.text == "" || second.text == "" || third.text == "") { return; }
+        Actions.confirm-phrase(first.text, second.text, third.text);
+        first.text = "";
+        second.text = "";
+        third.text = "";
+    }
+}
+
+// Showing a recovery phrase — the highest-consequence screen in the wallet.
+export component BackupScreen inherits Rectangle {
+    background: Theme.bg-base;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Sp.s6;
+        padding: Sp.s8;
+        padding-left: Sp.s11;
+        padding-right: Sp.s11;
+
+        if SeedState.step == "passphrase": BackupPassphrase {
+            closed => { root.close(); }
+        }
+
+        if SeedState.step == "phrase": BackupPhrase {
+            closed => { root.close(); }
+            written-down => {
+                // Conceal before moving on: the next screen has no business
+                // having the words sitting behind it.
+                Actions.hide-phrase();
+                SeedState.problem = "";
+                SeedState.step = "verify";
+            }
+        }
+
+        if SeedState.step == "verify" && SeedState.challenge.length == 3: BackupVerify {
+            back => {
+                SeedState.problem = "";
+                SeedState.step = "phrase";
+            }
+        }
+    }
+
+    // Leaving without finishing. The key keeps its "not backed up" flag, so the
+    // offer comes back — this abandons the attempt, it does not decline it
+    // permanently.
+    function close() {
+        SeedState.problem = "";
+        SeedState.step = "";
+        Actions.cancel-backup();
+    }
+}
+
+// ── The window ──────────────────────────────────────────────────────────────

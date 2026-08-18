@@ -1,0 +1,198 @@
+// Being paid: an address, a QR, and the names that also reach this wallet.
+
+import { R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, Eyebrow, StatusPill } from "../components/base.slint";
+import { IdentityState, NetworkState, WalletState } from "../vm/state.slint";
+import { KeyPicker } from "../components/form.slint";
+
+export component ReceiveScreen inherits VerticalLayout {
+    spacing: Sp.s7;
+
+    HorizontalLayout {
+        alignment: center;
+        KeyPicker {}
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Sp.s7;
+
+        Card {
+            width: 420px;
+
+            VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                // The QR sits on WHITE even in the dark theme. Inverted codes
+                // fail on a fair number of scanners, and this happens to be
+                // exactly the Apple Wallet look.
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: WalletState.qr-side + Sp.s6 * 2;
+                        height: self.width;
+                        background: #FFFFFF;
+                        border-radius: R.lg;
+
+                        if WalletState.address != "": Image {
+                            source: WalletState.qr;
+                            width: WalletState.qr-side;
+                            height: WalletState.qr-side;
+                            // Rules 4 and 5 from `src/qr.rs`: any residual
+                            // scaling is nearest-neighbour, and the image is
+                            // never stretched by a layout.
+                            image-rendering: pixelated;
+                            image-fit: contain;
+                        }
+
+                        if WalletState.address == "": Text {
+                            text: "No address yet";
+                            font-size: Typo.caption;
+                            color: #6E747E;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+
+                    Eyebrow { text: "YOUR " + WalletState.ticker + " ADDRESS"; }
+
+                    // Selectable, monospace, and wrapping mid-string: an
+                    // address is read character by character when it is checked
+                    // against something, and a proportional font makes that
+                    // needlessly hard.
+                    // Set at the size of a thing that gets checked, not at the
+                    // size of a caption.
+                    //
+                    // This is what somebody reads character by character against
+                    // whatever the sender is showing them, and it was two points
+                    // smaller than the balance's currency label. It wraps to two
+                    // lines here, which is the right trade: an address that
+                    // fits on one line and cannot be read is not a saving.
+                    //
+                    // Not grouped into blocks of four, tempting as that is —
+                    // Copy works by selecting this element's own text, since
+                    // Slint gives an application no clipboard of its own, so
+                    // spaces on screen would be spaces on the clipboard.
+                    address := TextInput {
+                        text: WalletState.address;
+                        read-only: true;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-lg;
+                        color: Theme.text-primary;
+                        wrap: char-wrap;
+                        // Announced in four-character groups, because a screen
+                        // reader saying raw base58 at speaking speed produces
+                        // something nobody can transcribe or check.
+                        accessible-role: AccessibleRole.text;
+                        accessible-label: "Receive address";
+                        accessible-value: WalletState.address-spoken;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: "Copy address";
+                        variant: "primary";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            // The copy happens in Slint, not in Rust: Slint 1.17
+                            // exposes no clipboard API to an application, only
+                            // to a platform back-end. `TextInput` has one, so
+                            // the address goes out through the element that
+                            // already holds it.
+                            address.select-all();
+                            address.copy();
+                        }
+                    }
+                }
+
+                // The single most useful sentence on this screen, and it used to
+                // be drawn as the least: centred, grey, caption-sized, below the
+                // fold of the eye. A comment calling something the most
+                // important thing here while the styling says otherwise is the
+                // styling winning.
+                //
+                // Sending mainnet coins to a testnet address loses them, and the
+                // two kinds of address look identical. So it gets a surface,
+                // left alignment, and the chain's name in the weight of a fact.
+                Rectangle {
+                    background: NetworkState.effective == ""
+                        ? Theme.warning-soft
+                        : Theme.bg-inset;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s4;
+                        Text {
+                            text: NetworkState.effective == ""
+                                ? "No node has confirmed which chain this is — check before sharing it."
+                                : "This address is on " + NetworkState.effective
+                                  + ". Coins from any other chain sent here are lost.";
+                            font-size: Typo.caption;
+                            font-weight: Typo.w-medium;
+                            color: NetworkState.effective == ""
+                                ? Theme.warning
+                                : Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // The other way to be paid.
+        //
+        // A VerusID receives, and a name is the one identifier on this screen
+        // that a person can check by reading it. Thirty-four base58 characters
+        // are compared by eye and got wrong; `robert.VRSCTEST@` is not.
+        //
+        // Only shown when this wallet actually controls a name — an empty
+        // panel explaining a feature nobody has is an advertisement, and this
+        // screen is not the place for one.
+        if IdentityState.rows.length > 0: VerticalLayout {
+            spacing: Sp.s4;
+            width: 320px;
+            alignment: start;
+
+            Eyebrow { text: @tr("OR BY NAME"); }
+
+            Card {
+                VerticalLayout {
+                    padding: Sp.s5;
+                    spacing: Sp.s4;
+
+                    Text {
+                        text: @tr("These names reach this wallet too. A name can be read back and checked; an address is thirty-four characters somebody compares by eye.");
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+
+                    for row in IdentityState.rows: VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: row.name;
+                            font-family: Typo.mono;
+                            font-size: Typo.body;
+                            font-weight: Typo.w-bold;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                        }
+                        // The status matters here in a way it does not on the
+                        // profile screen: a revoked or locked name is one that
+                        // should not be handed to somebody as a way to pay.
+                        StatusPill {
+                            state: row.tone;
+                            text: row.status;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}

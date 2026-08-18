@@ -1,0 +1,554 @@
+// Paying somebody: the form, and the review that is read back from a signed
+// transaction rather than from what was typed.
+
+import { R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, EmptyState, Eyebrow, ListRow, Money } from "../components/base.slint";
+import { Actions, SendState, WalletState } from "../vm/state.slint";
+import { Field, KeyPicker, QuoteLine } from "../components/form.slint";
+
+export component SendForm inherits HorizontalLayout {
+    spacing: Sp.s7;
+
+    // ── Who this wallet has paid ────────────────────────────────────────
+    //
+    // The design calls this Contacts. It is not an address book somebody
+    // fills in — it is who this wallet has actually paid, which the core
+    // records once a node has accepted a payment. That makes it the one check
+    // a checksum cannot do: a mistyped address that happens to be valid looks
+    // exactly like a correct one, and "you have paid this before" is the only
+    // thing the wallet can say about it.
+    VerticalLayout {
+        spacing: Sp.s4;
+        width: 27%;
+
+        Eyebrow { text: @tr("PAID BEFORE"); }
+
+        Card {
+            VerticalLayout {
+                padding: Sp.s3;
+
+                if SendState.known.length == 0: Rectangle {
+                    height: 108px;
+                    EmptyState {
+                        glyph: "○";
+                        title: @tr("Nobody yet");
+                        body: @tr("Addresses appear here once a payment to them has been accepted.");
+                    }
+                }
+
+                for row in SendState.known: ListRow {
+                    title: row.label == "" ? row.address : row.label;
+                    title-mono: row.label == "";
+                    subtitle: row.summary;
+                    interactive: true;
+                    clicked => {
+                        SendState.to-draft = row.address;
+                        Actions.validate-draft(SendState.to-draft, SendState.amount-draft);
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+
+    Card {
+        horizontal-stretch: 1;
+        VerticalLayout {
+            padding: Sp.s8;
+            spacing: Sp.s6;
+
+            // Which key is paying. Named on the form rather than only in the
+            // review, because "where is this coming from" is a question about
+            // the payment somebody is composing, not about the one they are
+            // being asked to confirm.
+            VerticalLayout {
+                spacing: Sp.s3;
+                HorizontalLayout {
+                    Text {
+                        text: "From";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: WalletState.active-key;
+                        font-size: Typo.caption;
+                        font-weight: Typo.w-medium;
+                        color: Theme.text-primary;
+                    }
+                }
+                Text {
+                    text: WalletState.address;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    overflow: elide;
+                }
+                KeyPicker {}
+            }
+
+            Rectangle { height: 1px; background: Theme.border-subtle; }
+
+            VerticalLayout {
+                spacing: Sp.s3;
+                Text {
+                    text: "Recipient";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                }
+                to := Field {
+                    mono: true;
+                    // The two shapes this accepts, so nobody has to find out by
+                    // being refused. Not an example address anybody could copy:
+                    // the prefix and the ellipsis are the whole point. The
+                    // trailing `@` is not decoration — it is what a VerusID
+                    // actually ends with.
+                    //
+                    // The word "Address" is there because "R… or name@" on its
+                    // own reads as a placeholder that got clipped — a leading
+                    // ellipsis is what truncation looks like, and a field that
+                    // appears broken before it has been typed in is not a field
+                    // anybody trusts.
+                    placeholder: "Address (R…) or name@";
+                    text <=> SendState.to-draft;
+                    invalid: SendState.to-draft != "" && !SendState.to-valid;
+                    edited => { root.check(); }
+                }
+                if SendState.to-note != "": Text {
+                    text: SendState.to-note;
+                    font-size: Typo.caption;
+                    color: SendState.to-valid ? Theme.text-tertiary : Theme.negative;
+                    wrap: word-wrap;
+                }
+            }
+
+            VerticalLayout {
+                spacing: Sp.s3;
+                HorizontalLayout {
+                    Text {
+                        text: "Amount";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: WalletState.spendable + " spendable";
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-tertiary;
+                    }
+                }
+                Field {
+                    mono: true;
+                    placeholder: "0.0000 0000";
+                    text <=> SendState.amount-draft;
+                    invalid: SendState.amount-draft != "" && !SendState.amount-valid;
+                    edited => { root.check(); }
+                    accepted => { root.review(); }
+                }
+                if SendState.amount-note != "": Text {
+                    text: SendState.amount-note;
+                    font-size: Typo.caption;
+                    color: Theme.negative;
+                    wrap: word-wrap;
+                }
+            }
+
+            // No "Max" button, deliberately, and the design asks for one.
+            //
+            // The fee is not known until the builder has chosen coins, so a Max
+            // that filled in the whole spendable balance would produce an amount
+            // that cannot be built — a button that is wrong exactly when
+            // somebody uses it. Keeping it out is the same decision as not
+            // printing a fee on this step: see the panel beside this form.
+            HorizontalLayout {
+                alignment: end;
+                Btn {
+                    text: SendState.busy ? @tr("Building…") : @tr("Review payment");
+                    variant: "primary";
+                    enabled: SendState.ready && !SendState.busy;
+                    clicked => { root.review(); }
+                }
+            }
+        }
+    }
+
+    // ── What is known before anything is built ──────────────────────────
+    //
+    // The design puts Fee, Time and Total here, on the form. **This wallet
+    // cannot know any of them yet.** The fee depends on which coins the builder
+    // picks, which happens when the transaction is built — that is the whole
+    // reason there is a review step, and the review reads its figures back out
+    // of something already signed rather than out of what was typed.
+    //
+    // So this panel says what is true now, and says where the rest comes from.
+    // A quoted fee that turned out to be a different fee would undo the one
+    // thing the review is for.
+    VerticalLayout {
+        spacing: Sp.s4;
+        width: 27%;
+
+        Eyebrow { text: @tr("THIS PAYMENT"); }
+
+        Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s4;
+
+                QuoteLine {
+                    label: @tr("Paying from");
+                    value: WalletState.active-key;
+                }
+                QuoteLine {
+                    label: @tr("Spendable");
+                    value: WalletState.spendable;
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                Text {
+                    text: @tr("The fee and the total appear on the next step. They are read back from the signed transaction, not estimated here.");
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // What the core made of the recipient. Worth its own place: it is the
+        // only thing on this screen that can catch an address which is valid
+        // and still wrong.
+        if SendState.to-note != "": Card {
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                Eyebrow {
+                    text: SendState.to-valid ? @tr("RECIPIENT") : @tr("PROBLEM");
+                    color: SendState.to-valid ? Theme.text-tertiary : Theme.negative;
+                }
+                Text {
+                    text: SendState.to-note;
+                    font-size: Typo.caption;
+                    color: SendState.to-valid ? Theme.text-secondary : Theme.negative;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+
+    function check() {
+        Actions.validate-draft(SendState.to-draft, SendState.amount-draft);
+    }
+
+    function review() {
+        if (!SendState.ready) { return; }
+        Actions.prepare-send(SendState.to-draft, SendState.amount-draft);
+    }
+}
+
+export component SendScreen inherits VerticalLayout {
+    spacing: Sp.s7;
+
+    if SendState.step == "form": SendForm {}
+
+    // ── Step 2: what was actually built ─────────────────────────────────
+    if SendState.step == "review": HorizontalLayout {
+        alignment: center;
+        Card {
+            width: 560px;
+            VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                VerticalLayout {
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Check this payment";
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        // Says exactly what it is, because that is what makes
+                        // this step worth reading.
+                        text: "Read back from the transaction that was signed — not from what you typed.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Above the outputs, because it is about the one line down
+                // there that matters and somebody should read it first.
+                if SendState.first-time-recipient: Rectangle {
+                    background: Theme.warning-soft;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s2;
+                        Text {
+                            text: "You have not paid this address before";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.warning;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            // The one thing a wallet can check that a checksum
+                            // cannot. A mistyped address that happens to be
+                            // valid looks exactly like a correct one, and coins
+                            // sent to it are gone.
+                            text: "Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // What was asked for, above what was built. A VerusID is a
+                // question put to a node; this is the question, and the outputs
+                // below are the answer the transaction actually pays.
+                if SendState.recipient-name != "": VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: "ADDRESSED TO"; }
+                    Text {
+                        text: SendState.recipient-name;
+                        font-family: Typo.mono;
+                        font-size: Typo.num;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "Resolved by the node this wallet is connected to. The address it resolved to is below.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Which of this wallet's addresses is paying.
+                //
+                // Also computed and also unread until now. A wallet with more
+                // than one key can build a payment from any of them, the form
+                // has a key picker at the top of it, and the review — the
+                // screen whose whole job is "check this before it is
+                // irreversible" — did not say which one the transaction it
+                // signed actually spends from.
+                if SendState.from-address != "": VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: "PAID FROM"; }
+                    Text {
+                        text: SendState.from-address;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-secondary;
+                        wrap: char-wrap;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: "OUTPUTS"; }
+
+                    // Change is drawn quieter than the payment, and that is a
+                    // safety decision rather than a stylistic one.
+                    //
+                    // Both rows used to render identically: same size, same
+                    // colour, same weight. But only one of them is the question
+                    // being asked. Somebody checking an address under time
+                    // pressure reads the first mono line they land on, and if
+                    // the change output is above the payment — which it can be,
+                    // since the order is the transaction's, not ours — they
+                    // check the wrong one and approve.
+                    //
+                    // Change is still shown in full. Hiding it would mean the
+                    // amounts on screen no longer add up to what leaves the
+                    // wallet, and a review somebody cannot reconcile is a review
+                    // they stop reading.
+                    for output in SendState.outputs: HorizontalLayout {
+                        spacing: Sp.s5;
+                        padding-top: Sp.s3;
+                        padding-bottom: Sp.s3;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text {
+                                text: output.address == "" ? "Unknown destination" : output.address;
+                                font-family: Typo.mono;
+                                font-size: Typo.num-sm;
+                                color: output.address == "" ? Theme.negative
+                                    : output.is-change ? Theme.text-tertiary
+                                    : Theme.text-primary;
+                                wrap: char-wrap;
+                            }
+                            Text {
+                                // Not "Payment · change". Change is not a
+                                // payment to anybody; it is the part that never
+                                // left.
+                                text: output.is-change
+                                    ? "Change · back to your wallet"
+                                    : output.kind;
+                                font-size: Typo.caption;
+                                color: output.is-change ? Theme.text-disabled : Theme.text-tertiary;
+                            }
+                        }
+
+                        Money {
+                            amount: output.amount;
+                            show-currency: false;
+                            size: output.is-change ? Typo.num-sm : Typo.num;
+                            tone: output.is-change ? "muted" : "neutral";
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-subtle;
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    HorizontalLayout {
+                        Text {
+                            text: "Fee";
+                            font-size: Typo.body;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 1;
+                        }
+                        Money { amount: SendState.fee; currency: WalletState.ticker; size: Typo.num; }
+                    }
+                    HorizontalLayout {
+                        Text {
+                            text: "Leaving your wallet";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.text-primary;
+                            horizontal-stretch: 1;
+                        }
+                        Money { amount: SendState.total; currency: WalletState.ticker; size: Typo.num-lg; }
+                    }
+                    // What is left afterwards.
+                    //
+                    // The core has computed this since the review screen was
+                    // written — `balance_after_display`, carried through the
+                    // protocol and set on this global — and **nothing read it**.
+                    // It is the question somebody actually has after "how much
+                    // is leaving", and the wallet already knew the answer.
+                    if SendState.balance-after != "": HorizontalLayout {
+                        Text {
+                            text: "Left afterwards";
+                            font-size: Typo.caption;
+                            color: Theme.text-tertiary;
+                            horizontal-stretch: 1;
+                        }
+                        Money {
+                            amount: SendState.balance-after;
+                            currency: WalletState.ticker;
+                            size: Typo.num-sm;
+                            tone: "muted";
+                        }
+                    }
+                }
+
+                if SendState.problem != "": Text {
+                    text: SendState.problem;
+                    font-size: Typo.caption;
+                    color: Theme.negative;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: "Back";
+                        variant: "ghost";
+                        clicked => {
+                            Actions.cancel-send(SendState.ticket);
+                            SendState.problem = "";
+                            SendState.step = "form";
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        text: SendState.busy ? "Sending…" : "Send now";
+                        variant: "primary";
+                        enabled: !SendState.busy;
+                        clicked => { Actions.confirm-send(SendState.ticket); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Step 3: what happened ───────────────────────────────────────────
+    if SendState.step == "sent" || SendState.step == "uncertain": HorizontalLayout {
+        alignment: center;
+        Card {
+            width: 520px;
+            VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                Text {
+                    text: SendState.step == "sent" ? "Payment sent" : "We could not confirm your payment was sent";
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-bold;
+                    color: SendState.step == "sent" ? Theme.positive : Theme.warning;
+                    wrap: word-wrap;
+                }
+
+                // The most important paragraph in the application. Someone who
+                // resends here can pay twice.
+                if SendState.step == "uncertain": Text {
+                    text: "It may already be on its way. Pecu has saved the exact transaction and can check on it. Do not send it again — that could send the money twice.";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: "TRANSACTION ID"; }
+                    txid := TextInput {
+                        text: SendState.txid;
+                        read-only: true;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-primary;
+                        wrap: char-wrap;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: "Copy id";
+                        clicked => {
+                            txid.select-all();
+                            txid.copy();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        text: "Done";
+                        variant: "primary";
+                        clicked => {
+                            SendState.problem = "";
+                            SendState.step = "form";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+}

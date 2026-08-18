@@ -1,0 +1,884 @@
+// The data the UI is given.
+//
+// One global per state slice, mirroring the `Event` enum on the Rust side.
+// Nothing here is a handle or a key — every value is a finished view model, and
+// every amount is a pre-formatted string (see `structs.slint` for why money
+// cannot be an `int` or a `float` in Slint).
+//
+// Split out of `app.slint` when that file passed nine thousand lines and the
+// Slint code generator became the slowest part of every build. Nothing moved
+// but the text.
+
+import { ActivityRow, AssetRow, ContentEntry, CurrencyField, CurrencyPick, CurrencyProblem, CurrencyRow, CurrencySlice, EligibleIdentity, FlowStep, IdentityRow, KeyRow, KnownAddressRow, MarketRow, NodeRow, PendingRow, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SeedWord, Stat, ToastRow, Venue } from "structs.slint";
+
+export global WalletState {
+    in property <bool> exists: false;
+    in property <bool> locked: true;
+    in property <string> name: "";
+    // The ACTIVE key's address — what Receive shows and what Send pays from.
+    in property <string> address: "";
+    // The same address in four-character groups, for `accessible-value` only.
+    // Never rendered: a space somebody copies is an address that fails its
+    // checksum. See `pecu_ui::spoken`.
+    in property <string> address-spoken: "";
+    // Every key in the vault. Readable while locked, because an address is
+    // public: that is what lets someone be paid without unlocking anything.
+    in property <[KeyRow]> keys: [];
+    in property <string> active-key: "";
+    // Which key the rename form is open on, and what is being typed into it.
+    // Held here rather than inside the row so that only one row can be in edit
+    // at a time, and so Rust can close the form when the rename actually lands
+    // — but not when it is refused, which would take away the name someone was
+    // halfway through fixing.
+    in-out property <string> renaming: "";
+    in-out property <string> rename-draft: "";
+    in-out property <string> new-key-draft: "";
+    // Why the last key operation was refused, shown on the keys section.
+    in-out property <string> key-problem: "";
+    in property <bool> loading: true;
+    in property <bool> busy: false;
+    /// Set when unlocking or creating failed, cleared on the next attempt.
+    in property <string> problem: "";
+
+    // What to write next to an amount. From the node's own chain name, never
+    // a default: a screen that labels testnet coins "VRSC" has stopped being
+    // able to tell you which money you are looking at.
+    in property <string> ticker: "VRSC";
+    in property <string> total: "0.0000 0000";
+    in property <string> spendable: "0.0000 0000";
+    in property <string> immature: "0.0000 0000";
+    in property <string> pending: "0.0000 0000";
+    // Only shown when it differs from the total — a wallet with everything
+    // spendable stays calm and says nothing extra.
+    in property <bool> has-breakdown: false;
+    in property <string> matures-in: "";
+
+    in property <[AssetRow]> assets: [];
+    // The dashboard's short list, and the whole thing for the Activity screen.
+    // Two models rather than one sliced, because Slint's `for` has no window.
+    in property <[ActivityRow]> activity: [];
+    in property <[ActivityRow]> history: [];
+    // The scan has reached the start of the chain. Until it has, there may be
+    // older transactions nobody has looked for yet — which is not the same as
+    // there being none.
+    in property <bool> history-complete: false;
+    in property <bool> loading-history: false;
+    // The chain tip, so a row can work out its own confirmations. A new block
+    // updates ONE integer and every visible row recomputes itself — no model
+    // mutation, no notification storm.
+    in property <int> tip-height: 0;
+    // Arriving: seen in the mempool, not yet mined.
+    in property <string> incoming: "";
+    // The figures are from an earlier read and the last one did not finish.
+    // Distinct from "loading": these numbers were true, just not now.
+    in property <bool> stale: false;
+
+    /// Minutes of inactivity before the wallet locks itself; 0 means never.
+    in property <int> auto-lock: 5;
+    /// Where the wallet file is, for the About section.
+    in property <string> vault-path: "";
+
+    /// The receive address, as a QR code. Rendered in Rust because the module
+    /// size has to be a whole number of PHYSICAL pixels — see `src/qr.rs`.
+    in property <image> qr;
+    /// The logical size to draw it at, so one buffer pixel is one device pixel.
+    in property <length> qr-side: 240px;
+
+    /// The label of a key whose recovery phrase nobody has written down, or
+    /// empty. Persisted in the vault file, so this survives a restart — a
+    /// wallet created and then closed mid-backup still finds its way back to
+    /// its own words.
+    in property <string> backup-key: "";
+}
+
+// The one screen that shows a recovery phrase.
+//
+// The words are only ever in `words` while the reveal button is physically
+// held down. The rest of the time Rust has overwritten every row with bullets,
+// which is why concealing is not the same as emptying the model.
+export global SeedState {
+    // "" (closed) | "passphrase" | "phrase" | "verify"
+    //
+    // The UI owns this: the screen is a place the user is, not a fact about the
+    // wallet. Rust opens it (a phrase exists to show) and closes it (the backup
+    // was recorded); everything in between is navigation.
+    in-out property <string> step: "";
+    in property <[SeedWord]> words: [];
+    /// 1-based positions the confirmation step asks for. Chosen in core — a
+    /// screen that picked its own could pick the same three every time.
+    in property <[int]> challenge: [];
+    in-out property <string> problem: "";
+    in property <bool> busy: false;
+}
+
+// Sending.
+//
+// Nothing here is secret — an address and an amount are public the moment the
+// transaction is. What is deliberately absent is the signed transaction: the UI
+// holds a ticket number, and the bytes stay in the core. A UI that held them
+// would be a UI that could be made to send them.
+export global SendState {
+    // "form" | "review" | "sent" | "uncertain"
+    in-out property <string> step: "form";
+    in property <bool> busy: false;
+
+    // What is in the two boxes.
+    //
+    // Held here rather than inside the form, for the reason `restoring` gives
+    // itself on the onboarding screen: a state no test can reach is a state
+    // that quietly rots. These were local element text, so **no fixture could
+    // put a recipient or an amount on the send screen** — which is why the only
+    // reference image of this form is an empty one, and why the note under the
+    // amount field had never been photographed at any length.
+    //
+    // The interface's own drafts, not the core's: nothing is sent from here
+    // until Review. The wallet already keeps `rename-draft` and `lookup-draft`
+    // the same way, and for the second half of the same reason — Rust can clear
+    // them, on success only.
+    in-out property <string> to-draft: "";
+    in-out property <string> amount-draft: "";
+
+    // Verdicts from core, which owns address parsing and the fee rules.
+    in property <bool> to-valid: false;
+    in property <string> to-note: "";
+    in property <bool> amount-valid: false;
+    in property <string> amount-note: "";
+    in property <bool> ready: false;
+
+    // The review, decoded from the signed transaction.
+    in property <int> ticket: 0;
+    in property <[ReviewOutput]> outputs: [];
+    in property <string> amount: "";
+    in property <string> fee: "";
+    in property <string> total: "";
+    in property <string> change: "";
+    in property <string> balance-after: "";
+    in property <string> from-address: "";
+    // This wallet has never successfully paid the recipient before. Worth
+    // saying: a mistyped address that happens to be valid looks exactly like a
+    // correct one, and "you have paid this before" is the only thing the wallet
+    // can offer that a checksum cannot.
+    in property <bool> first-time-recipient: false;
+    // The VerusID name this was addressed to, when it was addressed by name.
+    // Empty for an address typed out.
+    //
+    // Shown beside the outputs, never instead of them. Somebody who typed
+    // `meineid@` has no way to check an i-address they have never seen — and
+    // somebody shown only the name is being asked to trust a lookup nobody told
+    // them happened. Both halves, or neither is worth anything.
+    in property <string> recipient-name: "";
+
+    // Payments handed over whose outcome is unknown. Survives a restart,
+    // because the bytes do.
+    in property <[PendingRow]> pending-rows: [];
+
+    // Who this wallet has paid. On the settings screen, and consulted by the
+    // recipient field — a name is only worth having where somebody is checking
+    // an address they just pasted.
+    in property <[KnownAddressRow]> known: [];
+    // Which address the naming form is open on, and what is being typed.
+    in-out property <string> naming: "";
+    in-out property <string> name-draft: "";
+
+    // The outcome.
+    in property <string> txid: "";
+    in-out property <string> problem: "";
+}
+
+// One transaction, opened.
+// The VerusIDs screen.
+//
+// One list, not two. An identity somebody looked up sits beside their own, and
+// `mine` on the row is what tells them apart — two lists would let the same
+// identity appear twice and answer differently.
+// The currencies this wallet's identities define.
+//
+// Two lists from one walk, and they are the two halves of the same question:
+// every identity either defines a currency or could still define one. They
+// arrive in a single event so the picker can never offer a name the list above
+// it has just shown as taken.
+export global CurrencyState {
+    in property <[CurrencyRow]> rows: [];
+    in property <[EligibleIdentity]> eligible: [];
+    in property <bool> busy: false;
+
+    // ── Configuring one ─────────────────────────────────────────────────
+    // Whether the form is open. Purely the interface's business until somebody
+    // presses the button — same shape as `IdentityState.claiming`, and here for
+    // the same reason: the form's Cancel and the window's Escape both reach it.
+    in-out property <bool> defining: false;
+    // Which question the form is on:
+    // "kind" → "under" → ("authority" when a name is being claimed) → "setup"
+    // → "review". Same shape as `SendState.step` and `IdentityState.claim-step`,
+    // and reset with `defining` for the same reason: a form reopened later must
+    // not start halfway through somebody else's answers.
+    in-out property <string> form-step: "kind";
+
+    // The draft, held here so a fixture can put a half-configured currency on
+    // screen. Element text cannot be reached from outside an `if`, and a state
+    // no test can reach is a state that quietly rots.
+    in-out property <string> kind: "token";
+    in-out property <string> identity: "";
+    // Its name, for the collapsed row. Carried beside the address rather than
+    // looked up again: the picker already had it, and searching the list for a
+    // name the wallet is holding is a second source of the same fact.
+    in-out property <string> identity-name: "";
+    in-out property <bool> mintable: false;
+    in-out property <string> start-delay: "20";
+    // The rows are edited through `Actions`, because adding and removing one
+    // changes the length of a model and Slint cannot do that from a binding.
+    in-out property <[ReserveEntry]> reserve-rows: [];
+    in-out property <[PreallocEntry]> supply-rows: [];
+
+    // ── Choosing a reserve ──────────────────────────────────────────────
+    // Which reserve row the picker is open for. `-1` is closed — one field
+    // rather than a flag and an index, the same rule `TxState.txid` follows, so
+    // the overlay and the row it will write to cannot disagree.
+    in-out property <int> picking-reserve: -1;
+    in-out property <string> choices-query: "";
+    // What the chain's list holds that matches. Built in core: Slint cannot
+    // filter a model in a binding, and what counts as a match is a rule worth a
+    // test rather than a binding nobody can check.
+    in property <[CurrencyPick]> choices: [];
+    // How many more matched than are carried. A list that truncated silently
+    // would read as "that is all there is" while hiding the one being looked
+    // for.
+    in property <int> choices-more: 0;
+    in property <bool> choices-busy: false;
+    in property <string> choices-problem: "";
+
+    // What core makes of it. Everything below is computed there — the bars, the
+    // captions beside them and the preview are three renderings of one
+    // arithmetic, and three places dividing the same totals will one day
+    // disagree in front of somebody spending two hundred coins.
+    in property <[CurrencyProblem]> problems: [];
+    in property <bool> ready: false;
+    in property <[CurrencySlice]> slices: [];
+    in property <string> weights-total: "";
+    in property <string> supply-total: "";
+    in property <[CurrencySlice]> supply-slices: [];
+    in property <string> start-block: "";
+    in property <string> fee: "";
+    in property <[CurrencyField]> preview: [];
+    // Where the launch has got to. Four steps, and two of them cost money.
+    in property <[FlowStep]> steps: [];
+
+    // ── The last moment before it is irreversible ───────────────────────
+    // A ticket of 0 means there is no review open. One field, not two — the
+    // same rule the identity sheet follows, so the two cannot disagree.
+    in property <int> launch-ticket: 0;
+    in property <string> launch-name: "";
+    in property <string> launch-description: "";
+    in property <string> launch-fee: "";
+    in property <string> launch-deposit: "";
+    in property <string> launch-burned: "";
+    // The height the currency begins at, off the signed bytes rather than off
+    // the form. A launch is not instant and this is the last screen that can
+    // say when it starts.
+    in property <string> launch-start-block: "";
+    in property <bool> launch-busy: false;
+    // How many of `problems` stop the launch. Counted in the bridge because
+    // Slint cannot filter a model in a binding, and the pinned bar needs the
+    // number rather than the list.
+    in property <int> blocking-count: 0;
+
+    // ── A currency waiting for its name ─────────────────────────────────
+    // Non-empty when one is unfinished. Two waits, and they are not the same:
+    // waiting for a name may still be abandoned for nothing, while waiting to
+    // define under one that already exists means an identity has been paid for
+    // with nothing made under it — and it can never be used for a different
+    // currency.
+    in property <string> pending-identity: "";
+    in property <string> pending-note: "";
+    in property <bool> pending-can-continue: false;
+    // The same diagram the form drew as a plan, now as progress. Its own
+    // property rather than `steps`, because one is what will happen and the
+    // other is what has — and a single model would make the form's plan flicker
+    // into progress for a launch it is not describing.
+    in property <[FlowStep]> pending-steps: [];
+
+    // ── Claiming a name as part of the launch ───────────────────────────
+    // Which of the two ways in is showing. The interface's own business — core
+    // is told nothing until a button is pressed — but it lives here so the
+    // chooser and the form can both reach it.
+    in-out property <bool> claiming: false;
+    // Non-empty when the currency is to be defined under a name that does not
+    // exist yet. Exactly one of this and `identity` is ever set; core refuses a
+    // draft carrying both rather than picking one.
+    in-out property <string> new-name: "";
+    // What the chain and the local rule make of that name, and what claiming it
+    // costs. Both arrive from the same check the identity screen uses.
+    in property <string> new-name-problem: "";
+    in property <string> new-name-fee: "";
+    // Who may revoke and who may recover the identity that gets claimed.
+    //
+    // Offered here rather than left to a later update because leaving them
+    // blank makes the identity its own authority, which means it can never be
+    // revoked — and finding that out afterwards costs another transaction.
+    in-out property <string> new-revocation: "";
+    in-out property <string> new-recovery: "";
+    // The answer to that question: "" | "none" | "other". Empty is not a
+    // default — it is the step being unanswered, and the form will not move past
+    // it. The same rule `IdentityState.claim-authority` follows, because it is
+    // the same decision with the same permanent consequence.
+    in-out property <string> new-authority: "";
+}
+
+export global IdentityState {
+    // Yours, and the ones somebody looked up. Two lists, because they answer
+    // different questions — one is a fact about your keys, the other is what
+    // you just asked about. One list forced the heading to lie about one of
+    // them, and it did: a stranger's identity sat under "found by asking the
+    // chain which names your keys control" until the wallet was restarted.
+    in property <[IdentityRow]> rows: [];
+    in property <[IdentityRow]> looked-up: [];
+    in property <bool> busy: false;
+    // Whether the claim form is open.
+    //
+    // Purely the interface's business — the core is told nothing until somebody
+    // presses the button — but it lives here rather than on the screen so the
+    // form's own Cancel and the window's Escape can both reach it.
+    //
+    // Claiming a name is rare and looking one up is not, and the form is three
+    // fields and a paragraph tall. Left permanently open it pushed the lookup
+    // below the fold on the screen whose whole purpose is finding an identity.
+    in-out property <bool> claiming: false;
+    // Whether the authority form inside the detail sheet is open. Same
+    // reasoning as `claiming`, one level down.
+    in-out property <bool> changing-authorities: false;
+    // The lookup field, kept here so Rust can clear it on success only.
+    in-out property <string> lookup-draft: "";
+    // Why a lookup found nothing. Empty when there is nothing to say.
+    in-out property <string> lookup-problem: "";
+
+    // ── The detail sheet ────────────────────────────────────────────────
+    //
+    // Open exactly when `address` is non-empty. No second flag that could
+    // disagree with it, the same rule `TxState.txid` follows.
+    in-out property <string> address: "";
+    in property <string> name: "";
+    in property <string> status: "";
+    in property <string> tone: "";
+    in property <[string]> primary-addresses: [];
+    in property <string> signatures-required: "";
+    in property <string> control-note: "";
+    // Whether this wallet can sign for it. Decides which actions are offered —
+    // a fact, not something read out of the sentence above.
+    in property <bool> can-sign: false;
+    in property <string> revocation-authority: "";
+    in property <string> recovery-authority: "";
+    // The identity's recovery authority is itself, which makes it
+    // UNREVOKABLE — consensus refuses a revocation whose subject is its own
+    // recovery authority. A fresh registration lands on exactly this by
+    // default and nothing says so at the time.
+    in property <bool> cannot-be-revoked: false;
+    in property <string> timelock-note: "";
+    in property <string> balance: "";
+
+    // What it holds now, and everything it has ever published. Two different
+    // questions with two different answers, so two lists rather than one
+    // toggle over the same rows.
+    in property <[ContentEntry]> content: [];
+    in property <[ContentEntry]> content-history: [];
+    in-out property <int> content-view: 0;
+
+    // ── Claiming a name ─────────────────────────────────────────────────
+    // Which question the form is on: "name" | "authority" | "review". Same
+    // shape as `SendState.step`, and reset with `claiming` so a form reopened
+    // later does not start halfway through somebody else's answers.
+    in-out property <string> claim-step: "name";
+    // The answer to the second question: "" | "none" | "other". Empty is not a
+    // default — it is the step being unanswered, and the form will not move
+    // past it. That is the point of the step existing.
+    in-out property <string> claim-authority: "";
+    in-out property <string> name-draft: "";
+    // Why the name will not do. Empty when it is fine.
+    in property <string> name-problem: "";
+    // What registering it would cost. Empty until a node has said.
+    in property <string> name-fee: "";
+    // Who may revoke and who may recover. Blank leaves the identity as its
+    // own — which makes it unrevokable until somebody changes it.
+    in-out property <string> revocation-draft: "";
+    in-out property <string> recovery-draft: "";
+
+    // A claim in progress. Empty step means there is none.
+    in property <string> reg-step: "";
+    in property <string> reg-name: "";
+    in property <string> reg-note: "";
+    // The block the claim must be registered by. This is the fact worth the
+    // whole panel: the window is about twenty blocks and missing it spends
+    // the fee for nothing.
+    in property <string> reg-deadline: "";
+    in property <string> reg-fee: "";
+    in property <string> reg-address: "";
+    // The three transactions a claim is made of, and how far it has got. Built
+    // in the core — how many there are and which cost money are chain facts.
+    // Empty when the claim ended without finishing, because a diagram of a
+    // journey nobody is on any more is worse than none.
+    in property <[FlowStep]> reg-steps: [];
+    in property <bool> reg-busy: false;
+    in property <bool> reg-cannot-be-revoked: false;
+
+    // ── Changing the open identity ──────────────────────────────────────
+    in-out property <string> new-revocation: "";
+    in-out property <string> new-recovery: "";
+    in-out property <string> lock-blocks: "";
+    // A change built and signed but not sent. A ticket of 0 means none.
+    in property <int> change-ticket: 0;
+    in property <string> change-description: "";
+    in property <string> change-fee: "";
+    in property <bool> change-busy: false;
+    // The word that has to be typed before this can be sent, empty when none
+    // is needed. Only a revocation asks for one.
+    //
+    // The word rather than a flag, so the prompt, the placeholder and the
+    // button's gate all read it from the core instead of each spelling
+    // "revoke" out again.
+    in property <string> change-confirmation: "";
+    in-out property <string> change-typed: "";
+
+    // The try-a-key search. The forward direction is the only one there is.
+    in-out property <string> key-draft: "";
+    in property <string> derived-key: "";
+    in property <bool> derived-present: false;
+}
+
+export global TxState {
+    // Empty when nothing is open. The sheet is the txid being non-empty —
+    // there is no second flag that could disagree with it.
+    in-out property <string> txid: "";
+    in property <string> when: "";
+    in property <string> amount: "";
+    in property <string> direction: "in";
+    // False when the amount is already a token line naming its own currency —
+    // appending the chain's ticker would read as "12 345 mambo VRSCTEST".
+    in property <bool> amount-is-native: true;
+    in property <string> confirmations: "";
+    in property <string> height: "";
+    // Empty when the node did not volunteer one. A fee is inputs minus
+    // outputs, and the input values live in other transactions.
+    in property <string> fee: "";
+    in property <[string]> currency-lines: [];
+    in property <string> explorer: "";
+    // Arrives one request later, so the sheet opens instantly and this fills in.
+    in property <string> raw: "";
+    in-out property <bool> advanced: false;
+}
+
+export global NetworkState {
+    in property <[NodeRow]> nodes: [];
+    in property <string> requested: "Testnet";
+    // The same answer as `requested`, as the index of the chain chooser.
+    //
+    // Two-way bound, so the control follows the wallet rather than the other
+    // way round: a switch the core refuses — there is a payment in flight —
+    // puts the selection back where it was, instead of leaving a chooser
+    // pointing at a chain nobody is on.
+    in-out property <int> chain-index: 0;
+    // What the active node actually reported. Only this decides anything —
+    // never the URL.
+    in property <string> effective: "";
+    in property <string> node-state: "unknown";
+    in property <string> tip: "";
+    in property <string> latency: "";
+    in property <string> endpoint: "not configured";
+    in property <bool> mock-mode: false;
+    in property <bool> allow-mainnet-spend: false;
+    // The active node is behind the chain. Distinct from offline: it answers,
+    // but a balance read against a stale tip is wrong in a way that only shows
+    // up when a transaction is rejected.
+    in property <bool> syncing: false;
+    // Why the last node the user tried was refused. Shown on the network
+    // screen, because that is where the button they pressed is — a refusal that
+    // appears somewhere else is indistinguishable from nothing happening.
+    in-out property <string> problem: "";
+    // What is in the add-a-node form.
+    //
+    // Held here rather than inside the form so that Rust can clear it when the
+    // node is actually accepted — and, more to the point, so that it is NOT
+    // cleared when the node is refused. A rejected address that vanishes from
+    // the field takes with it the only copy of what the person typed.
+    in-out property <string> draft-url: "";
+    in-out property <string> draft-label: "";
+}
+
+// The balance over time.
+//
+// Everything here is computed in Rust by `src/chart.rs`, which owns the
+// readings and the geometry. Slint holds two path strings and a cursor
+// position — no arithmetic on money happens on this side.
+export global ChartState {
+    // SVG path data for a given element size, in that element's own
+    // coordinates. There is no viewbox, so one pixel of stroke means one pixel
+    // — see `pecu_chart::Viewport`.
+    //
+    // Callbacks rather than properties, and used directly in a binding: a
+    // `pure callback` re-evaluates when its ARGUMENTS change, so the geometry
+    // follows the element through every layout including the first. A property
+    // pushed from a `changed width` handler cannot do that — the handler fires
+    // only after a size exists, and only under a running event loop.
+    pure callback line-at(length, length) -> string;
+    // Empty when the balance never moved: a gradient fading downwards from a
+    // horizontal line reads as a chart that failed to load.
+    pure callback area-at(length, length) -> string;
+    // Where the line ends, so the "now" dot can sit exactly on it.
+    pure callback end-x-at(length, length) -> length;
+    pure callback end-y-at(length, length) -> length;
+    in property <bool> has-data: false;
+    in property <string> ticker: "VRSC";
+    // What moved across the window, and whether that is good news.
+    in property <string> change: "";
+    in property <string> change-tone: "neutral";
+    // What the picture is of. A chart over a window the wallet has not fully
+    // scanned is true about the window and silent about everything before it,
+    // and that difference is invisible in the drawing.
+    in property <string> caption: "";
+
+    // Where the axis begins, in words. There are no gridlines and no tick
+    // labels, so without this the chart cannot say what period it covers.
+    in property <string> span-from: "";
+    // What the bottom and the top of the plot are worth, pre-formatted.
+    //
+    // The vertical axis is scaled to the data rather than to zero, so the shape
+    // alone says nothing about magnitude — the same staircase is drawn by a
+    // wallet that moved one coin and by one that moved ten thousand. Empty when
+    // the balance never moved.
+    in property <string> span-range: "";
+
+    // -1 when the pointer is not over the chart.
+    in property <int> hover: -1;
+    // Where the crosshair sits: on the nearest SAMPLE, not under the pointer.
+    // A dot floating between two readings points at a balance never held.
+    in property <length> hover-x: 0px;
+    in property <length> hover-y: 0px;
+    in property <string> hover-amount: "";
+    in property <string> hover-when: "";
+
+    callback hovered(length);
+    callback left();
+}
+
+// What the wallet has said and nobody has read yet.
+// The history screen's own state: what is being looked at, and the summary
+// above it.
+//
+// # Why the filtering is not done here
+//
+// It was, briefly, and it did not work. Equality against `kind` is something
+// `.slint` can express — unlike the substring test the palette needed — so the
+// first attempt hid non-matching rows with `visible` and a zeroed height. A
+// `ListView` places its items by their preferred height, so every row collapsed
+// onto the one before it and six rows drew in two slots. That is not a bug in
+// the trick; it is what virtualisation means.
+//
+// The core filters and re-sends the list. That is where it belonged regardless:
+// filtering and **paging** are one question, because "load older" reads the next
+// window of blocks rather than the next twenty rows of a kind, and only the side
+// holding the list can reconcile the two.
+export global ActivityState {
+    // "all" | "payment" | "convert" | "login" | "identity"
+    //
+    // What the chips show. The **core** does the filtering — this is the echo,
+    // so the pressed chip does not wait for a round trip to look pressed.
+    in-out property <string> filter: "all";
+    callback filter-changed(string);
+    // The summary strip. Four figures the core does not compute yet — see the
+    // fixtures, which invent them.
+    in property <[Stat]> stats: [];
+}
+
+// Converting one currency into another.
+//
+// # Shape now, arithmetic later
+//
+// The SDK can do this for real — `verus_flows::convert` goes `plan_conversion`
+// → `prepare_conversion` → `broadcast`, which is the **same `Unsent` shape as
+// the send path**, so the review step, the spend permit and the pending ledger
+// all carry over rather than being rebuilt. None of that is wired here yet.
+// What is here is the screen and the vocabulary.
+//
+// # Two steps, like a send, and for the same reason
+//
+// A conversion moves money irreversibly and its output is an estimate rather
+// than a promise. So it is a form and then a review, the review is built from
+// something signed, and nothing leaves until the second button.
+export global ConvertState {
+    // "form" | "review" | "converting" | "done"
+    in-out property <string> step: "form";
+    in property <bool> busy: false;
+
+    // The interface's own drafts. Nothing is sent from here until Review — the
+    // same arrangement `SendState` uses, and for the reason recorded there: a
+    // field held inside an element is a state no fixture can reach.
+    in-out property <string> pay-draft: "";
+
+    // Which way round. Chosen here rather than derived, because "what I have"
+    // and "what I want" are two questions and swapping them must not silently
+    // reinterpret the amount already typed.
+    in-out property <string> from-name: "";
+    in-out property <string> to-name: "";
+    // What is available to spend of `from-name`, spelled by the core.
+    in property <string> from-balance: "";
+
+    // The quote. Mirrors `ConvertQuoteVm` — see it for why these are net of
+    // fees where the markets screen's figures are not.
+    in property <string> get-estimate: "";
+    in property <string> via: "";
+    in property <string> rate: "";
+    in property <string> conversion-fee: "";
+    in property <string> network-fee: "";
+    in property <string> minimum: "";
+    in property <string> slippage: "";
+    in property <string> slippage-tone: "unknown";
+    // Why this cannot be done, or what to be careful of. Empty when neither.
+    in property <string> note: "";
+    // Whether the form has enough to price. The core's verdict, not a length
+    // check here.
+    in property <bool> ready: false;
+
+    callback swap();
+    callback review();
+    callback confirm();
+    callback cancel();
+}
+
+// The markets screen.
+//
+// # Everything here is currently a fixture
+//
+// The figures are drawn, not derived. Deriving them is real work against the
+// chain — `getcurrencystate` for a mid price, `getcurrencyconverters` for the
+// pools, and a route to something that stands for a unit of account — and it is
+// deliberately not in this commit. What is here is the shape: what the screen
+// shows, in what order, with what conventions.
+//
+// The conventions are the part worth getting right first, because they are what
+// makes the real figures safe to put in later:
+//
+//   * a price is a **string**, so the core owns how money is spelled;
+//   * `—` means the wallet does not know, and is not the same as zero;
+//   * `tone` is carried rather than inferred from a leading minus, because a
+//     dash has no sign and would otherwise read as a loss.
+export global MarketState {
+    in property <[MarketRow]> rows: [];
+    // Which row the detail is showing, by i-address. Empty means none — a
+    // screen that auto-selects the first row answers a question nobody asked
+    // and hides the fact that the list is the primary thing here.
+    in-out property <string> selected: "";
+    // The detail, flat rather than as one struct. Slint models nested inside a
+    // struct field are awkward to feed from Rust, and `stats` and `venues` are
+    // both lists — so the shape that works is the shape `SendState` already
+    // uses for the same reason.
+    in property <string> detail-name;
+    in property <string> detail-subtitle;
+    in property <string> detail-price;
+    in property <string> detail-change;
+    in property <string> detail-tone: "unknown";
+    in property <[Stat]> detail-stats: [];
+    in property <[Venue]> detail-venues: [];
+    // How the price was arrived at, hop by hop. Not decoration: on a wallet
+    // that derives prices from conversion routes rather than reading a feed,
+    // this is the difference between a number somebody can check and one they
+    // have to trust.
+    in property <string> detail-route;
+    // Which hop is the constraint. Empty when there is no route.
+    in property <string> detail-route-note;
+    // The chart range, as an index into the buttons. Interface state: it
+    // decides what gets asked for, and the core has no opinion about which
+    // button looks pressed.
+    in-out property <int> range: 1;
+    callback select(string);
+}
+
+// The command palette.
+//
+// # Why the results come from the core
+//
+// Because they cannot come from here. Slint's string type has `is-empty`,
+// `character-count`, `to-lowercase`, `to-uppercase` and two float conversions —
+// and **no substring test**, so "does this name contain what was typed" is not
+// a question `.slint` can ask.
+//
+// Which is the right answer anyway: this interface holds no wallet data of its
+// own, and filtering the rows it happens to have rendered would answer for the
+// screen rather than for the wallet.
+export global SearchState {
+    // Whether the palette is over the interface.
+    in-out property <bool> open: false;
+    // What has been typed. Written here rather than kept in the input, so
+    // opening the palette a second time starts empty and Escape can clear it
+    // from outside the field.
+    in-out property <string> query: "";
+    in property <[SearchHit]> hits: [];
+    callback search(string);
+    // Open whatever the row points at.
+    callback pick(SearchHit);
+}
+
+export global ToastState {
+    in property <[ToastRow]> rows: [];
+    callback dismiss(int);
+    // Dismiss everything. Offered once there is more than one, because a wallet
+    // that has just failed six times should not need six clicks.
+    callback dismiss-all();
+}
+
+export global AppInfo {
+    in property <string> sdk-rev: "unknown";
+    // Where the log files are. On screen because a wallet started from the
+    // Finder has no terminal, so this is the only way anybody finds them.
+    in property <string> log-path: "";
+}
+
+// Every UI→core call lives in this one global.
+//
+// Keeping the outbound API to a single readable block is what makes it possible
+// to see, at a glance, which calls carry secret material — and to notice
+// immediately when one is added.
+export global Actions {
+    // ── The secret-bearing calls ──────────────────────────────────────────
+    //
+    // Five, and this comment is the record. Each clears its backing property
+    // inside the same callback, before returning — see `PassphraseForm.submit`,
+    // `RestoreForm.submit` and `BackupPassphrase.submit`. A fifth belongs in a
+    // review, not in a commit.
+    callback create-wallet(string);
+    callback unlock(string);
+    // Restoring: the key material AND a new passphrase for this machine, in
+    // one call. Both are blanked before the callback returns.
+    callback restore-wallet(string, string, string);
+    // The vault passphrase again, to show a phrase that was never written down.
+    // Asking twice is the point: the highest-consequence read in the wallet
+    // must not ride on a session someone unlocked twenty minutes ago.
+    callback reveal-backup(string);
+    // Old and new, in one call. Both are blanked before it returns.
+    // Declared with the other Settings actions below, next to what it belongs
+    // with — this list is the record of WHICH calls carry secrets, not where
+    // they are written.
+
+    // Three words the user is copying off the screen in front of them. Not
+    // wrapped as secret material, and that is a judgement rather than an
+    // oversight: three of twenty-four leaves twenty-one unknown words from a
+    // 2048-word list. Still cleared in the same callback, like the rest.
+    callback confirm-phrase(string, string, string);
+
+    // ── The backup screen ─────────────────────────────────────────────────
+    // Hold-to-reveal: press asks for the words, release throws away the copy
+    // the UI was given. Leaving the screen throws away core's copy too.
+    callback reveal-phrase();
+    callback hide-phrase();
+    callback cancel-backup();
+
+    // Settings. `change-passphrase` carries two secrets and is the fifth
+    // secret-bearing call — counted in the block above.
+    callback change-passphrase(string, string);
+    callback set-auto-lock(int);
+    callback set-mainnet-spend(bool, string);
+
+    // Keys. None of these carries a secret — a label is a name, and adding a
+    // key needs the wallet open rather than the passphrase again.
+    callback label-address(string, string);
+    callback forget-address(string);
+    callback add-key(string);
+    callback rename-key(string, string);
+    callback select-key(string);
+    // How the window looks, and whether it moves. Sent so the core can write
+    // them down — a preference that resets every launch is not a preference.
+    callback set-appearance(bool, bool);
+
+    // Sending. None of these carries a secret; the signed bytes never leave
+    // the core, and what crosses here is a ticket number.
+    callback validate-draft(string, string);
+    callback prepare-send(string, string);
+    callback confirm-send(int);
+    callback cancel-send(int);
+    // "check" | "resend" | "abandon" — for a payment whose fate is unknown.
+    callback resolve-pending(int, string);
+    callback load-older();
+    callback open-tx(string);
+
+    callback lock();
+    callback navigate(string);
+    callback refresh();
+    callback probe-nodes();
+    // Which chain to open, by its consensus name — "VRSC" or "VRSCTEST", not
+    // the label beside it. Everything durable is chosen from this, so the core
+    // is what decides; this only asks.
+    callback set-requested-network(string);
+
+    // ── Currencies ──────────────────────────────────────────────────────
+    // Reads only. Defining one is a later step and is not wired here yet.
+    callback refresh-currencies();
+    callback open-currency(string);
+    // Re-check the draft. Called on every edit; the core answers from memory.
+    //
+    // No arguments: the draft lives on `CurrencyState`, and a callback with
+    // eight parameters — two of them lists — would be a signature nobody could
+    // change without changing five call sites.
+    callback check-currency();
+    // Adding and removing a row changes the length of a model, which Slint
+    // cannot do from a binding. Rust rebuilds it and the form re-checks.
+    callback add-reserve();
+    callback remove-reserve(int);
+    // Narrow the chain's currency list. Debounced by the picker: the first of
+    // these fetches half a megabyte, the rest are answered from memory.
+    callback search-currencies(string);
+    // How big the window is now, in logical pixels. Debounced by the window —
+    // see `AppWindow`.
+    callback remember-window(int, int);
+    // Row index, the chosen name, and its i-address — all three, because the
+    // draft carries the address and the form reads the name, and looking one up
+    // from the other here would be a second source of the same fact.
+    callback choose-reserve(int, string, string);
+    callback add-preallocation();
+    callback remove-preallocation(int);
+    // Whether that name can be claimed, and what it would cost. Same check the
+    // identity screen makes, because it is the same question.
+    callback check-currency-name(string);
+    // Build and sign it. Nothing is sent — the review that follows is decoded
+    // from what this produced.
+    callback prepare-launch();
+    // Claim the name, then define the currency under it. One press, because it
+    // is one decision — and the currency is written down before the
+    // registration is paid for, so a wallet that dies in between knows what the
+    // identity it just bought was for.
+    callback start-currency-from-new-name();
+    // Pick up a currency whose identity landed while the wallet was closed.
+    // Never automatic: nobody was watching, and signing a two hundred coin
+    // launch because an application was opened is not a decision to make on
+    // somebody's behalf.
+    callback resume-launch();
+    callback abandon-launch();
+    callback confirm-launch(int);
+    callback cancel-launch(int);
+
+    // ── VerusIDs ────────────────────────────────────────────────────────
+    // None of these carries a secret. Reading an identity needs no key, and
+    // the write operations that will need one are not here yet.
+    callback refresh-identities();
+    callback look-up-identity(string);
+    callback open-identity(string);
+    callback close-identity();
+    callback derive-content-key(string);
+    callback clear-lookups();
+    callback unwatch-identity(string);
+    callback check-name(string);
+    callback start-registration(string, string, string);
+    callback finish-registration();
+    callback abandon-registration();
+    callback set-identity-authorities(string, string, string);
+    callback lock-identity(string, int);
+    callback unlock-identity(string, int);
+    callback confirm-identity-change(int, string);
+    callback cancel-identity-change(int);
+    callback revoke-identity(string);
+    callback recover-identity(string);
+    callback select-node(int);
+    // Label then URL. The URL is checked in the core, by the SDK's own
+    // transport — which is what refuses plaintext to anything but loopback.
+    callback add-node(string, string);
+    callback remove-node(int);
+    callback toggle-theme();
+}
+
+// ── Screens ─────────────────────────────────────────────────────────────────

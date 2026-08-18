@@ -1,0 +1,251 @@
+// Things that sit over a screen rather than being one.
+
+import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, EmptyState } from "base.slint";
+import { Icon } from "icons.slint";
+import { SearchState, ToastState } from "../vm/state.slint";
+import { Field } from "form.slint";
+
+// The stack of things the wallet has said.
+//
+// Bottom right, over everything including the backup screen — a recovery phrase
+// on screen does not make a rejected payment less worth knowing about. Newest
+// at the bottom, so the position of what you are reading does not move when
+// another arrives.
+// The command palette. ⌘K.
+//
+// # What it searches, and what it does not
+//
+// Identities and currencies — the things that have a name and an i-address, and
+// the two the design's placeholder names. **Not screens**: those are reachable
+// with ⌘1–⌘8, which this wallet already has and the design's shortcut map also
+// lists, and putting the navigation into the core's search would mean the core
+// knowing what the interface is arranged into.
+//
+// Transaction ids are in the placeholder and are not searched yet. History is
+// loaded per screen rather than held, so answering for a txid means the core
+// keeping an index it currently has no reason to build.
+//
+// # There is no empty state
+//
+// Because the interface cannot tell an empty result from an unanswered one, and
+// guessing wrong in either direction is worse than the silence: "nothing found"
+// under a query the core has not replied to yet is a lie that appears on every
+// keystroke.
+export component CommandPalette inherits Rectangle {
+    callback dismissed();
+
+    // The scrim. Dismisses on click, which is what a person expects of dimmed
+    // background and what Escape does from the keyboard.
+    background: Theme.dark ? #00000099 : #0B0D1066;
+    TouchArea {
+        clicked => { root.dismissed(); }
+    }
+
+    Rectangle {
+        width: min(560px, parent.width - Sp.s10);
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        // Nearer the top than the middle: the list grows downward, and a panel
+        // centred on its empty state jumps when the first result arrives.
+        y: Sp.s11;
+        border-radius: R.xl;
+        background: Theme.bg-surface;
+        border-width: 1px;
+        border-color: Theme.border-default;
+        clip: true;
+
+        // Swallow clicks so the scrim behind does not dismiss the panel the
+        // person is typing into.
+        TouchArea {}
+
+        body := VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s4;
+
+            field := Field {
+                mono: true;
+                placeholder: @tr("Search · currency, identity, address");
+                text <=> SearchState.query;
+                edited => { SearchState.search(SearchState.query); }
+            }
+
+            if SearchState.hits.length > 0: VerticalLayout {
+                spacing: Sp.s1;
+                for hit in SearchState.hits: Rectangle {
+                    height: 52px;
+                    border-radius: R.md;
+                    background: hittouch.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+                    HorizontalLayout {
+                        padding-left: Sp.s4;
+                        padding-right: Sp.s4;
+                        spacing: Sp.s4;
+
+                        Icon {
+                            name: hit.kind == "identity" ? "profile" : "currency";
+                            size: 18px;
+                            y: (parent.height - self.height) / 2;
+                            tone: Theme.text-secondary;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: hit.label;
+                                font-family: Typo.mono;
+                                font-size: Typo.body;
+                                font-weight: Typo.w-bold;
+                                color: Theme.text-primary;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: hit.sub;
+                                font-family: Typo.mono;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    hittouch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            SearchState.pick(hit);
+                            root.dismissed();
+                        }
+                    }
+
+                    accessible-role: button;
+                    accessible-label: hit.label + ", " + hit.kind;
+                    accessible-action-default => { SearchState.pick(hit); root.dismissed(); }
+                }
+            }
+        }
+    }
+
+    // Focus the field as soon as the panel exists. A palette that opens and
+    // then waits to be clicked has wasted the keystroke that opened it.
+    public function take-focus() { field.focus(); }
+}
+
+export component ToastHost inherits Rectangle {
+    // Wide enough for two lines of detail at this size, narrow enough not to
+    // read as a panel taking over the screen.
+    property <length> panel-width: 380px;
+
+    // ONE opaque panel, not a stack of floating cards.
+    //
+    // Separate cards leave gaps, and a gap over a dashboard shows whatever is
+    // behind it — an asset amount peeking between two notices reads as a
+    // rendering fault rather than as depth. A single surface with hairlines
+    // between the entries has the same structure and no holes.
+    Rectangle {
+        x: parent.width - root.panel-width - Sp.s8;
+        y: parent.height - self.height - Sp.s8;
+        width: root.panel-width;
+        height: stack.preferred-height;
+
+        background: Theme.bg-raised;
+        border-radius: R.lg;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        // In both themes. `Card` shadows only in light, because a card sits IN
+        // the page; this floats above it and has to say so on a dark ground
+        // too.
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: Theme.dark ? #00000066 : #10111426;
+
+        stack := VerticalLayout {
+            for entry[i] in ToastState.rows: VerticalLayout {
+                if i > 0: Rectangle {
+                    height: 1px;
+                    background: Theme.border-subtle;
+                }
+
+                HorizontalLayout {
+                    padding: Sp.card-pad;
+                    spacing: Sp.s4;
+
+                    // Colour is never the only signal — the severity is also in
+                    // the wording, and the title carries the tone.
+                    Rectangle {
+                        width: 3px;
+                        border-radius: 2px;
+                        background: entry.severity == "danger" ? Theme.negative
+                            : entry.severity == "warning" ? Theme.warning
+                            : Theme.accent;
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Sp.s2;
+
+                        Text {
+                            // The count rather than one card per occurrence: a
+                            // refresh failing every fifteen seconds is one
+                            // problem, and forty cards is a wallet nobody can
+                            // use.
+                            text: entry.count > 1
+                                ? entry.title + " (" + entry.count + "×)"
+                                : entry.title;
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: entry.severity == "danger" ? Theme.negative
+                                : entry.severity == "warning" ? Theme.warning
+                                : Theme.text-primary;
+                            wrap: word-wrap;
+                        }
+
+                        if entry.detail != "": Text {
+                            text: entry.detail;
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    Btn {
+                        text: "Close";
+                        variant: "ghost";
+                        y: 0;
+                        clicked => { ToastState.dismiss(i); }
+                    }
+                }
+            }
+
+            // Offered only once there is more than one: a wallet that has just
+            // failed six times should not need six clicks.
+            if ToastState.rows.length > 1: Rectangle {
+                height: 1px;
+                background: Theme.border-subtle;
+            }
+            if ToastState.rows.length > 1: HorizontalLayout {
+                padding: Sp.s4;
+                padding-right: Sp.card-pad;
+                alignment: end;
+                Btn {
+                    text: "Dismiss all";
+                    variant: "ghost";
+                    clicked => { ToastState.dismiss-all(); }
+                }
+            }
+        }
+    }
+}
+
+export component ComingSoon inherits VerticalLayout {
+    in property <string> title;
+    in property <string> body;
+    alignment: center;
+    EmptyState {
+        glyph: "◔";
+        title: root.title;
+        body: root.body;
+    }
+}

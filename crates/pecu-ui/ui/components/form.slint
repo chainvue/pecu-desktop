@@ -1,0 +1,222 @@
+// The four building blocks more than one screen needs.
+//
+// Everything else in this interface belongs to exactly one screen and lives
+// beside it. These do not: `Field` is in twenty places, and the other three sit
+// in two families each.
+
+import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn } from "base.slint";
+import { FlowStep } from "../vm/structs.slint";
+import { Actions, WalletState } from "../vm/state.slint";
+
+// A single-line input.
+//
+// Shared by every screen that takes one line of text, so the focus ring, the error border and the height cannot drift apart
+// between them.
+export component Field inherits Rectangle {
+    in property <bool> password: false;
+    in property <bool> invalid: false;
+    // A recovery phrase is typed VISIBLY, unlike a passphrase. Masking it would
+    // make the one thing that matters here — spotting a mistyped word before
+    // committing to a wallet with no funds in it — impossible, and the person
+    // typing it is by definition its owner.
+    in property <bool> multiline: false;
+    in property <bool> mono: false;
+    // Shown only while the field is empty. An example of the shape expected,
+    // never a label — a placeholder that stands in for a label disappears
+    // exactly when someone starts typing and needs it most.
+    in property <string> placeholder: "";
+    in-out property <string> text <=> input.text;
+    callback accepted();
+    callback edited();
+
+    forward-focus: input;
+    height: 42px;
+    background: Theme.bg-inset;
+    border-radius: R.md;
+    border-width: 1px;
+    border-color: root.invalid ? Theme.negative
+        : input.has-focus ? Theme.accent
+        : Theme.border-default;
+    animate border-color { duration: Motion.fast; enabled: Motion.enabled; }
+
+    // Behind the input, and non-interactive: it must never intercept a click
+    // aimed at the field it is sitting in.
+    if root.placeholder != "" && input.text == "": Text {
+        text: root.placeholder;
+        font-family: root.mono ? Typo.mono : "";
+        font-size: Typo.body;
+        color: Theme.text-disabled;
+        x: Sp.s5;
+        width: parent.width - Sp.s5 * 2;
+        height: parent.height;
+        vertical-alignment: root.multiline ? top : center;
+        overflow: elide;
+    }
+
+    // The label a screen reader reads. The placeholder is the only description
+    // most of these fields have on screen, so it is the honest source for it.
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.placeholder;
+    // Deliberately NOT `accessible-value: input.text` when masked. A password
+    // field that publishes its contents to the accessibility tree has undone
+    // the masking for anything that can read that tree.
+    accessible-value: root.password ? "" : input.text;
+
+    input := TextInput {
+        // Never rendered as glyphs, and never logged.
+        input-type: root.password ? InputType.password : InputType.text;
+        font-family: root.mono ? Typo.mono : "";
+        font-size: Typo.body;
+        color: Theme.text-primary;
+        single-line: !root.multiline;
+        wrap: root.multiline ? TextWrap.word-wrap : TextWrap.no-wrap;
+        x: Sp.s5;
+        y: root.multiline ? Sp.s4 : 0;
+        width: parent.width - Sp.s5 * 2;
+        height: root.multiline ? parent.height - Sp.s4 * 2 : parent.height;
+        vertical-alignment: root.multiline ? top : center;
+        accepted => { root.accepted(); }
+        edited => { root.edited(); }
+    }
+}
+
+// Which key the wallet is receiving to and paying from.
+//
+// One control, one fact. Receive and Send both act on whichever key is active,
+// so a picker that meant something different on each screen would be two
+// notions of "the key in use" — and the one that decides where money arrives
+// must not be able to disagree with the one that decides where it leaves.
+//
+// Absent when there is nothing to pick: a control with one option in it is a
+// question nobody asked.
+export component KeyPicker inherits HorizontalLayout {
+    // Left, like everything else in a form. The receive screen centres it by
+    // wrapping it, which is the one place the surrounding column is centred.
+    alignment: start;
+    spacing: Sp.s3;
+
+    if WalletState.keys.length > 1: HorizontalLayout {
+        spacing: Sp.s3;
+        for entry in WalletState.keys: Btn {
+            text: entry.label;
+            variant: entry.active ? "primary" : "secondary";
+            clicked => { Actions.select-key(entry.label); }
+        }
+    }
+}
+
+// What to send, and where.
+//
+// Its own component because its two inputs have to be readable from one place —
+// an input declared inside an `if` cannot be reached from outside it.
+// Moved above `SendForm` rather than left beside the Convert screen it was
+// written for: Slint resolves components in declaration order, so a shared
+// one has to come before every screen that uses it.
+// One line of the quote.
+export component QuoteLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <brush> tone: Theme.text-primary;
+    in property <bool> strong: false;
+
+    spacing: Sp.s4;
+
+    Text {
+        text: root.label;
+        font-size: Typo.caption;
+        color: Theme.text-secondary;
+        horizontal-stretch: 1;
+    }
+    Text {
+        text: root.value == "" ? "—" : root.value;
+        font-family: Typo.mono;
+        font-size: Typo.num-sm;
+        font-weight: root.strong ? Typo.w-bold : Typo.w-regular;
+        color: root.value == "" ? Theme.text-tertiary : root.tone;
+    }
+}
+
+// What happens, in order, and where it has got to.
+//
+// # Why this exists rather than a spinner
+//
+// Creating a currency from a new name is two transactions with a wait between
+// them, and the wallet does the second one by itself. "Happening in the
+// background" is the whole promise, and a spinner is the shape that promise
+// takes when nobody makes it legible — so this names the four steps and marks
+// the two that spend money, which is what somebody would want to stop before.
+export component FlowStepper inherits HorizontalLayout {
+    in property <[FlowStep]> steps;
+    spacing: Sp.s2;
+    alignment: start;
+
+    for step[i] in root.steps: HorizontalLayout {
+        spacing: Sp.s2;
+
+        VerticalLayout {
+            spacing: Sp.s2;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: center;
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: step.state == "done" ? Theme.positive
+                        : step.state == "now" ? Theme.accent
+                        : step.state == "failed" ? Theme.negative
+                        : Theme.bg-inset;
+                    border-width: step.state == "later" ? 1px : 0px;
+                    border-color: Theme.border-default;
+                    Text {
+                        // A tick, a dot, an exclamation, or the step's number.
+                        //
+                        // Mono, because `✓` and `●` are in JetBrains Mono NL and
+                        // in **none** of the three Space Grotesk weights — read
+                        // out of the `cmap` tables, not assumed. Drawn in the UI
+                        // face they fall through to whatever the system has,
+                        // which is the per-platform fork the bundled fonts
+                        // exist to prevent. This file has been caught by a
+                        // missing glyph three times; this is the fourth.
+                        text: step.state == "done" ? "✓"
+                            : step.state == "now" ? "●"
+                            : step.state == "failed" ? "!"
+                            : (i + 1);
+                        font-family: Typo.mono;
+                        font-size: Typo.micro;
+                        font-weight: Typo.w-medium;
+                        color: step.state == "later" ? Theme.text-tertiary : Theme.text-on-accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 0px;
+                    alignment: center;
+                    Text {
+                        text: step.label;
+                        font-size: Typo.caption;
+                        font-weight: step.state == "now" ? Typo.w-medium : Typo.w-regular;
+                        color: step.state == "later" ? Theme.text-tertiary : Theme.text-primary;
+                    }
+                    if step.costs: Text {
+                        text: "costs a fee";
+                        font-size: Typo.micro;
+                        color: Theme.warning;
+                    }
+                }
+            }
+        }
+
+        // The connector, on every step but the last.
+        if i < root.steps.length - 1: Rectangle {
+            width: 24px;
+            height: 1px;
+            y: 10px;
+            background: Theme.border-default;
+        }
+    }
+}

@@ -1,0 +1,333 @@
+// What things are worth, and where they trade.
+
+import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Card, EmptyState, Eyebrow, Segmented, StatusPill } from "../components/base.slint";
+import { MarketRow } from "../vm/structs.slint";
+import { MarketState } from "../vm/state.slint";
+
+// One row of the markets table.
+export component MarketRowItem inherits Rectangle {
+    in property <MarketRow> entry;
+    in property <bool> selected;
+    callback picked();
+
+    height: 46px;
+    border-radius: R.md;
+    background: root.selected ? Theme.accent-soft
+        : touch.has-hover ? Theme.bg-hover
+        : transparent;
+    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+    HorizontalLayout {
+        padding-left: Sp.s4;
+        padding-right: Sp.s4;
+        spacing: Sp.s4;
+
+        Text {
+            text: root.entry.name;
+            font-family: Typo.mono;
+            font-size: Typo.body;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.entry.price;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 74px;
+        }
+        Text {
+            text: root.entry.change;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            // The tone is carried, not read off the sign. `—` has no sign, and
+            // colouring it as a loss would be the interface inventing a fact.
+            color: root.entry.tone == "positive" ? Theme.positive
+                : root.entry.tone == "negative" ? Theme.negative
+                : Theme.text-tertiary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 62px;
+        }
+        Text {
+            text: root.entry.depth;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 70px;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+
+    accessible-role: button;
+    accessible-label: root.entry.name + ", " + root.entry.price + ", " + root.entry.change;
+    accessible-action-default => { root.picked(); }
+}
+
+// Markets: every currency on the left, one of them in detail on the right.
+//
+// # The figures are fixtures
+//
+// Drawn, not derived. Deriving them is real work against the chain and is
+// deliberately not here yet — see `MarketState`. What this commit fixes is the
+// shape and the conventions, which is what makes real figures safe to drop in
+// later.
+export component MarketsScreen inherits HorizontalLayout {
+    spacing: Sp.s7;
+
+    // ── The table ───────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: Sp.s4;
+        width: 46%;
+
+        Eyebrow { text: @tr("ALL CURRENCIES"); }
+
+        // The column headings, outside the card, so a long list scrolls under
+        // them rather than taking them with it.
+        HorizontalLayout {
+            padding-left: Sp.s4;
+            padding-right: Sp.s4;
+            spacing: Sp.s4;
+            Text {
+                text: @tr("Name");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: @tr("Price");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 74px;
+            }
+            Text {
+                text: @tr("24h");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 62px;
+            }
+            Text {
+                text: @tr("Exit @2%");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                width: 70px;
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Sp.s3;
+                spacing: Sp.s1;
+                for row in MarketState.rows: MarketRowItem {
+                    entry: row;
+                    selected: MarketState.selected == row.address;
+                    picked => { MarketState.select(row.address); }
+                }
+            }
+        }
+
+        // The convention, said once, where the dashes are.
+        Text {
+            text: @tr("— means unknown, not zero.");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+
+    // ── The detail ──────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: Sp.s5;
+        horizontal-stretch: 1;
+
+        if MarketState.selected == "": EmptyState {
+            glyph: "⊙";
+            title: @tr("Pick a currency");
+            body: @tr("Its price, where it trades, and how deep those pools are.");
+        }
+
+        if MarketState.selected != "": VerticalLayout {
+            spacing: Sp.s5;
+
+            // Name, what it is, and the price.
+            VerticalLayout {
+                spacing: Sp.s2;
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    alignment: start;
+                    Text {
+                        text: MarketState.detail-name;
+                        font-family: Typo.mono;
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: MarketState.detail-subtitle;
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    alignment: start;
+                    Text {
+                        text: MarketState.detail-price;
+                        font-family: Typo.mono;
+                        font-size: Typo.hero;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: MarketState.detail-change;
+                        font-family: Typo.mono;
+                        font-size: Typo.num;
+                        color: MarketState.detail-tone == "positive" ? Theme.positive
+                            : MarketState.detail-tone == "negative" ? Theme.negative
+                            : Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // The range. Inert against a fixture, and shown anyway: it is what
+            // says the price above has a period attached to it.
+            Segmented {
+                options: [@tr("1D"), @tr("1W"), @tr("1M"), @tr("1Y"), @tr("Max")];
+                index <=> MarketState.range;
+            }
+
+            // The figures.
+            HorizontalLayout {
+                spacing: Sp.s4;
+                for stat in MarketState.detail-stats: Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: Sp.s4;
+                        spacing: Sp.s1;
+                        Text {
+                            text: stat.label;
+                            font-size: Typo.micro;
+                            color: Theme.text-tertiary;
+                        }
+                        Text {
+                            text: stat.value;
+                            font-family: Typo.mono;
+                            font-size: Typo.num;
+                            font-weight: Typo.w-bold;
+                            color: Theme.text-primary;
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Sp.s5;
+
+                // Where it trades.
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    horizontal-stretch: 1;
+                    Eyebrow { text: @tr("VENUES"); }
+                    Card {
+                        VerticalLayout {
+                            padding: Sp.s3;
+                            for venue in MarketState.detail-venues: HorizontalLayout {
+                                padding: Sp.s3;
+                                spacing: Sp.s4;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: venue.name;
+                                        font-family: Typo.mono;
+                                        font-size: Typo.caption;
+                                        font-weight: Typo.w-bold;
+                                        color: Theme.text-primary;
+                                    }
+                                    StatusPill {
+                                        state: venue.state == "active" ? "online" : "unknown";
+                                        text: venue.state;
+                                    }
+                                }
+                                Text {
+                                    text: venue.price;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: venue.change;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: venue.tone == "positive" ? Theme.positive
+                                        : venue.tone == "negative" ? Theme.negative
+                                        : Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    width: 56px;
+                                }
+                                Text {
+                                    text: venue.depth;
+                                    font-family: Typo.mono;
+                                    font-size: Typo.num-sm;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    width: 62px;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // How the price was reached.
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    width: 38%;
+                    Eyebrow { text: @tr("PRICE DISCOVERY"); }
+                    Card {
+                        VerticalLayout {
+                            padding: Sp.s5;
+                            spacing: Sp.s3;
+                            Text {
+                                text: MarketState.detail-route;
+                                font-family: Typo.mono;
+                                font-size: Typo.caption;
+                                color: Theme.accent;
+                                wrap: word-wrap;
+                            }
+                            if MarketState.detail-route-note != "": Text {
+                                text: MarketState.detail-route-note;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}

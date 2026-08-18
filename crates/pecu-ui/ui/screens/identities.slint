@@ -1,0 +1,1465 @@
+// VerusIDs: the ones these keys control, the ones somebody looked up, and
+// claiming a new one.
+
+import { R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Segmented, StatusPill } from "../components/base.slint";
+import { ContentEntry } from "../vm/structs.slint";
+import { Actions, IdentityState, WalletState } from "../vm/state.slint";
+import { Field, FlowStepper } from "../components/form.slint";
+
+// The one screen that scrolls itself.
+//
+// # Why it is not inside the shared page scroller
+//
+// Every other screen is a page of a known height, and one `Flickable` around all
+// of them is right. This one is as long as somebody's history — and it used to
+// be a plain `for`, which builds every row as a live component whether or not
+// anybody can see it. Measured, release build, in `examples/scroll_cost.rs`:
+//
+// | rows | build + layout |
+// |-----:|---------------:|
+// |  100 |        17.6 ms |
+// | 1000 |        56.6 ms |
+// | 10k  |         552 ms |
+// | 50k  |          2.9 s |
+//
+// Linear, and paid on the thread the interface answers on. Slint's software
+// renderer will not even draw past about a thousand rows: it works in i16
+// fixed-point coordinates and a column that tall overflows them.
+//
+// `ListView` builds only what is visible. It is also a scroller, and a scroller
+// inside a `Flickable` is two of them fighting over one wheel — which is why
+// this screen is hoisted out of the shared one rather than dropped into it.
+// Looking one up: anyone's identity, not only your own.
+export component LookUpForm inherits VerticalLayout {
+    spacing: Sp.s3;
+
+    function submit() {
+        if (field.text == "") { return; }
+        IdentityState.lookup-problem = "";
+        Actions.look-up-identity(field.text);
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+        field := Field {
+            horizontal-stretch: 1;
+            mono: true;
+            placeholder: "name@ or i-address";
+            text <=> IdentityState.lookup-draft;
+            invalid: IdentityState.lookup-problem != "";
+            accepted => { root.submit(); }
+        }
+        Btn {
+            text: "Look up";
+            y: (parent.height - self.height) / 2;
+            clicked => { root.submit(); }
+        }
+    }
+
+    if IdentityState.lookup-problem != "": Text {
+        text: IdentityState.lookup-problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        wrap: word-wrap;
+    }
+}
+
+// Claiming a name: three questions, one at a time.
+//
+// # Why this is stepped and the send form is not
+//
+// Because one of the three is a decision people do not know they are making.
+// The authority fields, left blank, make the identity its own authority — and
+// consensus refuses a revocation whose subject is its own recovery authority,
+// so the name is then **unrevokable, permanently**, until a later transaction
+// pays to change it. On one flat form that outcome was what happened to
+// somebody who read nothing: the explanation was the biggest block of text on
+// the screen, sitting between the two fields it was about, and the way past it
+// was to ignore it.
+//
+// A step cannot be ignored. It can only be answered.
+export component RegisterForm inherits VerticalLayout {
+    spacing: Sp.s6;
+
+    // The breadcrumb is built here, unlike the currency form's diagram, which
+    // comes from the core.
+    //
+    // The difference is what each one is about. That one draws **transactions**
+    // — how many there are and which cost money are facts about the chain, and
+    // an interface deciding them for itself would be a second opinion about
+    // what is being spent. This draws where somebody is in a form, which is
+    // this file's own business and has no chain fact in it at all. Routing it
+    // through the core would put a round trip between pressing Next and seeing
+    // the step change.
+    FlowStepper {
+        steps: [
+            {
+                label: "Choose the name",
+                state: IdentityState.claim-step == "name" ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Who can take it back",
+                state: IdentityState.claim-step == "name" ? "later"
+                    : IdentityState.claim-step == "authority" ? "now" : "done",
+                costs: false,
+            },
+            {
+                label: "Check and claim",
+                state: IdentityState.claim-step == "review" ? "now" : "later",
+                costs: false,
+            },
+        ];
+    }
+
+    // ── 1 · The name ────────────────────────────────────────────────────
+    if IdentityState.claim-step == "name": VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "The name this identity will be known by. It becomes an address that never changes, and it cannot be renamed later.";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+        // Same debounce as the currency form's name field, for the same reason:
+        // two chain requests per keystroke.
+        //
+        // One difference worth stating: there, the local rule about what a name
+        // may contain still runs immediately, because the draft check runs it
+        // too. Here `check-name` is the only path, so a capital letter is now
+        // flagged after the pause rather than on the keystroke. That is a third
+        // of a second on a message nobody is racing, against sixteen requests
+        // for an eight-letter name.
+        namecheck := Timer {
+            interval: 350ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                Actions.check-name(IdentityState.name-draft);
+            }
+        }
+        name := Field {
+            mono: true;
+            placeholder: "lowercase, digits, _ and -";
+            text <=> IdentityState.name-draft;
+            invalid: name.text != "" && IdentityState.name-problem != "";
+            edited => {
+                namecheck.running = false;
+                namecheck.running = true;
+            }
+        }
+        if IdentityState.name-problem != "": Text {
+            text: IdentityState.name-problem;
+            font-size: Typo.caption;
+            color: Theme.negative;
+            wrap: word-wrap;
+        }
+        if IdentityState.name-problem == "" && IdentityState.name-fee != "": Text {
+            text: "Free to claim · costs " + IdentityState.name-fee + " " + WalletState.ticker;
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    // ── 2 · Who can take it back ────────────────────────────────────────
+    //
+    // Two answers, both of them written down. Neither is preselected: the whole
+    // reason this is a step is that the dangerous answer used to be what
+    // happened when nobody chose.
+    if IdentityState.claim-step == "authority": VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "If this name is ever stolen — a key copied, a machine lost — revoking it is what stops the thief using it. Revoking needs a recovery authority that is not the identity itself, and that can only be set for free now.";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        choice := VerticalLayout {
+            spacing: Sp.s3;
+
+            Rectangle {
+                border-radius: R.md;
+                border-width: 1px;
+                border-color: IdentityState.claim-authority == "other"
+                    ? Theme.accent : Theme.border-subtle;
+                background: IdentityState.claim-authority == "other"
+                    ? Theme.accent-soft : Theme.bg-surface;
+                VerticalLayout {
+                    padding: Sp.s4;
+                    spacing: 2px;
+                    Text {
+                        text: "Another identity can recover it";
+                        font-size: Typo.body;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "The one to choose if this name matters. Name an identity you also control, or one you trust.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { IdentityState.claim-authority = "other"; }
+                }
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Another identity can recover it. The one to choose if this name matters.";
+                accessible-action-default => { IdentityState.claim-authority = "other"; }
+            }
+
+            Rectangle {
+                border-radius: R.md;
+                border-width: 1px;
+                border-color: IdentityState.claim-authority == "none"
+                    ? Theme.warning : Theme.border-subtle;
+                background: IdentityState.claim-authority == "none"
+                    ? Theme.warning-soft : Theme.bg-surface;
+                VerticalLayout {
+                    padding: Sp.s4;
+                    spacing: 2px;
+                    Text {
+                        text: "Nobody — it can never be revoked";
+                        font-size: Typo.body;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "The identity becomes its own authority, and the chain refuses a revocation whose subject is its own recovery authority. Changing this later costs another transaction.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        IdentityState.claim-authority = "none";
+                        // Cleared, so what the review shows and what the command
+                        // carries cannot disagree with the answer given here.
+                        IdentityState.revocation-draft = "";
+                        IdentityState.recovery-draft = "";
+                    }
+                }
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Nobody. It can never be revoked.";
+                accessible-action-default => {
+                    IdentityState.claim-authority = "none";
+                    IdentityState.revocation-draft = "";
+                    IdentityState.recovery-draft = "";
+                }
+            }
+        }
+
+        if IdentityState.claim-authority == "other": VerticalLayout {
+            spacing: Sp.s3;
+            HorizontalLayout {
+                spacing: Sp.s4;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Recovery — required";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> IdentityState.recovery-draft;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Sp.s2;
+                    Text {
+                        text: "Revocation — optional";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                    Field {
+                        mono: true;
+                        placeholder: "name@ or i-address";
+                        text <=> IdentityState.revocation-draft;
+                    }
+                }
+            }
+            // Which of the two actually decides this, said plainly. It is not
+            // obvious and it is the reason one field is required and the other
+            // is not.
+            Text {
+                text: "Recovery is the one that matters: leave it blank and the identity is its own recovery authority again, whatever revocation says. Left blank, revocation becomes the identity itself, which can revoke itself — that is fine.";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // ── 3 · Check and claim ─────────────────────────────────────────────
+    if IdentityState.claim-step == "review": VerticalLayout {
+        spacing: Sp.s5;
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: IdentityState.name-draft + "@";
+                font-family: Typo.mono;
+                font-size: Typo.title3;
+                color: Theme.text-primary;
+                wrap: char-wrap;
+            }
+            Text {
+                text: IdentityState.claim-authority == "none"
+                    ? "Nobody can revoke it, ever."
+                    : "Recoverable by " + IdentityState.recovery-draft;
+                font-size: Typo.body;
+                color: IdentityState.claim-authority == "none"
+                    ? Theme.warning : Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+
+        // What the chain is about to be asked to do. Stated in words rather
+        // than drawn as a second diagram: the one above says where you are in
+        // this form, and two three-step pictures on one screen is a puzzle.
+        //
+        // The deadline belongs here, before the first fee, and not only in the
+        // panel that appears after it has been paid.
+        Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s3;
+                Eyebrow { text: "WHAT HAPPENS NEXT · TWO TRANSACTIONS"; }
+                Text {
+                    text: "1 · The claim is signed and sent, and it costs a fee.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "2 · It has to be mined, which takes a few minutes. Pecu may be closed while that happens — the claim is written down and picked up again.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "3 · The name is registered, which costs the rest of the fee. This must happen within about twenty blocks: the deadline is inside the bytes the claim was signed with, so it cannot be extended, and missing it spends the first fee for nothing.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if IdentityState.claim-authority == "none": Rectangle {
+            background: Theme.warning-soft;
+            border-radius: R.md;
+            VerticalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s2;
+                Text {
+                    text: "This name will not be revokable";
+                    font-size: Typo.body;
+                    font-weight: Typo.w-medium;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "If its keys are ever copied, there is nothing that stops the copy being used. Naming a recovery authority is free right now and costs a transaction afterwards.";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+// A claim that is under way. Two transactions with a deadline between them.
+export component RegistrationPanel inherits VerticalLayout {
+    spacing: Sp.s4;
+
+    Text {
+        text: IdentityState.reg-name;
+        font-family: Typo.mono;
+        font-size: Typo.title3;
+        color: Theme.text-primary;
+        wrap: char-wrap;
+    }
+
+    Text {
+        text: IdentityState.reg-note;
+        font-size: Typo.body;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+
+    // Where the claim has got to, in the same diagram the review described it
+    // with. Empty when the claim ended without finishing — the note above
+    // already says the fee is spent and the name was not registered, and a
+    // path somebody might still walk would be the wrong picture of that.
+    if IdentityState.reg-steps.length > 0: FlowStepper {
+        steps: IdentityState.reg-steps;
+    }
+
+    // The deadline, in the shape the send screen uses for a warning — because
+    // it is one. The window is about twenty blocks and it cannot be extended:
+    // the expiry is inside the bytes the claim was signed with.
+    if IdentityState.reg-deadline != "": Rectangle {
+        background: Theme.warning-soft;
+        border-radius: R.md;
+        VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s2;
+            Text {
+                text: IdentityState.reg-deadline;
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.warning;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Safe to close Pecu — the claim is written down and will be picked up. Do not start the same name again; that would spend a second fee.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // What the claim costs.
+    //
+    // Set by the core when the name was checked and never shown once the claim
+    // was under way — so the panel could tell somebody a fee had been spent
+    // without ever telling them how much. The third value in this interface
+    // that was computed, carried and then dropped.
+    if IdentityState.reg-fee != "": HorizontalLayout {
+        Text {
+            text: "Fee";
+            font-size: Typo.body;
+            color: Theme.text-secondary;
+            horizontal-stretch: 1;
+        }
+        Money {
+            amount: IdentityState.reg-fee;
+            currency: WalletState.ticker;
+            size: Typo.num;
+        }
+    }
+
+    if IdentityState.reg-address != "": VerticalLayout {
+        spacing: Sp.s2;
+        Eyebrow { text: "ITS ADDRESS"; }
+        Text {
+            text: IdentityState.reg-address;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-primary;
+            wrap: char-wrap;
+        }
+    }
+
+    if IdentityState.reg-step == "done" && IdentityState.reg-cannot-be-revoked: Rectangle {
+        background: Theme.warning-soft;
+        border-radius: R.md;
+        VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s2;
+            Text {
+                text: "This VerusID cannot be revoked yet";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.warning;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "It is its own recovery authority. Pointing recovery at another identity is what makes revocation work, and your keys can still do that.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+        alignment: end;
+        if IdentityState.reg-step != "done": Btn {
+            text: "Abandon";
+            variant: "ghost";
+            enabled: !IdentityState.reg-busy;
+            clicked => { Actions.abandon-registration(); }
+        }
+        if IdentityState.reg-step == "ready": Btn {
+            text: IdentityState.reg-busy ? "Registering…" : "Register the name";
+            variant: "primary";
+            enabled: !IdentityState.reg-busy;
+            clicked => { Actions.finish-registration(); }
+        }
+        if IdentityState.reg-step == "done": Btn {
+            text: "Done";
+            variant: "primary";
+            clicked => { Actions.abandon-registration(); }
+        }
+    }
+}
+
+export component IdentitiesScreen inherits VerticalLayout {
+    spacing: Sp.s7;
+
+    // Who this wallet is, when it is anybody.
+    //
+    // # Why there is a first identity at all
+    //
+    // The design has one: `Profile` in the rail, and a single account at the
+    // foot of it. This wallet's model is different and truer — keys control
+    // *zero or more* names, and several is normal — so the two are reconciled
+    // rather than one pretending to be the other: the first name is drawn as a
+    // profile, and every other name it controls is listed underneath.
+    //
+    // "First" is the order the core returns, which is the order the chain gives
+    // for the keys in this wallet. It is not a "primary identity" — nothing on
+    // the chain says one name matters more than another, and inventing that
+    // would be the interface making up a fact about somebody's wallet.
+    if IdentityState.rows.length > 0: Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+
+            HorizontalLayout {
+                spacing: Sp.s6;
+
+                Rectangle {
+                    width: 56px;
+                    height: 56px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.width / 2;
+                    background: Theme.accent;
+                    Text {
+                        text: "@";
+                        font-family: Typo.mono;
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-on-accent;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Sp.s2;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: IdentityState.rows[0].name;
+                        font-family: Typo.mono;
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: IdentityState.rows[0].address;
+                        font-family: Typo.mono;
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        overflow: elide;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Sp.s3;
+                    HorizontalLayout {
+                        alignment: end;
+                        StatusPill {
+                            state: IdentityState.rows[0].tone;
+                            text: IdentityState.rows[0].status;
+                        }
+                    }
+                    Btn {
+                        text: @tr("Open");
+                        variant: "ghost";
+                        clicked => { Actions.open-identity(IdentityState.rows[0].address); }
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s5;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Sp.s2;
+            Text {
+                // Describes the list below it and nothing else. The looked-up
+                // section has its own heading and its own count, because this
+                // sentence is a claim about your keys and would be false over
+                // anything that is not yours.
+                // Says how many and then why, rather than opening with the
+                // method. Somebody arriving here wants the count; the sentence
+                // explaining where it came from is the reassurance underneath
+                // it, not the headline.
+                text: IdentityState.rows.length == 0
+                    ? @tr("No names your keys control")
+                    : IdentityState.rows.length == 1
+                        ? @tr("This is the only name your keys control")
+                        : (IdentityState.rows.length - 1) + @tr(" other names your keys control");
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        Btn {
+            text: IdentityState.busy ? "Reading…" : "Refresh";
+            enabled: !IdentityState.busy;
+            y: (parent.height - self.height) / 2;
+            clicked => { Actions.refresh-identities(); }
+        }
+        // Hidden while the form is open or a claim is running, because the
+        // thing it opens is already on screen and a button that does nothing
+        // is a button somebody presses twice wondering why.
+        if !IdentityState.claiming && IdentityState.reg-step == "": Btn {
+            text: "Claim a name";
+            variant: "primary";
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                IdentityState.claiming = true;
+                // From the beginning, every time. Reopening onto somebody's
+                // half-finished answers — above all an authority step already
+                // ticked — is how a considered choice becomes an inherited one.
+                IdentityState.claim-step = "name";
+                IdentityState.claim-authority = "";
+            }
+        }
+    }
+
+    // Hidden when there is nothing under the profile card to put in it.
+    //
+    // With exactly one name the hero above has already shown it, so the list
+    // would be an empty card sitting under a heading that says there is nothing
+    // in it — twice the furniture for none of the content.
+    if IdentityState.rows.length != 1: Card {
+        VerticalLayout {
+            padding: Sp.s3;
+
+            if IdentityState.rows.length == 0 && !IdentityState.busy: Rectangle {
+                height: 120px;
+                EmptyState {
+                    glyph: "◇";
+                    title: @tr("No VerusIDs yet");
+                    body: "A VerusID is a name you own on the chain. It can receive payments, hold currencies, and publish data. You can also look up anybody else's below.";
+                }
+            }
+
+            // From the second onwards: the first one is the card above, and a
+            // name that appears twice on one screen reads as two names.
+            // A wrapper, because Slint will not take an `if` as the body of a
+            // `for`: the body has to be an element. An empty layout collapses
+            // to nothing, which is what makes skipping the first row free.
+            for row[i] in IdentityState.rows: VerticalLayout {
+                // From the second onwards. The first is the card above, and a
+                // name that appears twice on one screen reads as two names.
+                if i > 0: ListRow {
+                    glyph: "◇";
+                    glyph-tone: row.tone == "online" ? Theme.positive
+                        : row.tone == "degraded" ? Theme.warning
+                        : row.tone == "offline" ? Theme.negative
+                        : Theme.text-tertiary;
+                    title: row.name;
+                    subtitle: row.address;
+                    subtitle-mono: true;
+                    interactive: true;
+                    clicked => { Actions.open-identity(row.address); }
+
+                    HorizontalLayout {
+                        spacing: Sp.s5;
+                        alignment: end;
+
+                        // Fixed, so the pills line up down the column. Left to size
+                        // themselves they follow the note beneath, and four rows
+                        // with four different notes put four pills in four places.
+                        VerticalLayout {
+                            width: 260px;
+                            alignment: center;
+                            spacing: 2px;
+                            HorizontalLayout {
+                                alignment: end;
+                                StatusPill {
+                                    state: row.tone;
+                                    text: row.status;
+                                }
+                            }
+                            if row.note != "": Text {
+                                text: row.note;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                    }
+                }
+            }
+        }
+    }
+
+    // A claim in progress replaces the form: there is deliberately only ever
+    // one, because each carries its own deadline and two clocks running at once
+    // is one more than anybody can watch.
+    //
+    // A running claim shows itself whatever the form is doing. It has a
+    // deadline measured in blocks, and a deadline nobody can see is a fee
+    // already spent.
+    if IdentityState.claiming || IdentityState.reg-step != "": VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow {
+            text: IdentityState.reg-step == "" ? "CLAIM A NAME" : "CLAIMING A NAME";
+        }
+        Card {
+            VerticalLayout {
+                padding: Sp.card-pad;
+                if IdentityState.reg-step == "": RegisterForm {}
+                if IdentityState.reg-step != "": RegistrationPanel {}
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: Sp.s4;
+        Eyebrow { text: "LOOK ONE UP"; }
+        Card {
+            VerticalLayout {
+                padding: Sp.card-pad;
+                LookUpForm {}
+            }
+        }
+    }
+
+    // Anything looked up that is not yours. Its own section, its own heading,
+    // and a way to be rid of it — an aside, not a second list competing with
+    // the one above.
+    if IdentityState.looked-up.length > 0: VerticalLayout {
+        spacing: Sp.s4;
+        HorizontalLayout {
+            spacing: Sp.s5;
+            Eyebrow {
+                text: "LOOKED UP · NOT YOURS";
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Btn {
+                text: "Clear";
+                variant: "ghost";
+                y: (parent.height - self.height) / 2;
+                clicked => { Actions.clear-lookups(); }
+            }
+        }
+        Card {
+            VerticalLayout {
+                padding: Sp.s3;
+                for row in IdentityState.looked-up: ListRow {
+                    glyph: "◇";
+                    glyph-tone: Theme.text-tertiary;
+                    title: row.name;
+                    subtitle: row.address;
+                    subtitle-mono: true;
+                    interactive: true;
+                    clicked => { Actions.open-identity(row.address); }
+
+                    HorizontalLayout {
+                        spacing: Sp.s5;
+                        alignment: end;
+                        VerticalLayout {
+                            width: 260px;
+                            alignment: center;
+                            spacing: 2px;
+                            HorizontalLayout {
+                                alignment: end;
+                                StatusPill {
+                                    state: row.tone;
+                                    text: row.status;
+                                }
+                            }
+                            if row.note != "": Text {
+                                text: row.note;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                            }
+                        }
+                        // One at a time, beside Clear for all of them. A list
+                        // that can only be emptied wholesale makes keeping one
+                        // entry cost keeping every entry.
+                        Rectangle {
+                            width: 88px;
+                            Btn {
+                                text: "Remove";
+                                variant: "ghost";
+                                x: parent.width - self.width;
+                                y: (parent.height - self.height) / 2;
+                                clicked => { Actions.unwatch-identity(row.address); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}
+
+// One transaction, over whatever is behind it.
+//
+// A sheet rather than a screen: it is a detour, and coming back should not need
+// a decision about where you were.
+// One key's worth of published content.
+//
+// Its own component because the key heading is drawn only on the first row of
+// each key, and an element declared inside an `if` cannot be addressed from
+// outside it.
+export component ContentRow inherits VerticalLayout {
+    in property <ContentEntry> entry;
+    spacing: Sp.s2;
+
+    if root.entry.first: VerticalLayout {
+        padding-top: Sp.s4;
+        spacing: 2px;
+        Text {
+            text: root.entry.name != "" ? root.entry.name : "Unnamed key";
+            font-size: Typo.caption;
+            font-weight: Typo.w-medium;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: root.entry.key;
+            font-family: Typo.mono;
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            wrap: char-wrap;
+        }
+        if root.entry.name == "": Text {
+            // Not "we could not look it up yet". A VDXF key is a one-way hash
+            // of a name, so for a key somebody else published there is nothing
+            // to look up and never will be.
+            text: "This key's name cannot be recovered — VDXF keys are one-way hashes.";
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    Rectangle {
+        background: Theme.bg-inset;
+        border-radius: R.md;
+        VerticalLayout {
+            padding: Sp.s4;
+            spacing: Sp.s2;
+
+            if root.entry.structured != "": Text {
+                // The daemon recognised the key and rendered it. The only
+                // structure anybody gets for free.
+                text: root.entry.structured;
+                font-family: Typo.mono;
+                font-size: Typo.micro;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+
+            if root.entry.text != "": Text {
+                text: root.entry.text;
+                font-size: Typo.body;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+
+            if root.entry.hex != "": Text {
+                // Always shown, under the reading rather than instead of it:
+                // the text is an interpretation, the bytes are the fact.
+                text: root.entry.hex;
+                font-family: Typo.mono;
+                font-size: Typo.micro;
+                color: root.entry.text != "" ? Theme.text-tertiary : Theme.text-primary;
+                wrap: char-wrap;
+            }
+
+            if root.entry.text == "" && root.entry.size != "": Text {
+                text: root.entry.size;
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+            }
+        }
+    }
+}
+
+// Deriving a key from a name, which is the only direction that exists.
+export component TryKeyForm inherits VerticalLayout {
+    spacing: Sp.s3;
+
+    Text {
+        // Says plainly what it is. The SDK's own words: trying candidate names
+        // against the derivation is a search, not a lookup.
+        text: "A key is a hash of a name, so it cannot be read backwards. Type a name you expect and see whether this identity published under it.";
+        font-size: Typo.caption;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+        key := Field {
+            horizontal-stretch: 1;
+            mono: true;
+            placeholder: "vrsc::identity.profile";
+            text <=> IdentityState.key-draft;
+            accepted => { Actions.derive-content-key(key.text); }
+        }
+        Btn {
+            text: "Try it";
+            y: (parent.height - self.height) / 2;
+            clicked => { Actions.derive-content-key(key.text); }
+        }
+    }
+
+    if IdentityState.derived-key != "": VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: IdentityState.derived-key;
+            font-family: Typo.mono;
+            font-size: Typo.num-sm;
+            color: Theme.text-primary;
+            wrap: char-wrap;
+        }
+        Text {
+            text: IdentityState.derived-present
+                ? "This identity has published under that name."
+                : "This identity has nothing under that name.";
+            font-size: Typo.caption;
+            color: IdentityState.derived-present ? Theme.positive : Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// One VerusID, in full.
+//
+// Sections in order of consequence rather than in the order the fields arrive:
+// who can sign, who can take it away, whether it is held, and only then what it
+// has published.
+// A change built and signed, waiting to be sent.
+//
+// Its own layer over the sheet rather than a section inside it, for the reason
+// the send review is its own step: this is the last moment before something
+// irreversible, and it should not be one heading among eight.
+export component IdentityChangeReview inherits Rectangle {
+    background: Theme.dark ? #0B0C0EE0 : #FBFBFCE0;
+    TouchArea {}
+
+    Card {
+        // Above a sheet that is itself elevated, so this one needs the same
+        // treatment or the last step before something irreversible would be the
+        // flattest surface on screen.
+        elevated: true;
+        width: 520px;
+        height: content.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        content := VerticalLayout {
+            padding: Sp.s8;
+            spacing: Sp.s5;
+
+            VerticalLayout {
+                spacing: Sp.s2;
+                Text {
+                    text: "Check this change";
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-bold;
+                    color: Theme.text-primary;
+                }
+                // Which identity. The sheet behind this one names it, and the
+                // sheet behind this one is under a scrim — so a dialog about
+                // revoking something did not say what it was about.
+                Text {
+                    text: IdentityState.name;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-secondary;
+                }
+            }
+            Text {
+                text: IdentityState.change-description;
+                font-size: Typo.body;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Text {
+                    text: "Fee";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Money {
+                    amount: IdentityState.change-fee;
+                    currency: WalletState.ticker;
+                    size: Typo.num;
+                }
+            }
+
+            // A word, for the one change nobody can undo. The same shape the
+            // mainnet spending switch uses — and checked in the core, not here,
+            // so a different interface cannot skip it.
+            if IdentityState.change-confirmation != "": VerticalLayout {
+                spacing: Sp.s3;
+                Rectangle {
+                    background: Theme.negative-soft;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s2;
+                        Text {
+                            text: "This cannot be undone from here";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.negative;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "Only the recovery authority can bring a revoked identity back — and if that authority is the identity itself, nobody can.";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Text {
+                    text: "Type " + IdentityState.change-confirmation + " to confirm";
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                }
+                Field {
+                    mono: true;
+                    placeholder: IdentityState.change-confirmation;
+                    text <=> IdentityState.change-typed;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+                alignment: end;
+                Btn {
+                    text: "Back";
+                    variant: "ghost";
+                    clicked => { Actions.cancel-identity-change(IdentityState.change-ticket); }
+                }
+                // Off until the word is typed.
+                //
+                // It used to be live from the moment the review opened: the
+                // affirmative, destructive-red button on the one screen in this
+                // wallet that revokes an identity, pressable with the box
+                // empty. The core refused, so nothing was lost — but a button
+                // that invites a press and then declines it teaches somebody
+                // that the confirmation is a formality, which is the opposite
+                // of what a confirmation is for.
+                Btn {
+                    text: IdentityState.change-busy ? "Sending…" : "Send it";
+                    variant: IdentityState.change-confirmation != "" ? "destructive" : "primary";
+                    enabled: !IdentityState.change-busy
+                        && (IdentityState.change-confirmation == ""
+                            || IdentityState.change-typed == IdentityState.change-confirmation);
+                    clicked => {
+                        Actions.confirm-identity-change(
+                            IdentityState.change-ticket,
+                            IdentityState.change-typed,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component IdentitySheet inherits Rectangle {
+    background: Theme.dark ? #0B0C0EC0 : #FBFBFCC0;
+
+    // The authority form is shut and emptied by `close-identity`, which every
+    // route out of this sheet goes through — the scrim, the button and Escape.
+    // Not on `init` here: that would also fire after a fixture had opened the
+    // form on purpose, and the reference image would stop covering it.
+
+    // Swallows clicks on the scrim and closes.
+    TouchArea {
+        clicked => { Actions.close-identity(); }
+    }
+
+    Card {
+        elevated: true;
+        width: 640px;
+        height: min(root.height - Sp.s11 * 2, content.preferred-height);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        // The card itself must not close it.
+        TouchArea {}
+
+        Flickable {
+            viewport-height: content.preferred-height;
+
+            content := VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                HorizontalLayout {
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Sp.s2;
+                        Text {
+                            text: IdentityState.name;
+                            font-size: Typo.title2;
+                            font-weight: Typo.w-bold;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: IdentityState.address;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: Theme.text-tertiary;
+                            wrap: char-wrap;
+                        }
+                    }
+                    Btn {
+                        text: "Close";
+                        y: 0;
+                        clicked => { Actions.close-identity(); }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s5;
+                    StatusPill {
+                        state: IdentityState.tone;
+                        text: IdentityState.status;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Money {
+                        amount: IdentityState.balance;
+                        currency: WalletState.ticker;
+                        size: Typo.num;
+                    }
+                }
+
+                // ── The warning that outranks everything on this screen ──
+                if IdentityState.cannot-be-revoked: Rectangle {
+                    background: Theme.warning-soft;
+                    border-radius: R.md;
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s2;
+                        Text {
+                            text: "This VerusID cannot be revoked";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.warning;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            // The default a fresh registration lands on, and
+                            // the one nobody is told about at the time.
+                            text: "Its recovery authority is itself, and the chain refuses a revocation whose subject is its own recovery authority. Setting a different recovery authority is what makes it revocable.";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "WHO CAN SIGN"; }
+                    for address in IdentityState.primary-addresses: Text {
+                        text: address;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-primary;
+                        wrap: char-wrap;
+                    }
+                    Text {
+                        text: IdentityState.signatures-required + " signatures required";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                    }
+                    Text {
+                        text: IdentityState.control-note;
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "WHO CAN TAKE IT AWAY"; }
+                    HorizontalLayout {
+                        spacing: Sp.s5;
+                        Text {
+                            text: "Revocation";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            width: 96px;
+                        }
+                        Text {
+                            text: IdentityState.revocation-authority;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: Theme.text-primary;
+                            horizontal-stretch: 1;
+                            wrap: char-wrap;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Sp.s5;
+                        Text {
+                            text: "Recovery";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            width: 96px;
+                        }
+                        Text {
+                            text: IdentityState.recovery-authority;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: Theme.text-primary;
+                            horizontal-stretch: 1;
+                            wrap: char-wrap;
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                // Only offered where this wallet can actually sign. A button
+                // that builds a transaction the chain will refuse is worse than
+                // no button: it costs a fee to learn.
+                // Behind a button, like the claim form on the screen behind
+                // this one and for the same reason: it is three controls and a
+                // paragraph, it is used once in the life of an identity, and
+                // left open it pushed the timelock and everything this identity
+                // has published below the bottom of a sheet somebody has to
+                // scroll.
+                if IdentityState.can-sign && !IdentityState.changing-authorities:
+                HorizontalLayout {
+                    alignment: start;
+                    Btn {
+                        text: "Change the authorities";
+                        clicked => { IdentityState.changing-authorities = true; }
+                    }
+                }
+
+                if IdentityState.can-sign && IdentityState.changing-authorities:
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "POINT THE AUTHORITIES SOMEWHERE ELSE"; }
+                    Text {
+                        text: "Whoever you name here can take this identity from you, and this wallet cannot take it back. That is the point of them — and the reason it is worth being sure.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: Sp.s4;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: Sp.s2;
+                            Text {
+                                text: "Revocation";
+                                font-size: Typo.caption;
+                                color: Theme.text-secondary;
+                            }
+                            Field {
+                                mono: true;
+                                placeholder: "i-address";
+                                text <=> IdentityState.new-revocation;
+                            }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: Sp.s2;
+                            Text {
+                                text: "Recovery";
+                                font-size: Typo.caption;
+                                color: Theme.text-secondary;
+                            }
+                            Field {
+                                mono: true;
+                                placeholder: "i-address";
+                                text <=> IdentityState.new-recovery;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Sp.s3;
+                        Btn {
+                            text: "Cancel";
+                            variant: "ghost";
+                            enabled: !IdentityState.change-busy;
+                            clicked => {
+                                IdentityState.changing-authorities = false;
+                                // Cleared with the form. A half-typed i-address
+                                // left behind would reappear the next time this
+                                // opens, against whichever identity that is.
+                                IdentityState.new-revocation = "";
+                                IdentityState.new-recovery = "";
+                            }
+                        }
+                        Btn {
+                            text: "Review this change";
+                            enabled: !IdentityState.change-busy
+                                && (IdentityState.new-revocation != ""
+                                    || IdentityState.new-recovery != "");
+                            clicked => {
+                                Actions.set-identity-authorities(
+                                    IdentityState.address,
+                                    IdentityState.new-revocation,
+                                    IdentityState.new-recovery,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "TIMELOCK"; }
+                    Text {
+                        // Never "locked: true". The two locked states behave
+                        // nothing alike and only one of them ends on its own.
+                        text: IdentityState.timelock-note;
+                        font-size: Typo.body;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+
+                    if IdentityState.can-sign: HorizontalLayout {
+                        spacing: Sp.s4;
+                        blocks := Field {
+                            horizontal-stretch: 1;
+                            mono: true;
+                            placeholder: IdentityState.status == "Locked"
+                                ? "extra blocks on top of the delay"
+                                : "blocks to wait once unlocking is asked for";
+                            text <=> IdentityState.lock-blocks;
+                        }
+                        if IdentityState.status != "Locked": Btn {
+                            text: "Lock";
+                            y: (parent.height - self.height) / 2;
+                            enabled: !IdentityState.change-busy && blocks.text != "";
+                            clicked => {
+                                Actions.lock-identity(IdentityState.address, blocks.text.to-float());
+                            }
+                        }
+                        if IdentityState.status == "Locked": Btn {
+                            text: "Start unlocking";
+                            y: (parent.height - self.height) / 2;
+                            enabled: !IdentityState.change-busy;
+                            clicked => {
+                                Actions.unlock-identity(IdentityState.address, blocks.text.to-float());
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                // Last, and deliberately so: these are the two that end an
+                // identity's ordinary life, and they belong below everything
+                // somebody might have come here to read.
+                if IdentityState.can-sign: VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "TAKE IT OUT OF SERVICE"; }
+                    HorizontalLayout {
+                        spacing: Sp.s4;
+                        alignment: start;
+                        if IdentityState.status != "Revoked": Btn {
+                            text: "Revoke";
+                            variant: "destructive";
+                            enabled: !IdentityState.change-busy;
+                            clicked => { Actions.revoke-identity(IdentityState.address); }
+                        }
+                        if IdentityState.status == "Revoked": Btn {
+                            text: "Recover";
+                            variant: "primary";
+                            enabled: !IdentityState.change-busy;
+                            clicked => { Actions.recover-identity(IdentityState.address); }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s4;
+                    Eyebrow { text: "PUBLISHED CONTENT"; }
+                    Segmented {
+                        width: 320px;
+                        options: ["Now", "Over time"];
+                        index <=> IdentityState.content-view;
+                    }
+                    Text {
+                        text: IdentityState.content-view == 0
+                            ? "What this identity holds right now."
+                            : "Every value it has ever published, oldest first — a key written twice appears twice.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+
+                    if IdentityState.content-view == 0 && IdentityState.content.length == 0: Text {
+                        text: "Nothing published.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                    }
+                    if IdentityState.content-view == 1 && IdentityState.content-history.length == 0: Text {
+                        text: "No history available — this node does not answer for it.";
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+
+                    if IdentityState.content-view == 0: VerticalLayout {
+                        spacing: Sp.s2;
+                        for entry in IdentityState.content: ContentRow { entry: entry; }
+                    }
+                    if IdentityState.content-view == 1: VerticalLayout {
+                        spacing: Sp.s2;
+                        for entry in IdentityState.content-history: ContentRow { entry: entry; }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                VerticalLayout {
+                    spacing: Sp.s3;
+                    Eyebrow { text: "TRY A KEY"; }
+                    TryKeyForm {}
+                }
+            }
+        }
+    }
+}

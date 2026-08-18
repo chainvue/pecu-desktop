@@ -1,0 +1,750 @@
+// The dashboard, and the panels it is made of.
+
+import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Skeleton, StatusPill } from "../components/base.slint";
+import { Actions, ChartState, MarketState, SeedState, SendState, WalletState } from "../vm/state.slint";
+
+// The screen shown whenever there is no unlocked wallet.
+// A payment we could not confirm reached the network.
+//
+// Given the top of the dashboard because it is the one thing in this wallet
+// that is genuinely unresolved, and because the wrong move — sending again —
+// is the tempting one.
+export component PendingPayments inherits VerticalLayout {
+    spacing: Sp.s4;
+    Eyebrow { text: "UNCONFIRMED"; }
+
+    Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+            spacing: Sp.s5;
+
+            for row in SendState.pending-rows: VerticalLayout {
+                // Whether "Stop tracking" has been pressed once.
+                //
+                // Two presses, because abandoning is not merely forgetting. The
+                // stored bytes go with the record, and those bytes are the only
+                // safe way to finish this payment — resending them cannot pay
+                // twice, and rebuilding is forbidden precisely because it can.
+                // So this discards the one recovery there is, from a ghost
+                // button, in one click, with nothing asked.
+                //
+                // A second press rather than a dialog: the weight is real but
+                // it is not a revocation, and a modal over the dashboard for
+                // every abandoned record would be its own problem.
+                property <bool> confirming: false;
+
+                spacing: Sp.s4;
+
+                HorizontalLayout {
+                    spacing: Sp.s5;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: row.state == "absent"
+                                ? "This payment has not appeared on the network"
+                                : "We could not confirm this payment was sent";
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.warning;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: row.state == "absent"
+                                ? "Asked " + row.checks + " times and the node has never seen it. Sending the same transaction again is safe — it is the same bytes, so it cannot pay twice."
+                                : "It may already be on its way. Do not send it again yet — that could send the money twice. Pecu is checking.";
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Money {
+                        amount: row.amount;
+                        currency: WalletState.ticker;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Text {
+                    text: row.txid;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    wrap: char-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: "Check now";
+                        clicked => { Actions.resolve-pending(row.id, "check"); }
+                    }
+                    // Only once the node has been asked repeatedly and never
+                    // seen it. Offering this earlier would be offering the one
+                    // action that can pay twice.
+                    if row.state == "absent": Btn {
+                        text: "Send the same transaction again";
+                        variant: "primary";
+                        clicked => { Actions.resolve-pending(row.id, "resend"); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    if !confirming: Btn {
+                        text: "Stop tracking";
+                        variant: "ghost";
+                        clicked => { confirming = true; }
+                    }
+                    if confirming: Btn {
+                        text: "Keep it";
+                        variant: "ghost";
+                        clicked => { confirming = false; }
+                    }
+                    if confirming: Btn {
+                        text: "Discard the record";
+                        variant: "destructive";
+                        clicked => {
+                            confirming = false;
+                            Actions.resolve-pending(row.id, "abandon");
+                        }
+                    }
+                }
+
+                if confirming: Text {
+                    text: "Pecu will stop asking about this payment and will drop the signed transaction it kept. If it never reached the network, there is then no way to send it that is guaranteed not to pay twice.";
+                    font-size: Typo.caption;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+// The plotted area: two paths, a wipe, and a crosshair.
+//
+// Its own component because the draw-in needs a clip rectangle wrapping a
+// holder pinned at full size, and because the touch area has to be able to
+// address the paths — neither survives being written inline.
+export component ChartPlot inherits Rectangle {
+    // Slint has no stroke-dasharray and no path-length animation, so the
+    // draw-in is a **clip wipe**: an outer rectangle whose width animates from
+    // nothing to full, containing a holder that is always the full size. The
+    // paths never move; what moves is how much of them is visible. Zero
+    // per-frame path work, and it works identically for the gradient.
+    in-out property <float> progress: 0;
+
+    // Runs once when the data arrives. Reversing it on every re-plot would
+    // mean the chart redrew itself every fifteen seconds when the tip poll
+    // finds a new block, which is a wallet fidgeting at you.
+    states [
+        drawn when ChartState.has-data: {
+            progress: 1;
+            in {
+                animate progress {
+                    duration: Motion.draw;
+                    easing: cubic-bezier(0.22, 1, 0.36, 1);
+                    enabled: Motion.enabled;
+                }
+            }
+        }
+    ]
+
+    // The fill first, so the stroke is never drawn under it.
+    Rectangle {
+        width: parent.width * root.progress;
+        clip: true;
+
+        Rectangle {
+            width: root.width;
+            height: root.height;
+
+            Path {
+                commands: ChartState.area-at(root.width, root.height);
+                // Faded to nothing at the baseline. The stroke has to stay
+                // readable against the fill directly beneath it, so the fill
+                // never gets close to the stroke's own weight.
+                // Faded to nothing well before the baseline. A fill still
+                // visible at the bottom reads as a filled shape rather than as
+                // depth under a line, and it competes with the stroke it is
+                // supposed to sit beneath.
+                //
+                // The top stop is chosen to look right **without** the fade as
+                // well: the software renderer — which is what draws the
+                // reference images, and what would draw the wallet on a machine
+                // with no working GPU path — fills a `Path` with the first stop
+                // and ignores the rest. A gradient whose top end is too strong
+                // to stand on its own would then look correct in review and
+                // wrong on somebody's laptop.
+                fill: @linear-gradient(180deg,
+                    Theme.chart-line.with-alpha(0.16) 0%,
+                    Theme.chart-line.with-alpha(0.05) 60%,
+                    Theme.chart-line.with-alpha(0.0) 100%);
+            }
+
+            Path {
+                commands: ChartState.line-at(root.width, root.height);
+                stroke: Theme.chart-line;
+                stroke-width: 2px;
+            }
+        }
+    }
+
+    // Where the line ends — which is now. The one point on the chart that is
+    // still moving, and the anchor the wipe appears to be drawn by.
+    if ChartState.hover < 0: Rectangle {
+        x: ChartState.end-x-at(root.width, root.height) - 4px;
+        y: ChartState.end-y-at(root.width, root.height) - 4px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.chart-line;
+        opacity: root.progress;
+    }
+
+    // The crosshair. Only while a pointer is actually over the chart.
+    if ChartState.hover >= 0: Rectangle {
+        x: ChartState.hover-x;
+        width: 1px;
+        y: 0;
+        height: root.height;
+        background: Theme.chart-grid.with-alpha(0.14);
+    }
+
+    if ChartState.hover >= 0: Rectangle {
+        x: ChartState.hover-x - 5px;
+        y: ChartState.hover-y - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.chart-line;
+        border-width: 2px;
+        border-color: Theme.bg-surface;
+        // Gliding between samples rather than teleporting is most of the
+        // difference between this and a chart library.
+        animate x { duration: 90ms; easing: ease-out; enabled: Motion.enabled; }
+        animate y { duration: 90ms; easing: ease-out; enabled: Motion.enabled; }
+    }
+
+    touch := TouchArea {
+        // `mouse-x` updates on hover; `moved()` only fires while pressed, so
+        // this is a binding rather than a callback.
+        changed mouse-x => {
+            if (touch.has-hover) { ChartState.hovered(touch.mouse-x); }
+        }
+        changed has-hover => {
+            if (!touch.has-hover) { ChartState.left(); }
+        }
+    }
+}
+
+// The balance over time, with its range control and its own empty state.
+export component BalanceChart inherits VerticalLayout {
+    // Settable, because the same chart is asked for at two sizes: it is the
+    // subject of its own card on a screen dedicated to it, and a sparkline
+    // under the balance on the dashboard. 200px of chart above three columns
+    // pushed all three below the fold.
+    in property <length> plot-height: 200px;
+
+    spacing: Sp.s4;
+
+    Rectangle {
+        height: root.plot-height;
+
+        ChartPlot {
+            width: parent.width;
+            height: parent.height;
+        }
+    }
+
+    if ChartState.has-data: HorizontalLayout {
+        spacing: Sp.s5;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            // While hovering, the header reads the value AT THE CURSOR. The
+            // change figure keeps describing the window, which is what makes
+            // the two useful together.
+            Text {
+                text: ChartState.hover >= 0
+                    ? ChartState.hover-amount + " " + ChartState.ticker
+                    : ChartState.change;
+                font-family: Typo.mono;
+                font-size: Typo.num-sm;
+                color: ChartState.hover >= 0 ? Theme.text-primary
+                    : ChartState.change-tone == "positive" ? Theme.positive
+                    : ChartState.change-tone == "negative" ? Theme.negative
+                    : Theme.text-secondary;
+            }
+            Text {
+                text: ChartState.hover >= 0 ? ChartState.hover-when : ChartState.caption;
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        // What period this is a picture of. The chart has no gridlines and no
+        // tick labels, so this is the only thing that says so — a question the
+        // range buttons used to answer by implication, and which nothing
+        // answered once they were gone.
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: ChartState.span-from == "" ? "" : ChartState.span-from + " → now";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+            }
+            // And what the plot's floor and ceiling are worth — the other axis,
+            // which had no label at all.
+            if ChartState.span-range != "": Text {
+                text: ChartState.span-range;
+                font-family: Typo.mono;
+                font-size: Typo.micro;
+                color: Theme.text-disabled;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+// What this wallet holds.
+export component AssetsPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if WalletState.assets.length == 0 && !WalletState.loading: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "◇";
+                title: @tr("No assets yet");
+                body: @tr("Receive to get started.");
+            }
+        }
+
+        if WalletState.loading: Rectangle {
+            height: 64px;
+            HorizontalLayout {
+                padding: Sp.s5;
+                spacing: Sp.s5;
+                Skeleton { width: 34px; height: 34px; radius: R.full; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Sp.s2;
+                    Skeleton { width: 120px; height: 13px; }
+                    Skeleton { width: 72px; height: 11px; }
+                }
+            }
+        }
+
+        for asset in WalletState.assets: ListRow {
+            glyph: asset.native ? "◆" : "◇";
+            glyph-tone: asset.native ? Theme.accent : Theme.text-secondary;
+            title: asset.name;
+            subtitle: asset.secondary;
+            interactive: false;
+
+            // Right-aligned, so a column of amounts lines up on the decimal
+            // point rather than floating in the middle of the row. With the
+            // monospace family that is what makes two balances comparable.
+            HorizontalLayout {
+                alignment: end;
+                Money {
+                    amount: asset.amount;
+                    show-currency: false;
+                    size: Typo.num;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+}
+
+// What things are worth. The same rows the markets screen shows, which is why
+// there is no second source for them to disagree with.
+export component MarketsPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if MarketState.rows.length == 0: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "⊙";
+                title: @tr("No prices yet");
+                body: @tr("Prices appear once a converter has been read.");
+            }
+        }
+
+        // No glyph. Every row would carry the same one, which is decoration
+        // rather than information — and it is 46px of a column narrow enough
+        // that it was truncating the names instead.
+        for row in MarketState.rows: ListRow {
+            title: row.name;
+            subtitle: row.price;
+            interactive: false;
+
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: row.change;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    // Carried, not read off the sign — `—` has none.
+                    color: row.tone == "positive" ? Theme.positive
+                        : row.tone == "negative" ? Theme.negative
+                        : Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// What has happened.
+export component ActivityPanel inherits Card {
+    VerticalLayout {
+        padding: Sp.s3;
+
+        if WalletState.activity.length == 0 && !WalletState.loading: Rectangle {
+            height: 108px;
+            EmptyState {
+                glyph: "○";
+                title: @tr("No transactions yet");
+                body: @tr("Activity appears here once this wallet has been paid.");
+            }
+        }
+
+        for tx in WalletState.activity: ListRow {
+            glyph: tx.direction == "in" ? "↓" : tx.direction == "out" ? "↑" : "↔";
+            glyph-tone: tx.direction == "in" ? Theme.positive
+                : tx.direction == "out" ? Theme.negative
+                : Theme.text-secondary;
+            title: tx.direction == "in" ? @tr("Received")
+                : tx.direction == "out" ? @tr("Sent")
+                : @tr("Moved");
+            subtitle: tx.when;
+            interactive: true;
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+                alignment: end;
+
+                // The pill goes BEFORE the amount, so a pending row does not
+                // push its figure out of the column every other row lines up
+                // in. Alignment is what makes a list of amounts readable; the
+                // pill can move.
+                if tx.pending: StatusPill {
+                    state: "pending";
+                    text: @tr("Pending");
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Money {
+                    amount: tx.amount;
+                    show-currency: false;
+                    size: Typo.num-sm;
+                    tone: tx.direction == "in" ? "positive"
+                        : tx.direction == "out" ? "negative"
+                        : "neutral";
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+}
+
+export component DashboardScreen inherits VerticalLayout {
+    // Asked of the window, because `go` belongs to the window: this screen
+    // knows it wants Send, not how the shell gets there.
+    callback navigate(string);
+
+    spacing: Sp.section-gap;
+
+    if SendState.pending-rows.length > 0: PendingPayments {}
+
+    // A wallet whose phrase has never been written down is one disk failure
+    // from being gone. That is worth the top of the screen, and worth staying
+    // there — it disappears when the backup is confirmed, not when dismissed.
+    if WalletState.backup-key != "": Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+
+            HorizontalLayout {
+                spacing: Sp.s5;
+
+                Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: R.full;
+                    background: Theme.warning-soft;
+                    Text {
+                        text: "!";
+                        font-size: 15px;
+                        font-weight: Typo.w-bold;
+                        color: Theme.warning;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: "Your recovery phrase is not written down";
+                        font-size: Typo.body;
+                        font-weight: Typo.w-medium;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "Without it, nothing can restore this wallet — not us, not anyone.";
+                        font-size: Typo.caption;
+                        color: Theme.text-secondary;
+                    }
+                }
+
+                Btn {
+                    text: "Back up now";
+                    variant: "primary";
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        SeedState.problem = "";
+                        SeedState.step = "passphrase";
+                    }
+                }
+            }
+        }
+    }
+
+    // The hero.
+    //
+    // Total first, because that is the number people quote — with the breakdown
+    // directly beneath it, because a Verus balance is genuinely several numbers
+    // and a wallet that shows one cannot explain "you have 500 but can spend
+    // 20". The design has no equivalent of that row and it is kept anyway: it
+    // is the difference between a figure and a spendable figure.
+    //
+    // The three actions sit in the card rather than under it, which is the
+    // design's arrangement and the one that stops them competing with the
+    // section headings below.
+    Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+            spacing: Sp.s5;
+
+            HorizontalLayout {
+                spacing: Sp.s7;
+
+                VerticalLayout {
+                    spacing: Sp.s4;
+                    horizontal-stretch: 1;
+
+                    HorizontalLayout {
+                        spacing: Sp.s4;
+                        alignment: start;
+                        Eyebrow { text: @tr("TOTAL BALANCE"); }
+                        // "These numbers were true, just not now" — a different
+                        // statement from "loading", and the one worth making
+                        // when a read fails against figures already on screen.
+                        if WalletState.stale: Eyebrow {
+                            text: @tr("· NOT UP TO DATE");
+                            color: Theme.warning;
+                        }
+                    }
+
+                    if WalletState.loading: Skeleton {
+                        width: 320px;
+                        height: 48px;
+                    }
+
+                    if !WalletState.loading: Money {
+                        amount: WalletState.total;
+                        currency: WalletState.ticker;
+                        size: Typo.hero;
+                        mono: false;
+                    }
+
+                    // The parts of the total, as separate figures rather than
+                    // one sentence.
+                    //
+                    // This was a single dot-separated run at caption size:
+                    // three long monospace numbers, three meanings, one line.
+                    // Nobody parses that — and the one that decides whether a
+                    // payment can be made at all, spendable, was the least
+                    // prominent number on a screen headed by a total that
+                    // includes money nobody can spend.
+                    if !WalletState.loading && WalletState.has-breakdown: HorizontalLayout {
+                        spacing: Sp.s9;
+                        alignment: start;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.spendable;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.text-primary;
+                            }
+                            Text {
+                                text: @tr("spendable");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        if WalletState.immature != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.immature;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.warning;
+                            }
+                            Text {
+                                // The wait belongs with the figure it
+                                // qualifies, not in a parenthesis inside a
+                                // longer sentence.
+                                text: WalletState.matures-in == ""
+                                    ? @tr("maturing")
+                                    : @tr("maturing · ") + WalletState.matures-in;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        if WalletState.incoming != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.incoming;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.positive;
+                            }
+                            Text {
+                                text: @tr("arriving");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+
+                        // Money that has left and not settled.
+                        if WalletState.pending != "": VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.pending;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: @tr("leaving");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+                    }
+                }
+
+                // The three things a person came here to do.
+                VerticalLayout {
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: Sp.s3;
+                        alignment: end;
+                        Btn {
+                            text: @tr("Send");
+                            variant: "primary";
+                            clicked => { root.navigate("send"); }
+                        }
+                        Btn {
+                            text: @tr("Receive");
+                            variant: "secondary";
+                            clicked => { root.navigate("receive"); }
+                        }
+                        Btn {
+                            text: @tr("Convert");
+                            variant: "ghost";
+                            clicked => { root.navigate("convert"); }
+                        }
+                    }
+                }
+            }
+
+            // The balance over time, inside the card with the figure it is a
+            // chart of, so the two read as one statement.
+            //
+            // Absent entirely until there is something to draw. A wallet with
+            // no transactions would otherwise stack three empty states — no
+            // chart, no assets, no transactions — which says one thing three
+            // times and makes a new wallet look broken.
+            if ChartState.has-data: BalanceChart { plot-height: 132px; }
+        }
+    }
+
+    // A wallet with nothing in it says so once.
+    //
+    // The three columns below each carry their own empty state, and on a fresh
+    // wallet all three fire at the same moment — "no assets", "no prices", "no
+    // transactions" — which is one fact stated three times and reads as
+    // breakage rather than as newness. The chart is already absent for exactly
+    // this reason; the comment on it warned about stacking empty states and
+    // then a third column was added anyway.
+    property <bool> nothing-yet: !WalletState.loading
+        && WalletState.assets.length == 0
+        && WalletState.activity.length == 0
+        && MarketState.rows.length == 0;
+
+    if root.nothing-yet: Card {
+        VerticalLayout {
+            padding: Sp.s10;
+            EmptyState {
+                glyph: "◇";
+                title: @tr("Nothing here yet");
+                body: @tr("Receive to this wallet, and the balance, its history and what things are worth all appear here.");
+                action-text: @tr("Show my address");
+                action => { root.navigate("receive"); }
+            }
+        }
+    }
+
+    // Three columns, which is what the design does with the space and what
+    // stops each list running the width of a 1240px window.
+    if !root.nothing-yet: HorizontalLayout {
+        spacing: Sp.s5;
+
+        // `alignment: start` on each, and it is load-bearing: without it the
+        // layout hands the spare height to the gap between the heading and the
+        // card, so three columns holding different amounts began at three
+        // different heights and the shortest one sat at the bottom of the
+        // screen.
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("ASSETS"); }
+            AssetsPanel {}
+        }
+
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("MARKETS"); }
+            MarketsPanel {}
+        }
+
+        VerticalLayout {
+            spacing: Sp.s4;
+            alignment: start;
+            horizontal-stretch: 1;
+            Eyebrow { text: @tr("RECENT ACTIVITY"); }
+            ActivityPanel {}
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}

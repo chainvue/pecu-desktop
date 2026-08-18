@@ -1,0 +1,726 @@
+// Settings, in four tabs.
+
+import { Motion, Sp, Theme, Typo } from "../theme/theme.slint";
+import { Btn, Card, Eyebrow, ListRow, Segmented, StatusPill } from "../components/base.slint";
+import { KeyRow, KnownAddressRow } from "../vm/structs.slint";
+import { Actions, AppInfo, NetworkState, SendState, WalletState } from "../vm/state.slint";
+import { Field } from "../components/form.slint";
+
+// One labelled block of settings.
+export component Section inherits VerticalLayout {
+    in property <string> title;
+    in property <string> body;
+    spacing: Sp.s4;
+
+    VerticalLayout {
+        spacing: Sp.s2;
+        Eyebrow { text: root.title; }
+        if root.body != "": Text {
+            text: root.body;
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Sp.card-pad;
+            spacing: Sp.s5;
+            @children
+        }
+    }
+}
+
+// The typing-the-word half, separate so its field is addressable — an input
+// declared inside an `if` cannot be reached from outside it.
+export component MainnetArm inherits HorizontalLayout {
+    spacing: Sp.s4;
+
+    confirm := Field {
+        horizontal-stretch: 1;
+        mono: true;
+        placeholder: "mainnet";
+        accepted => { root.arm(); }
+    }
+    Btn {
+        // The word is checked in the CORE, not here. A confirmation the UI
+        // could skip would be theatre.
+        text: "Type mainnet to enable";
+        enabled: confirm.text != "";
+        y: (parent.height - self.height) / 2;
+        clicked => { root.arm(); }
+    }
+
+    function arm() {
+        if (confirm.text == "") { return; }
+        Actions.set-mainnet-spend(true, confirm.text);
+        confirm.text = "";
+    }
+}
+
+// Turning on the one thing that can lose real money.
+export component MainnetToggle inherits VerticalLayout {
+    spacing: Sp.s4;
+
+    HorizontalLayout {
+        spacing: Sp.s5;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: NetworkState.allow-mainnet-spend
+                    ? "Spending on mainnet is ON"
+                    : "Spending on mainnet is off";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: NetworkState.allow-mainnet-spend ? Theme.warning : Theme.text-primary;
+            }
+            Text {
+                text: "Reading a mainnet balance is always allowed. This is only about signing away real coins, and it turns itself off again every time Pecu starts.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+
+        if NetworkState.allow-mainnet-spend: Btn {
+            text: "Turn off";
+            variant: "destructive";
+            y: (parent.height - self.height) / 2;
+            clicked => { Actions.set-mainnet-spend(false, ""); }
+        }
+    }
+
+    if !NetworkState.allow-mainnet-spend: MainnetArm {}
+}
+
+// Replacing the passphrase. Costs two key derivations and re-seals 32 bytes —
+// no key is re-encrypted, which is why this is cheap regardless of how many
+// keys the wallet holds.
+export component PassphraseChange inherits VerticalLayout {
+    spacing: Sp.s4;
+
+    property <bool> matched: fresh.text == again.text;
+    property <bool> mismatch: again.text != "" && !root.matched;
+
+    // A heading and a sentence, like the block above it.
+    //
+    // This sat under a divider as two bare fields with no title. Inside a card
+    // headed "Lock after", which made a passphrase change look like part of the
+    // timeout setting — two unrelated controls reading as one.
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Change passphrase";
+            font-size: Typo.body;
+            font-weight: Typo.w-medium;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: "The vault is re-encrypted with the new one. The old passphrase stops working, and nobody can recover the new one for you.";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+    }
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "Current passphrase";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+        }
+        current := Field {
+            password: true;
+            placeholder: "Passphrase";
+        }
+    }
+
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "New passphrase";
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+        }
+        fresh := Field {
+            password: true;
+            placeholder: "A new passphrase";
+        }
+    }
+
+    // The same confirmation the setup screen now asks for, and for a worse
+    // reason.
+    //
+    // Setting up with a typo loses a wallet that is empty. Changing to one with
+    // a typo re-seals a vault that already holds money — the old passphrase is
+    // gone the moment this succeeds, and the new one is a string nobody has
+    // ever seen. The wallet keeps working for the rest of the session, because
+    // the key is already in memory, and is unopenable at the next launch.
+    VerticalLayout {
+        spacing: Sp.s3;
+        Text {
+            text: "New passphrase again";
+            font-size: Typo.caption;
+            color: root.mismatch ? Theme.negative : Theme.text-secondary;
+        }
+        again := Field {
+            password: true;
+            placeholder: "Type it again";
+            invalid: root.mismatch;
+            accepted => { root.submit(); }
+        }
+        if root.mismatch: Text {
+            text: "The two do not match.";
+            font-size: Typo.caption;
+            color: Theme.negative;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        Btn {
+            text: "Change passphrase";
+            variant: "primary";
+            enabled: current.text != "" && fresh.text != "" && root.matched;
+            clicked => { root.submit(); }
+        }
+    }
+
+    // Both secrets leave in one call and every field is blanked before it
+    // returns — the same discipline as every other secret-bearing path here.
+    function submit() {
+        if (current.text == "" || fresh.text == "" || !root.matched) { return; }
+        Actions.change-passphrase(current.text, fresh.text);
+        current.text = "";
+        fresh.text = "";
+        again.text = "";
+    }
+}
+
+// Renaming one key.
+//
+// Its own component because its input has to be addressable, and because the
+// form has to be able to submit from two places — the button and the Return
+// key — without duplicating the guard.
+export component RenameKeyForm inherits VerticalLayout {
+    in property <string> label;
+    spacing: Sp.s3;
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+
+        field := Field {
+            horizontal-stretch: 1;
+            mono: true;
+            placeholder: "savings";
+            text <=> WalletState.rename-draft;
+            accepted => { root.submit(); }
+        }
+
+        Btn {
+            text: "Save";
+            variant: "primary";
+            enabled: field.text != "" && field.text != root.label;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.submit(); }
+        }
+
+        Btn {
+            text: "Cancel";
+            variant: "ghost";
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                WalletState.renaming = "";
+                WalletState.key-problem = "";
+            }
+        }
+    }
+
+    // Under the form, not at the foot of the list. A refusal that appears
+    // three rows away from the field it is about is one someone has to go
+    // looking for.
+    if WalletState.key-problem != "": Text {
+        text: WalletState.key-problem;
+        font-size: Typo.caption;
+        color: Theme.negative;
+        wrap: word-wrap;
+    }
+
+    // The form is not closed here. Rust closes it when the rename actually
+    // lands — a name the vault refuses must not vanish off the screen along
+    // with the message explaining why.
+    function submit() {
+        if (field.text == "" || field.text == root.label) { return; }
+        WalletState.key-problem = "";
+        Actions.rename-key(root.label, field.text);
+    }
+}
+
+// Adding a key to a wallet that already exists.
+export component AddKeyForm inherits HorizontalLayout {
+    spacing: Sp.s4;
+
+    field := Field {
+        horizontal-stretch: 1;
+        mono: true;
+        placeholder: "savings";
+        text <=> WalletState.new-key-draft;
+        accepted => { root.submit(); }
+    }
+
+    Btn {
+        text: "Generate a key";
+        enabled: field.text != "";
+        y: (parent.height - self.height) / 2;
+        clicked => { root.submit(); }
+    }
+
+    function submit() {
+        if (field.text == "") { return; }
+        WalletState.key-problem = "";
+        Actions.add-key(field.text);
+    }
+}
+
+// One key in the list.
+//
+// Its own component for the usual reason: the rename form lives inside an `if`,
+// and an element declared inside one cannot be reached from outside it.
+export component KeyRowItem inherits VerticalLayout {
+    in property <KeyRow> entry;
+    spacing: Sp.s3;
+
+    ListRow {
+        // Filled for the active key, hollow for the rest — the same shape the
+        // node list uses, so "this is the one in use" reads the same way in
+        // both places.
+        glyph: root.entry.active ? "●" : "○";
+        glyph-tone: root.entry.active ? Theme.accent : Theme.text-tertiary;
+        title: root.entry.label;
+        subtitle: root.entry.address;
+        subtitle-mono: true;
+        selected: root.entry.active;
+        clicked => { Actions.select-key(root.entry.label); }
+
+        HorizontalLayout {
+            spacing: Sp.s5;
+            alignment: end;
+
+            // A key whose phrase nobody has written down is one power cut away
+            // from being gone. Worth saying on the row, not only on a banner
+            // somebody has already dismissed.
+            if !root.entry.backed-up: StatusPill {
+                state: "pending";
+                text: "not backed up";
+                y: (parent.height - self.height) / 2;
+            }
+
+            // A WIF import never had a phrase, so there is nothing to write
+            // down and nothing to warn about. Saying it once here is what
+            // stops it reading as a missing backup.
+            if root.entry.origin == "wif": Text {
+                text: "no recovery phrase";
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            // Bordered, like Remove on the node list. A bare word at the end
+            // of a row reads as a label, and the two lists should not disagree
+            // about what a row-level action looks like.
+            Rectangle {
+                width: 100px;
+                Btn {
+                    text: "Rename";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        WalletState.key-problem = "";
+                        WalletState.renaming = root.entry.label;
+                        WalletState.rename-draft = root.entry.label;
+                    }
+                }
+            }
+        }
+    }
+
+    if WalletState.renaming == root.entry.label: RenameKeyForm {
+        label: root.entry.label;
+    }
+}
+
+// Naming one address.
+//
+// Its own component because its input has to be addressable, and because a
+// form that lives inside an `if` cannot be reached from outside it.
+export component NameAddressForm inherits HorizontalLayout {
+    in property <string> address;
+    spacing: Sp.s4;
+
+    field := Field {
+        horizontal-stretch: 1;
+        placeholder: "the exchange";
+        text <=> SendState.name-draft;
+        accepted => { root.submit(); }
+    }
+
+    Btn {
+        text: "Save";
+        variant: "primary";
+        y: (parent.height - self.height) / 2;
+        clicked => { root.submit(); }
+    }
+
+    Btn {
+        text: "Cancel";
+        variant: "ghost";
+        y: (parent.height - self.height) / 2;
+        clicked => { SendState.naming = ""; }
+    }
+
+    // An empty name is allowed, and it means "forget the name" rather than
+    // "forget the address" — the wallet still knows it was paid, which is what
+    // stops the review warning about it again.
+    function submit() {
+        Actions.label-address(root.address, field.text);
+    }
+}
+
+// One address the wallet has paid.
+export component KnownAddressItem inherits VerticalLayout {
+    in property <KnownAddressRow> entry;
+    spacing: Sp.s3;
+
+    ListRow {
+        // The name where there is one, the address where there is not. An
+        // unnamed row must not read as an empty row.
+        title: root.entry.label == "" ? root.entry.address : root.entry.label;
+        title-mono: root.entry.label == "";
+        subtitle: root.entry.label == "" ? root.entry.summary : root.entry.address;
+        subtitle-mono: root.entry.label != "";
+        interactive: false;
+
+        HorizontalLayout {
+            spacing: Sp.s5;
+            alignment: end;
+
+            if root.entry.label != "": Text {
+                text: root.entry.summary;
+                font-size: Typo.caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: 88px;
+                Btn {
+                    text: root.entry.label == "" ? "Name" : "Rename";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        SendState.naming = root.entry.address;
+                        SendState.name-draft = root.entry.label;
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 88px;
+                Btn {
+                    // Not destructive-red. Forgetting an address costs nothing
+                    // and undoes nothing — the payment already happened and is
+                    // on the chain. What it does is make the review warn about
+                    // that address again, which is what somebody removing it
+                    // is asking for.
+                    text: "Forget";
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => { Actions.forget-address(root.entry.address); }
+                }
+            }
+        }
+    }
+
+    if SendState.naming == root.entry.address: NameAddressForm {
+        address: root.entry.address;
+    }
+}
+
+// Settings, in four parts rather than one scroll.
+//
+// # Why this is not one long page any more
+//
+// It was six sections stacked: security, keys, addresses, appearance, network,
+// about. At the window's own preferred height you saw the first and the top of
+// the second, and everything else was below the fold — so somebody looking up
+// who they had paid scrolled past a passphrase-change form to get there, every
+// time.
+//
+// The switcher also makes the page photographable. Three of the four Settings
+// reference images used to be the same picture of the top of the same page,
+// because a fixture cannot scroll a flickable, and a screen no reference image
+// covers is a screen that changes without anybody seeing it.
+export component SettingsScreen inherits VerticalLayout {
+    // 0 security · 1 keys · 2 addresses · 3 general
+    in-out property <int> tab: 0;
+
+    spacing: Sp.section-gap;
+    property <[int]> lock-choices: [1, 5, 15, 60, 0];
+
+    HorizontalLayout {
+        alignment: start;
+        Segmented {
+            width: 460px;
+            options: ["Security", "Keys", "Addresses", "General"];
+            index <=> root.tab;
+        }
+    }
+
+    // Applied here AND sent to be written down. Applying it locally rather than
+    // waiting for the core to echo it back is what keeps the button feeling
+    // immediate; the core's copy is only read at the next start.
+    function appearance(dark: bool, reduce: bool) {
+        Theme.dark = dark;
+        Motion.enabled = !reduce;
+        Actions.set-appearance(dark, reduce);
+    }
+
+    if root.tab == 0: Section {
+        title: "SECURITY";
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Lock after";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            Text {
+                text: "Locking drops the key that decrypts your wallet, so every key in it becomes unreadable until you enter the passphrase again.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: start;
+                for minutes in root.lock-choices: Btn {
+                    text: minutes == 0 ? "Never"
+                        : minutes == 60 ? "1 hour"
+                        : minutes + " min";
+                    variant: WalletState.auto-lock == minutes ? "primary" : "secondary";
+                    clicked => { Actions.set-auto-lock(minutes); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+
+        PassphraseChange {}
+    }
+
+    if root.tab == 1: Section {
+        title: "KEYS";
+        body: "A Pecu wallet holds any number of keys, and the dashboard adds up all of them. One passphrase protects the lot — adding a key does not ask for it again.";
+
+        for entry in WalletState.keys: KeyRowItem {
+            entry: entry;
+        }
+
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Add a key";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            Text {
+                // Verus transparent keys are not hierarchical-deterministic:
+                // one phrase is one key. Somebody who expects a second key to
+                // fall out of the phrase they already wrote down needs to hear
+                // otherwise before they generate one, not after.
+                text: "A new key comes with its own recovery phrase, and you will be asked to write it down. Verus keys are not derived from one another — the phrase you already have does not restore this one.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            AddKeyForm {}
+
+            // Only when no rename is open — that form shows its own copy under
+            // itself, and one message rendered twice reads as two problems.
+            if WalletState.key-problem != "" && WalletState.renaming == "": Text {
+                text: WalletState.key-problem;
+                font-size: Typo.caption;
+                color: Theme.negative;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    if root.tab == 2: Section {
+        title: "ADDRESSES";
+        body: "Who this wallet has paid. Pecu records a recipient once a node has accepted the payment, so it can tell you when you are paying somewhere new — the one check it can make that a checksum cannot.";
+
+        if SendState.known.length == 0: Text {
+            text: "Nothing yet. An address appears here the first time you pay it.";
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+        }
+
+        for entry in SendState.known: KnownAddressItem {
+            entry: entry;
+        }
+    }
+
+    if root.tab == 3: Section {
+        title: "APPEARANCE";
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Theme";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: start;
+                Btn {
+                    text: "Dark";
+                    variant: Theme.dark ? "primary" : "secondary";
+                    clicked => { root.appearance(true, !Motion.enabled); }
+                }
+                Btn {
+                    text: "Light";
+                    variant: Theme.dark ? "secondary" : "primary";
+                    clicked => { root.appearance(false, !Motion.enabled); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+
+        VerticalLayout {
+            spacing: Sp.s3;
+            Text {
+                text: "Motion";
+                font-size: Typo.body;
+                font-weight: Typo.w-medium;
+                color: Theme.text-primary;
+            }
+            Text {
+                // What "reduced" actually means here, because the usual
+                // implementation of this switch is "nothing happens at all"
+                // and that is not what this one does.
+                text: "Reduced motion removes movement, scaling and the chart's draw-in. Cross-fades stay: opacity is not a vestibular trigger, and a hard swap is jarring for motion-sensitive people too.";
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: start;
+                Btn {
+                    text: "Full motion";
+                    variant: Motion.enabled ? "primary" : "secondary";
+                    clicked => { root.appearance(Theme.dark, false); }
+                }
+                Btn {
+                    text: "Reduced";
+                    variant: Motion.enabled ? "secondary" : "primary";
+                    clicked => { root.appearance(Theme.dark, true); }
+                }
+            }
+        }
+    }
+
+    if root.tab == 3: Section {
+        title: "NETWORK";
+        MainnetToggle {}
+    }
+
+    if root.tab == 3: Section {
+        title: "ABOUT";
+
+        VerticalLayout {
+            spacing: Sp.s4;
+
+            HorizontalLayout {
+                Text {
+                    text: "Wallet file";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: WalletState.vault-path;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    overflow: elide;
+                }
+            }
+
+            HorizontalLayout {
+                Text {
+                    text: "Logs";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: AppInfo.log-path;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                    overflow: elide;
+                }
+            }
+
+            // The fonts are compiled into this binary, and the SIL Open Font
+            // License requires its notice to travel with them — which means it
+            // travels with the executable, not just with the source tree. This
+            // line is that notice. See `ui/fonts/README.md`.
+            HorizontalLayout {
+                Text {
+                    text: "Typeset in";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "Space Grotesk and JetBrains Mono NL · SIL OFL 1.1";
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                }
+            }
+
+            HorizontalLayout {
+                Text {
+                    text: "Verus SDK";
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    // Which revision is in the build is a fact worth being able
+                    // to read off a screen rather than out of a lock file.
+                    text: AppInfo.sdk-rev;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-tertiary;
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+}
