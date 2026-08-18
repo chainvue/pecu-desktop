@@ -146,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // delivery loop. The scope focuses itself on `init`, but that runs when the
     // component is built and the backend sets focus up when the window is
     // shown, which is later.
+
     // English, on purpose, and not because it is the default.
     //
     // Slint picks a bundled translation from the **system locale** when the
@@ -299,6 +300,7 @@ fn home_dir() -> PathBuf {
 /// so the surface worth reviewing closely is two short functions rather than a
 /// search through one long one.
 fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
+    wire_search(ui, dispatcher.clone());
     wire_wallet(ui, dispatcher.clone());
     wire_backup(ui, &dispatcher);
     wire_send(ui, &dispatcher);
@@ -1165,6 +1167,49 @@ fn wire_identity_writes(ui: &AppWindow, dispatcher: &Dispatcher) {
             dispatcher.send(Command::CancelIdentityChange {
                 ticket: ticket_id(ticket),
             });
+        });
+    }
+}
+
+/// The command palette.
+///
+/// Its own function rather than three more blocks in [`wire_shell`], which was
+/// already at the length where a reader stops holding the whole thing in their
+/// head — and this is the one part of the shell that talks to the core on every
+/// keystroke, so it is worth being able to find.
+fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
+    let search = ui.global::<pecu_ui::SearchState>();
+
+    {
+        // Every keystroke asks the core, because the interface cannot answer:
+        // Slint's string type has no substring test, so "does this contain what
+        // was typed" is not a question `.slint` can ask. See `SearchHitVm`.
+        //
+        // Not debounced. The search is a filter over two lists already in
+        // memory, with no request and no I/O behind it, so a timer here would
+        // add latency and buy nothing.
+        search.on_search(move |query| {
+            dispatcher.send(Command::Search {
+                query: query.to_string(),
+            });
+        });
+    }
+
+    {
+        // Picking a result goes to the screen that can show it, rather than
+        // opening a sheet over the palette: a detour that lands somewhere
+        // recognisable is one a person can find their way back from.
+        let weak = ui.as_weak();
+        search.on_pick(move |hit| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let screen = if hit.kind == "identity" {
+                "identities"
+            } else {
+                "currencies"
+            };
+            ui.invoke_go(screen.into());
         });
     }
 }

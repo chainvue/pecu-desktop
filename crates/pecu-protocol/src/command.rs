@@ -355,6 +355,20 @@ pub enum Command {
         /// offering a mistake.
         exclude: Vec<String>,
     },
+    /// What the command palette is looking for.
+    ///
+    /// Answered from what the core already holds — identities and currencies —
+    /// rather than by asking the chain. A keystroke that costs a round trip is
+    /// a search box that stutters, and both lists are refreshed on their own
+    /// schedule anyway.
+    ///
+    /// An empty query is not "everything": it clears the results. A palette
+    /// that opens showing the entire wallet has answered a question nobody
+    /// asked.
+    Search {
+        /// Matched against name and i-address, ignoring case.
+        query: String,
+    },
     /// Build and sign the launch. Nothing is sent — the review that follows is
     /// decoded from the transaction this produced.
     PrepareLaunch(CurrencyDraft),

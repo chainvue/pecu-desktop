@@ -14,12 +14,13 @@ import { Theme, Sp, R, Typo, Motion, InputMode } from "theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, StatusPill, Skeleton, EmptyState, ListRow, Segmented } from "components/base.slint";
 import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
 import { AppIcon } from "icon.slint";
-import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick } from "vm/structs.slint";
+import { Icon } from "components/icons.slint";
+import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit } from "vm/structs.slint";
 
 // Re-exported from the compile root so `slint-build` generates Rust types for
 // them. A global that is only imported here stays invisible to Rust — `Theme`
 // has to be reachable so the binary can flip dark/light.
-export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick }
+export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit }
 export { Theme, Motion, InputMode }
 // Rendered to a PNG by `examples/render_icon.rs`, never shown. Exported from
 // here because this file is the one compile root — see `build.rs`.
@@ -580,6 +581,31 @@ export global ChartState {
 }
 
 // What the wallet has said and nobody has read yet.
+// The command palette.
+//
+// # Why the results come from the core
+//
+// Because they cannot come from here. Slint's string type has `is-empty`,
+// `character-count`, `to-lowercase`, `to-uppercase` and two float conversions —
+// and **no substring test**, so "does this name contain what was typed" is not
+// a question `.slint` can ask.
+//
+// Which is the right answer anyway: this interface holds no wallet data of its
+// own, and filtering the rows it happens to have rendered would answer for the
+// screen rather than for the wallet.
+export global SearchState {
+    // Whether the palette is over the interface.
+    in-out property <bool> open: false;
+    // What has been typed. Written here rather than kept in the input, so
+    // opening the palette a second time starts empty and Escape can clear it
+    // from outside the field.
+    in-out property <string> query: "";
+    in property <[SearchHit]> hits: [];
+    callback search(string);
+    // Open whatever the row points at.
+    callback pick(SearchHit);
+}
+
 export global ToastState {
     in property <[ToastRow]> rows: [];
     callback dismiss(int);
@@ -7223,6 +7249,127 @@ component ReceiveScreen inherits VerticalLayout {
 // on screen does not make a rejected payment less worth knowing about. Newest
 // at the bottom, so the position of what you are reading does not move when
 // another arrives.
+// The command palette. ⌘K.
+//
+// # What it searches, and what it does not
+//
+// Identities and currencies — the things that have a name and an i-address, and
+// the two the design's placeholder names. **Not screens**: those are reachable
+// with ⌘1–⌘8, which this wallet already has and the design's shortcut map also
+// lists, and putting the navigation into the core's search would mean the core
+// knowing what the interface is arranged into.
+//
+// Transaction ids are in the placeholder and are not searched yet. History is
+// loaded per screen rather than held, so answering for a txid means the core
+// keeping an index it currently has no reason to build.
+//
+// # There is no empty state
+//
+// Because the interface cannot tell an empty result from an unanswered one, and
+// guessing wrong in either direction is worse than the silence: "nothing found"
+// under a query the core has not replied to yet is a lie that appears on every
+// keystroke.
+component CommandPalette inherits Rectangle {
+    callback dismissed();
+
+    // The scrim. Dismisses on click, which is what a person expects of dimmed
+    // background and what Escape does from the keyboard.
+    background: Theme.dark ? #00000099 : #0B0D1066;
+    TouchArea {
+        clicked => { root.dismissed(); }
+    }
+
+    Rectangle {
+        width: min(560px, parent.width - Sp.s10);
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        // Nearer the top than the middle: the list grows downward, and a panel
+        // centred on its empty state jumps when the first result arrives.
+        y: Sp.s11;
+        border-radius: R.xl;
+        background: Theme.bg-surface;
+        border-width: 1px;
+        border-color: Theme.border-default;
+        clip: true;
+
+        // Swallow clicks so the scrim behind does not dismiss the panel the
+        // person is typing into.
+        TouchArea {}
+
+        body := VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s4;
+
+            field := Field {
+                mono: true;
+                placeholder: @tr("Search · currency, identity, address");
+                text <=> SearchState.query;
+                edited => { SearchState.search(SearchState.query); }
+            }
+
+            if SearchState.hits.length > 0: VerticalLayout {
+                spacing: Sp.s1;
+                for hit in SearchState.hits: Rectangle {
+                    height: 52px;
+                    border-radius: R.md;
+                    background: hittouch.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+                    HorizontalLayout {
+                        padding-left: Sp.s4;
+                        padding-right: Sp.s4;
+                        spacing: Sp.s4;
+
+                        Icon {
+                            name: hit.kind == "identity" ? "profile" : "currency";
+                            size: 18px;
+                            y: (parent.height - self.height) / 2;
+                            tone: Theme.text-secondary;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: hit.label;
+                                font-family: Typo.mono;
+                                font-size: Typo.body;
+                                font-weight: Typo.w-bold;
+                                color: Theme.text-primary;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: hit.sub;
+                                font-family: Typo.mono;
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    hittouch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            SearchState.pick(hit);
+                            root.dismissed();
+                        }
+                    }
+
+                    accessible-role: button;
+                    accessible-label: hit.label + ", " + hit.kind;
+                    accessible-action-default => { SearchState.pick(hit); root.dismissed(); }
+                }
+            }
+        }
+    }
+
+    // Focus the field as soon as the panel exists. A palette that opens and
+    // then waits to be clicked has wasted the keystroke that opened it.
+    public function take-focus() { field.focus(); }
+}
+
 component ToastHost inherits Rectangle {
     // Wide enough for two lines of detail at this size, narrow enough not to
     // read as a panel taking over the screen.
@@ -7940,7 +8087,11 @@ export component AppWindow inherits Window {
     // Navigating is two statements — what the window shows, and telling the
     // core which screen is open so it can start or stop screen-scoped polling.
     // Both have to happen together, from the rail and from the keyboard alike.
-    function go(screen: string) {
+    public function go(screen: string) {
+        // The palette is a detour, not a place. Arriving somewhere means it has
+        // done its job.
+        SearchState.open = false;
+        SearchState.query = "";
         root.screen = screen;
         Actions.navigate(screen);
     }
@@ -8073,10 +8224,25 @@ export component AppWindow inherits Window {
                 // produces a lower-case `l`.
                 if (event.text == "l") { Actions.lock(); return EventResult.accept; }
                 if (event.text == "r") { Actions.refresh(); return EventResult.accept; }
+                // ⌘K. Opens empty every time — a palette that reopens holding
+                // the last search is answering a question from a minute ago.
+                if (event.text == "k") {
+                    SearchState.query = "";
+                    SearchState.search("");
+                    SearchState.open = true;
+                    return EventResult.accept;
+                }
             }
 
             // Escape closes whatever is over the screen, innermost first.
             if (event.text == Key.Escape) {
+                // Before everything else, because it is in front of everything
+                // else.
+                if (SearchState.open) {
+                    SearchState.open = false;
+                    SearchState.query = "";
+                    return EventResult.accept;
+                }
                 // First of all, because it is opened from a form that Escape
                 // also closes — and shutting the form out from under the picker
                 // would leave the picker writing into a row nobody can see.
@@ -8450,6 +8616,22 @@ export component AppWindow inherits Window {
         // the form and it is the only thing being decided while it is up.
         if WalletState.exists && !WalletState.locked && CurrencyState.picking-reserve >= 0:
             ReservePicker {}
+
+        // Under the toasts and over everything else. It is a detour rather
+        // than a state, so it never survives a screen change — see `go`.
+        //
+        // Not offered while the wallet is locked or absent: there is nothing
+        // to search, and a palette over the unlock form is a way to lose the
+        // field somebody was typing a passphrase into.
+        if SearchState.open && WalletState.exists && !WalletState.locked: palette := CommandPalette {
+            width: 100%;
+            height: 100%;
+            dismissed => {
+                SearchState.open = false;
+                SearchState.query = "";
+            }
+            init => { palette.take-focus(); }
+        }
 
         // Above even the phrase screen. A recovery phrase being on screen does
         // not make a rejected payment less worth knowing about, and the toast

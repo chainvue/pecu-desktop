@@ -10,7 +10,7 @@ use crate::models::{
     ChartVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
     ListDelta, LockReason, NetworkVm, PendingVm, PortfolioVm, RegistrationVm, SeedWordVm,
-    SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
+    SearchHitVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,6 +121,13 @@ pub enum Event {
     Currencies {
         yours: Vec<CurrencyVm>,
         eligible: Vec<EligibleIdentityVm>,
+    },
+    /// What the palette should show. Carries the query it answers, so a reply
+    /// that arrives after the person has typed further can be discarded rather
+    /// than flickering an older list back onto the screen.
+    SearchHits {
+        query: String,
+        hits: Vec<SearchHitVm>,
     },
     /// What core makes of the draft being configured, including the numbers the
     /// bars and the preview are drawn from.

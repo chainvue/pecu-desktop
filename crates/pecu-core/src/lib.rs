@@ -674,6 +674,20 @@ enum Work {
     },
 }
 
+/// Whether one row answers a search.
+///
+/// A free function rather than a closure so it can be tested without standing
+/// up an actor, a chain and a vault. The needle arrives already lower-cased and
+/// trimmed; doing that once per search rather than once per row is the only
+/// reason the caller looks like it does.
+///
+/// The **address** is matched as well as the name, and that is not padding: the
+/// i-address is the identifier this wallet tells people to prefer for anything
+/// destructive, so it is the one somebody arrives with on the clipboard.
+fn search_matches(needle: &str, name: &str, address: &str) -> bool {
+    name.to_lowercase().contains(needle) || address.to_lowercase().contains(needle)
+}
+
 impl Core {
     async fn run(
         mut self,
@@ -1273,6 +1287,7 @@ impl Core {
             Command::SearchCurrencies { query, exclude } => {
                 self.search_currencies(query, exclude);
             }
+            Command::Search { query } => self.search(&query),
             Command::PrepareLaunch(draft) => self.prepare_launch(&draft),
             Command::StartCurrencyFromNewName {
                 revocation_authority,
@@ -3659,6 +3674,66 @@ impl Core {
     /// it; paying for that on the way past the Currencies screen would be a
     /// request nobody asked for. The first search pays, and it is the one
     /// moment somebody is waiting for exactly this answer.
+    /// Answer the command palette.
+    ///
+    /// Over what is already in hand — the identities these keys control and the
+    /// currencies they define — rather than over the chain. A palette that made
+    /// a request per keystroke would stutter, and neither list changes between
+    /// two letters being typed.
+    ///
+    /// An empty query clears rather than listing everything: a palette that
+    /// opens showing the whole wallet has answered a question nobody asked.
+    ///
+    /// Matching is a case-insensitive substring over the name **and** the
+    /// i-address. The address matters more than it looks: it is the identifier
+    /// this wallet tells people to prefer for anything destructive, so it is
+    /// the one somebody arrives with pasted on the clipboard.
+    fn search(&mut self, query: &str) {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            let _ = self.events.send(Event::SearchHits {
+                query: query.to_string(),
+                hits: Vec::new(),
+            });
+            return;
+        }
+
+        let matches = |name: &str, address: &str| search_matches(&needle, name, address);
+
+        let mut hits: Vec<pecu_protocol::SearchHitVm> = Vec::new();
+
+        // Identities first, and deliberately: a name is what a person searches
+        // for, and a currency shares its address with the identity that defines
+        // it — so an address query matches both and the identity is the one
+        // that explains the other.
+        for identity in self.identities.values() {
+            if matches(&identity.name, &identity.address) {
+                hits.push(pecu_protocol::SearchHitVm {
+                    kind: "identity".to_string(),
+                    label: identity.name.clone(),
+                    sub: identity.address.clone(),
+                    target: identity.address.clone(),
+                });
+            }
+        }
+
+        for currency in &self.currencies {
+            if matches(&currency.name, &currency.address) {
+                hits.push(pecu_protocol::SearchHitVm {
+                    kind: "currency".to_string(),
+                    label: currency.name.clone(),
+                    sub: currency.address.clone(),
+                    target: currency.address.clone(),
+                });
+            }
+        }
+
+        let _ = self.events.send(Event::SearchHits {
+            query: query.to_string(),
+            hits,
+        });
+    }
+
     fn search_currencies(&mut self, query: String, exclude: Vec<String>) {
         if let Catalog::Ready(all) = &self.currency_catalog {
             let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
@@ -5170,6 +5245,44 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── The command palette's matcher ───────────────────────────────────────
+
+    /// Case is ignored on both sides, because neither side controls it: a name
+    /// is spelled however the chain spells it, and a query is typed however it
+    /// is typed.
+    #[test]
+    fn a_search_ignores_case_on_both_sides() {
+        assert!(search_matches("vault", "vault.VRSCTEST@", "i5Qcj82"));
+        assert!(search_matches("vrsctest", "vault.VRSCTEST@", "i5Qcj82"));
+    }
+
+    /// The i-address matches as well as the name.
+    ///
+    /// This is the case somebody actually arrives with: an address on the
+    /// clipboard, because it is the identifier this wallet tells them to prefer
+    /// for anything destructive.
+    #[test]
+    fn a_search_finds_a_row_by_its_address() {
+        assert!(search_matches(
+            "i5qcj82",
+            "vault.VRSCTEST@",
+            "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m"
+        ));
+    }
+
+    /// A substring, not a prefix. `pecu` should find `my.pecu@`, because a
+    /// person searching for a name rarely knows which parent it hangs off.
+    #[test]
+    fn a_search_matches_inside_the_name_not_only_at_the_start() {
+        assert!(search_matches("pecu", "shop.pecu@", "iAAA"));
+    }
+
+    /// And it says no. A matcher that is never false is not a filter.
+    #[test]
+    fn a_search_refuses_what_does_not_match() {
+        assert!(!search_matches("bridge", "vault.VRSCTEST@", "i5Qcj82"));
+    }
 
     /// The one line the send form gets about a VerusID, in priority order.
     ///

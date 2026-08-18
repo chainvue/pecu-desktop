@@ -23,9 +23,42 @@ use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
     IdentityRow, IdentityState, KeyRow, KnownAddressRow, NetworkState, NodeRow, PendingRow,
-    PreallocEntry, ReserveEntry, ReviewOutput, SeedState, SeedWord, SendState, TxState,
-    WalletState,
+    PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState, SeedWord,
+    SendState, TxState, WalletState,
 };
+
+/// The command palette, open over the dashboard with results.
+///
+/// Seeded rather than searched: the hits are what the **core** returns, and no
+/// core is running behind a reference image. What this photographs is the
+/// panel — which is the half that can be got wrong by looking at it.
+pub fn searching(ui: &AppWindow) {
+    funded(ui);
+
+    let state = ui.global::<SearchState>();
+    state.set_open(true);
+    state.set_query("ve".into());
+    state.set_hits(ModelRc::from(Rc::new(VecModel::from(vec![
+        SearchHit {
+            kind: "identity".into(),
+            label: "vault.VRSCTEST@".into(),
+            sub: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+            target: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+        },
+        SearchHit {
+            kind: "currency".into(),
+            label: "Bridge.vETH".into(),
+            sub: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
+            target: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
+        },
+        SearchHit {
+            kind: "identity".into(),
+            label: "moving.VRSCTEST@".into(),
+            sub: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+            target: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
+        },
+    ]))));
+}
 
 /// A fresh install: no wallet yet, so the onboarding screen is what shows.
 pub fn fresh(ui: &AppWindow) {

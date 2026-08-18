@@ -41,7 +41,8 @@ pub use models::{
     IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
     LaunchReviewVm, ListDelta, LockReason, NetworkVm, NodeVm, PendingVm, PortfolioVm,
     PreallocationDraft, Reachability, RegistrationVm, ReserveDraft, ReviewOutputVm, ScreenId,
-    SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, TxDirection,
+    SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm,
+    TxDirection,
     WalletVm,
 };
 pub use secret::Secret;

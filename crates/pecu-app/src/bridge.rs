@@ -176,6 +176,27 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::Currencies { yours, eligible } => apply_currencies(ui, &yours, &eligible),
 
+        Event::SearchHits { query, hits } => {
+            let state = ui.global::<pecu_ui::SearchState>();
+            // Drop a reply to a query nobody is running any more. Two
+            // keystrokes in flight arrive in order, but the older answer
+            // landing second would put a shorter list back on screen — and the
+            // person typing would see their own results disappear.
+            if state.get_query() != query.as_str() {
+                return;
+            }
+            let rows: Vec<pecu_ui::SearchHit> = hits
+                .iter()
+                .map(|hit| pecu_ui::SearchHit {
+                    kind: hit.kind.clone().into(),
+                    label: hit.label.clone().into(),
+                    sub: hit.sub.clone().into(),
+                    target: hit.target.clone().into(),
+                })
+                .collect();
+            state.set_hits(slint::ModelRc::new(slint::VecModel::from(rows)));
+        }
+
         Event::CurrencyDraftChecked(vm) => apply_currency_draft(ui, &vm),
 
         Event::CurrencyChoices(vm) => {

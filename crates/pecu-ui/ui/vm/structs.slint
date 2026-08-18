@@ -113,6 +113,19 @@ export struct ToastRow {
 }
 
 // One VerusID in the list.
+// One result in the command palette. Mirrors `SearchHitVm`.
+export struct SearchHit {
+    // "identity" | "currency" — chooses the icon and the screen to open.
+    kind: string,
+    label: string,
+    // The i-address, shown under the name so two similar rows can be told
+    // apart by the thing that actually differs.
+    sub: string,
+    // The i-address again, as the thing to act on. What is shown and what is
+    // opened are allowed to diverge later.
+    target: string,
+}
+
 export struct IdentityRow {
     // `name.parent@` where the parent is known, otherwise the bare name.
     name: string,

@@ -976,6 +976,37 @@ pub enum TaskKind {
     CreatingWallet,
 }
 
+/// One thing the search found.
+///
+/// # Why the search runs in the core
+///
+/// Not by preference — by necessity, and it is worth writing down because it
+/// looks like a UI concern. Slint's string type offers `is-empty`,
+/// `character-count`, `to-lowercase`, `to-uppercase` and the two float
+/// conversions. There is **no substring test**, so "does this name contain what
+/// was typed" cannot be asked in `.slint` at all.
+///
+/// That turns out to be the right shape anyway: the interface holds no wallet
+/// data of its own, and a search that filtered a copy of the rows it happens to
+/// have rendered would answer for the screen rather than for the wallet.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SearchHitVm {
+    /// "identity" · "currency". Chooses the icon and tells the interface which
+    /// screen to open, without it having to parse `target`.
+    pub kind: String,
+    /// What to show: the name, as the chain spells it.
+    pub label: String,
+    /// The i-address, under the name. A person searching for a name recognises
+    /// it; a person searching for an address needs to see it echoed back or
+    /// they cannot tell which of two similar rows they matched.
+    pub sub: String,
+    /// The i-address again, as the thing to act on. Separate from `sub` because
+    /// what is *shown* and what is *opened* are allowed to diverge later, and
+    /// discovering that they had been the same field is how a display change
+    /// breaks navigation.
+    pub target: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::SeedWordVm;
