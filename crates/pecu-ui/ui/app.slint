@@ -8143,9 +8143,16 @@ export component AppWindow inherits Window {
             NavRail {
                 items: root.nav;
                 active: root.screen;
-                // Below ~1000px the rail collapses to glyphs so the content column
+                // Below ~1000px the rail collapses to icons so the content column
                 // keeps its shape rather than being squeezed. See `nav-expanded`.
                 expanded: root.nav-expanded;
+                // The first name these keys control, which is what the design
+                // draws at the foot of the rail. Empty until there is one — and
+                // it stays empty for a wallet that has never claimed a name,
+                // rather than showing a placeholder identity that does not
+                // exist.
+                account: IdentityState.rows.length > 0 ? IdentityState.rows[0].name : "";
+                account-state: NetworkState.node-state;
                 selected(id) => { root.go(id); }
             }
 

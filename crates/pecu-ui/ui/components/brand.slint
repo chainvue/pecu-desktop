@@ -1,0 +1,73 @@
+import { Theme, Sp, Typo, Motion } from "../theme/theme.slint";
+
+// The wordmark: `pecu@` and a cursor.
+//
+// The `@` is the accent colour and the cursor is a solid bar of it, which is
+// the whole mark — there is no logotype file and there is not going to be one.
+// Set in the bundled monospace, so it is the same drawing everywhere.
+//
+// # The cursor blinks, including under reduce-motion
+//
+// That is the design's call and it is defensible: this is a brand element
+// rather than a transition, it runs at 0.9Hz, and WCAG's flashing threshold is
+// 3Hz. `Motion.cursor-blink` is its own switch for that reason — see the note
+// on it — and the snapshot renderer is what turns it off, so a reference image
+// does not depend on the moment it was taken.
+export component Wordmark inherits HorizontalLayout {
+    in property <length> size: 15px;
+    // Off in the places too small to carry it, matching the rule the design
+    // states for the icon: below 32px the cursor comes off.
+    in property <bool> cursor: true;
+
+    // Blink phase. Starts visible, so a still frame is a cursor rather than a
+    // gap where one should be.
+    property <bool> lit: true;
+
+    spacing: root.size * 0.28;
+    alignment: start;
+
+    Timer {
+        // 1100ms step-end in the tokens is on for half of it and off for the
+        // other half, which is a 550ms toggle rather than an animation.
+        interval: 550ms;
+        running: root.cursor && Motion.cursor-blink;
+        triggered => { root.lit = !root.lit; }
+    }
+
+    HorizontalLayout {
+        spacing: 0px;
+        Text {
+            text: "pecu";
+            font-family: Typo.mono;
+            font-size: root.size;
+            font-weight: Typo.w-bold;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "@";
+            font-family: Typo.mono;
+            font-size: root.size;
+            font-weight: Typo.w-bold;
+            color: Theme.accent;
+            vertical-alignment: center;
+        }
+    }
+
+    if root.cursor: Rectangle {
+        // 0.42em in the tokens; the mockup draws 7px against a 15px wordmark,
+        // which is 0.47. Split the difference and it is 0.45.
+        width: root.size * 0.45;
+        height: root.size * 1.05;
+        y: (parent.height - self.height) / 2;
+        background: Theme.accent;
+        // No fade. `step-end` in the tokens means it is on or it is off, and a
+        // cursor that eases is a cursor that looks broken.
+        opacity: root.lit ? 1.0 : 0.0;
+    }
+
+    // One name, not three fragments. A screen reader reading "pecu", "at" and
+    // then a nameless rectangle is not the wordmark.
+    accessible-role: text;
+    accessible-label: "pecu@";
+}

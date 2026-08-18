@@ -1,6 +1,7 @@
 import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
 import { StatusPill } from "base.slint";
 import { Icon } from "icons.slint";
+import { Wordmark } from "brand.slint";
 import { NavItem } from "../vm/structs.slint";
 
 // The left rail.
@@ -12,9 +13,17 @@ export component NavRail inherits Rectangle {
     in property <[NavItem]> items;
     in property <string> active;
     in property <bool> expanded: true;
+    // Who this wallet is, shown at the foot of the rail. Empty until there is
+    // an identity to name — the design draws a signed-in account there, and an
+    // empty pill saying nothing would be worse than the space.
+    in property <string> account;
+    in property <string> account-state: "unknown";
     callback selected(string);
 
-    width: root.expanded ? 208px : 72px;
+    // 170px in the design. This is a step wider because the type is: the design
+    // sets labels at 10px against a 1060px window and this interface uses 14 in
+    // a 1240 one, so the rail is scaled with them rather than left to crowd.
+    width: root.expanded ? 188px : 72px;
     background: Theme.bg-sunken;
     animate width { duration: Motion.base; easing: cubic-bezier(0.2, 0, 0, 1); enabled: Motion.enabled; }
 
@@ -28,8 +37,30 @@ export component NavRail inherits Rectangle {
 
     VerticalLayout {
         padding: Sp.s4;
-        padding-top: Sp.s7;
+        padding-top: Sp.s6;
         spacing: Sp.s1;
+
+        // The wordmark sits in the rail rather than in the title bar, which is
+        // where the design puts it and where it stops competing with the screen
+        // name for the same corner.
+        // An explicit height, and not for spacing.
+        //
+        // `Wordmark` inherits a layout, and a layout nested in a layout did not
+        // report a preferred height here — the wrapper collapsed to nothing and
+        // the mark was simply absent. A fixed box is what gives it room.
+        Rectangle {
+            height: 40px;
+            HorizontalLayout {
+                // The same inset the nav items use, so the wordmark and the
+                // icons share a left edge rather than missing it by four pixels.
+                padding-left: Sp.s4;
+                alignment: start;
+            if root.expanded: Wordmark { size: 16px; }
+            // Collapsed there is no room for four letters and a cursor, and the
+            // icon rule applies: what is left is the `@`.
+            if !root.expanded: Wordmark { size: 16px; cursor: false; }
+            }
+        }
 
         for item[i] in root.items: Rectangle {
             height: 40px;
@@ -89,6 +120,57 @@ export component NavRail inherits Rectangle {
         }
 
         Rectangle { vertical-stretch: 1; }
+
+        // The account, at the foot. Only when there is one to name.
+        if root.expanded && root.account != "": Rectangle {
+            height: 46px;
+            border-radius: R.md;
+            background: Theme.bg-surface;
+            border-width: 1px;
+            border-color: Theme.border-default;
+
+            HorizontalLayout {
+                padding-left: Sp.s3;
+                padding-right: Sp.s3;
+                spacing: Sp.s3;
+
+                // The avatar is the mark again, at list size.
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.width / 2;
+                    background: Theme.accent;
+                    Text {
+                        text: "@";
+                        font-family: Typo.mono;
+                        font-size: Typo.caption;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-on-accent;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.account;
+                        font-family: Typo.mono;
+                        font-size: Typo.micro;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+                    StatusPill {
+                        state: root.account-state;
+                        text: root.account-state == "online" ? @tr("connected")
+                            : root.account-state == "offline" ? @tr("offline")
+                            : @tr("connecting");
+                    }
+                }
+            }
+        }
     }
 }
 

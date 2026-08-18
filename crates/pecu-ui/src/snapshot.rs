@@ -97,6 +97,15 @@ pub fn render(
     // catalogues at all is already English and has nothing to select.
     let _ = slint::select_bundled_translation("en");
 
+    // Freeze the wordmark's cursor, lit.
+    //
+    // It blinks on a 550ms timer, so a frame captured while it is off differs
+    // from the same frame captured 550ms later — and this renderer draws 96
+    // screens in a row. That is a visual test that fails at random, which is
+    // worse than not having one. The reference images get a cursor that is
+    // always there.
+    ui.global::<crate::Motion>().set_cursor_blink(false);
+
     // The chart's callbacks compute its geometry from the element's own size,
     // so they have to be wired before the window is laid out — and installing
     // resets the chart, which is what keeps one case's readings from turning up

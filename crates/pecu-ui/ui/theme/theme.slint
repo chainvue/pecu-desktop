@@ -278,6 +278,20 @@ export global Motion {
     // the whole mechanism: one line per animation, no duplicate code paths.
     in-out property <bool> enabled: true;
 
+    // The wordmark's cursor, and it is deliberately **not** governed by
+    // `enabled` above.
+    //
+    // The design is explicit that the blink survives reduce-motion: it is the
+    // brand rather than a transition, it runs at under 3Hz, and WCAG's flashing
+    // threshold is three. Tying it to the reduce-motion switch would have been
+    // the tidy thing and the wrong one.
+    //
+    // What it *is* for is determinism. A blinking element makes a rendered
+    // frame depend on when it was rendered, so `snapshot.rs` turns this off and
+    // the reference images get a cursor that is always there. Without it the
+    // visual test would fail at random, which is worse than no test.
+    in-out property <bool> cursor-blink: true;
+
     // The design's four durations and two curves.
     out property <duration> instant: 80ms;    // press
     out property <duration> fast:    150ms;   // hover, focus ring
