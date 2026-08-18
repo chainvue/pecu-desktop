@@ -1,0 +1,109 @@
+# Pecu
+
+A self-custodial desktop wallet for Verus — Windows, macOS and Linux. Rust and
+Slint, one binary, no runtime to install.
+
+Forked from `chainvue-desktop-wallet`, and currently being redrawn against the
+design package in `docs/design/`.
+
+## Running it
+
+```sh
+cargo run -p pecu-app --features mock   # a scripted chain, no node, no coins
+cargo run -p pecu-app                   # a real node, testnet by default
+```
+
+Start with `mock`. It runs against a scripted chain in its own directory, so
+fixture figures can never end up in the files a real wallet reads back — and it
+is structurally unable to reach a network, because `pecu-mock` does not have a
+socket-capable crate in its dependency graph.
+
+Only **one instance per wallet directory**. A second one says so and stops:
+three of the files it would share are written whole, and the last writer wins —
+including for a name registration that has already been paid for. To run two,
+give the second its own home:
+
+```sh
+PECU_HOME=/tmp/pecu-second cargo run -p pecu-app --features mock
+```
+
+Wallet data lives in `%APPDATA%\Pecu` on Windows, `$XDG_DATA_HOME/pecu` on
+Linux, and `~/Library/Application Support/com.pecu.wallet` on macOS. Logs are
+under `logs/` inside it, rotated daily.
+
+The interface is English, on every system. See `crates/pecu-ui/translations/`.
+
+## Checks
+
+```sh
+cargo clippy --workspace --all-targets    # warnings are not acceptable output
+cargo test --workspace
+```
+
+Some of the tests are unusual and are the point of the project rather than a
+formality:
+
+| Test | What it refuses to let happen |
+|---|---|
+| `pecu-ui/tests/visual.rs` | A layout change nobody looked at. Renders 96 screens in both themes and compares them against checked-in references. |
+| `pecu-ui/tests/accessibility.rs` | A control a screen reader announces as "button" and nothing else. |
+| `pecu-ui/tests/dependency_boundary.rs` | The interface crate gaining the ability to name a `PrivateKey`. |
+| `pecu-ui/tests/translation.rs` | "It is ready for translation" being false. |
+| `pecu-core/tests/log_hygiene.rs` | A secret reaching a log file. |
+
+After a deliberate visual change, look at the result before blessing it:
+
+```sh
+cargo run -p pecu-ui --example render_shots            # writes docs/shots/
+UPDATE_SNAPSHOTS=1 cargo test -p pecu-ui --test visual # accepts them as references
+```
+
+Reference images are whole-tree artefacts: a commit that changes the palette
+changes all of them, so source and images travel together or the tip is red.
+
+## Packaging
+
+```sh
+cargo run -p pecu-ui --example render_icon   # crates/pecu-app/assets/Pecu.iconset
+scripts/bundle.sh                            # target/Pecu.app
+```
+
+Unsigned, so it runs on the machine that built it and Gatekeeper blocks it
+everywhere else — correct behaviour, not a bug. Signing needs a Developer ID;
+notarisation needs a round trip to Apple, and `bundle.sh` prints those commands
+rather than running them.
+
+Nothing here has been built or run on Windows or Linux.
+
+## Layout
+
+| Crate | |
+|---|---|
+| `pecu-app` | The binary. Wires callbacks to commands and owns the window. |
+| `pecu-ui` | The Slint interface. Holds no keys, and **cannot name** the types that carry them. |
+| `pecu-protocol` | The contract between the two. No SDK, no crypto, no I/O. |
+| `pecu-core` | The wallet actor: owns all state, does all I/O, free of any UI toolkit. |
+| `pecu-keystore` | Private keys on disk, encrypted. The only crate that may hold a `PrivateKey`. |
+| `pecu-chain` | The node client, node health, and the permit that gates spending. |
+| `pecu-store` | What survives a restart: settings, and a cache it can always throw away. |
+| `pecu-chart` | Chart geometry. Pure arithmetic, no dependencies. |
+| `pecu-mock` | A scripted chain, unable to reach a network. |
+
+The boundary in the third row is enforced, not encouraged: `pecu-ui` does not
+depend on the SDK, the keystore or the core, so Rust will not resolve those
+types inside it. `dependency_boundary.rs` fails the build if that list grows.
+
+## Reading
+
+- `docs/design/REVIEW.md` — what was measured in the design package before
+  anything was built from it, including four contrast failures and two icons
+  that cannot ship as delivered.
+- `docs/LATER.md` — work that is understood, deliberately not started, and would
+  otherwise be rediscovered from scratch.
+- `crates/pecu-ui/ui/fonts/README.md` — why the monospace is the no-ligature cut.
+- `crates/pecu-ui/translations/README.md` — how to add a language, and what
+  `@tr` cannot reach.
+
+The SDK is pinned by revision (`8f01520`) rather than by version: it is not on
+crates.io, and "latest main" is not a reproducible dependency for the crate that
+owns every key, address and transaction here.
