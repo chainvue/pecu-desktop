@@ -3,11 +3,11 @@
 import { ListView } from "std-widgets.slint";
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Btn, Card, Eyebrow } from "../components/base.slint";
+import { Btn, Card, Eyebrow, Money } from "../components/base.slint";
 import { Icon } from "../components/icons.slint";
 import { ConvertState, MarketState } from "../vm/state.slint";
 import { Field, QuoteLine } from "../components/form.slint";
-import { NoteText } from "../components/note.slint";
+import { NoteText, NoticeTitle } from "../components/note.slint";
 
 // The glyph is `⊙`, and it was chosen by looking rather than by taste.
 //
@@ -84,8 +84,8 @@ export component ConvertLeg inherits VerticalLayout {
     }
 }
 
-// Convert. A form, then a review — see `ConvertState` for why.
-export component ConvertScreen inherits HorizontalLayout {
+// Step one: what to convert, and what it is expected to yield.
+component ConvertForm inherits HorizontalLayout {
     spacing: Sp.s8;
 
     VerticalLayout {
@@ -142,30 +142,29 @@ export component ConvertScreen inherits HorizontalLayout {
             under: @tr("Estimated. The chain does not guarantee it.");
         }
 
-        // Where the Review button goes, once there is something behind it.
+        // There was a card here saying the wallet could price a conversion and
+        // could not make one. It can now, so the button is back — and it is
+        // back the way the send form's is: it builds and signs, and it does not
+        // send. The step that sends is the review, and it is a separate press
+        // on a screen that shows what was actually signed.
         //
-        // It was here, primary and enabled, wired to a callback nothing
-        // listened to — so the one action on this screen did nothing at all.
-        // Everything above is real: the route, the estimate and the fees come
-        // from the node. Signing does not exist yet, and a button that looks
-        // like it will send money is the worst possible place to be optimistic.
-        if ConvertState.ready: Card {
-            VerticalLayout {
-                padding: Sp.s5;
-                spacing: Sp.s2;
-                Text {
-                    text: @tr("Priced, not signed");
-                    font-size: Typo.body;
-                    font-weight: Typo.w-bold;
-                    color: Theme.text-secondary;
-                }
-                Text {
-                    text: @tr("This wallet can price a conversion and cannot yet make one. Nothing on this screen sends anything.");
-                    font-size: Typo.caption;
-                    color: Theme.text-tertiary;
-                    wrap: word-wrap;
-                }
-            }
+        // `enabled` on the core's verdict, not on a length check here: "ready"
+        // means a route exists, the amount parses and the wallet holds it, and
+        // none of those is a property of the text in a field.
+        Btn {
+            text: ConvertState.busy ? @tr("Preparing…") : @tr("Review conversion");
+            variant: "primary";
+            enabled: ConvertState.ready && !ConvertState.busy;
+            clicked => { ConvertState.review(); }
+        }
+
+        // Why a build failed, when it failed before there was a review to put
+        // it on. The refusal a paused network produces lands here.
+        if ConvertState.problem.code != "": NoticeTitle {
+            note: ConvertState.problem;
+            font-size: Typo.caption;
+            color: Theme.negative;
+            wrap: word-wrap;
         }
 
         Rectangle { vertical-stretch: 1; }
@@ -241,6 +240,337 @@ export component ConvertScreen inherits HorizontalLayout {
 
         Rectangle { vertical-stretch: 1; }
     }
+}
+
+// Convert: a form, then a review, then what happened.
+//
+// The same three steps the send screen has, and for the same reason — the
+// review is not a confirmation dialog, it is the decoded transaction. On this
+// screen that matters more rather than less: a conversion's whole meaning is
+// inside a CryptoCondition payload, so which currency, how much, which basket
+// it routes through and where the result lands are invisible to anyone reading
+// the raw transaction, and the only place they become readable is here.
+export component ConvertScreen inherits VerticalLayout {
+    spacing: Sp.s7;
+
+    if ConvertState.step == "form": ConvertForm {}
+
+    // ── Step 2: what was actually signed ────────────────────────────────
+    //
+    // Two columns, and not for looks. In one column this card is taller than
+    // an 800px window: the buttons — including the one that spends — sat below
+    // the fold with nothing on screen to say they were there. A review whose
+    // action you have to go looking for is a review people learn to skip.
+    //
+    // The split follows the content. Left is the transaction: what it converts,
+    // whose coins, where the result goes, and every output. Right is what it
+    // costs and what it is expected to be worth, under the one paragraph that
+    // says none of those figures is a promise.
+    if ConvertState.step == "review": HorizontalLayout {
+        alignment: center;
+        Card {
+            width: 900px;
+            VerticalLayout {
+                padding: Sp.s7;
+                spacing: Sp.s5;
+
+                VerticalLayout {
+                    spacing: Sp.s2;
+                    Text {
+                        text: @tr("Check this conversion");
+                        font-size: Typo.title2;
+                        font-weight: Typo.w-bold;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: @tr("Read back from the transaction that was signed — not from what you typed.");
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s7;
+
+                    // ── What the transaction does ───────────────────────
+                    VerticalLayout {
+                        spacing: Sp.s5;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            spacing: Sp.s2;
+                            Eyebrow { text: @tr("CONVERTING"); }
+                            Text {
+                                text: ConvertState.review-via == ""
+                                    ? @tr("{} → {}", ConvertState.review-from, ConvertState.review-to)
+                                    : @tr("{} → {} via {}", ConvertState.review-from,
+                                          ConvertState.review-to, ConvertState.review-via);
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.text-primary;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        // One under the other, not side by side. Two columns
+                        // put a 34-character address in 230 points, which wraps
+                        // it — and a wrapped address is one nobody can compare
+                        // against the one on their screen or their paper. The
+                        // left column has the height to spare; this is what it
+                        // is for.
+                        //
+                        // The delivery address is decoded from the payload, not
+                        // taken from the form. It is worth showing even though
+                        // this wallet always converts to itself: the builder
+                        // writes it as a bare key hash, so an identity address
+                        // there would pay the R-form of the same bytes, which
+                        // nobody holds a key for.
+                        if ConvertState.review-from-address != "": VerticalLayout {
+                            spacing: Sp.s2;
+                            Eyebrow { text: @tr("PAID FROM"); }
+                            Text {
+                                text: ConvertState.review-from-address;
+                                font-family: Typo.mono;
+                                font-size: Typo.num-sm;
+                                color: Theme.text-secondary;
+                                wrap: char-wrap;
+                            }
+                        }
+
+                        if ConvertState.review-recipient != "": VerticalLayout {
+                            spacing: Sp.s2;
+                            Eyebrow { text: @tr("DELIVERED TO"); }
+                            Text {
+                                text: ConvertState.review-recipient;
+                                font-family: Typo.mono;
+                                font-size: Typo.num-sm;
+                                color: Theme.text-secondary;
+                                wrap: char-wrap;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: Sp.s2;
+                            Eyebrow { text: @tr("OUTPUTS"); }
+
+                            // Every output, change included, on the same rule
+                            // the send review follows: change is drawn quieter
+                            // because only one row is the question being asked,
+                            // and it is still shown in full because a review
+                            // whose figures do not add up is one people stop
+                            // reading.
+                            for output in ConvertState.outputs: HorizontalLayout {
+                                spacing: Sp.s5;
+                                padding-top: Sp.s2;
+                                padding-bottom: Sp.s2;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+                                    Text {
+                                        text: output.address == "" ? @tr("Unknown destination") : output.address;
+                                        font-family: Typo.mono;
+                                        font-size: Typo.num-sm;
+                                        color: output.address == "" ? Theme.negative
+                                            : output.is-change ? Theme.text-tertiary
+                                            : Theme.text-primary;
+                                        wrap: char-wrap;
+                                    }
+                                    if output.is-change: Text {
+                                        text: @tr("Change · back to your wallet");
+                                        font-size: Typo.caption;
+                                        color: Theme.text-disabled;
+                                    }
+                                    if !output.is-change: NoteText {
+                                        note: output.kind;
+                                        font-size: Typo.caption;
+                                        color: Theme.text-tertiary;
+                                    }
+                                }
+
+                                Money {
+                                    amount: output.amount;
+                                    show-currency: false;
+                                    size: output.is-change ? Typo.num-sm : Typo.num-sm;
+                                    tone: output.is-change ? "muted" : "neutral";
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // ── What it costs, and what it is worth ─────────────
+                    VerticalLayout {
+                        spacing: Sp.s5;
+                        width: 360px;
+
+                        // The paragraph this screen exists to make unmissable.
+                        // Everything else here is exact — these are the bytes —
+                        // and this one figure is not, and the difference is not
+                        // something a person can be expected to infer from a
+                        // layout.
+                        Rectangle {
+                            background: Theme.warning-soft;
+                            border-radius: R.md;
+                            VerticalLayout {
+                                padding: Sp.s5;
+                                spacing: Sp.s2;
+                                Text {
+                                    text: @tr("The price is not fixed here");
+                                    font-size: Typo.body;
+                                    font-weight: Typo.w-medium;
+                                    color: Theme.warning;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: @tr("The chain converts on import, at least a block from now, at the reserves as they are then. The protocol has no slippage bound: the floor below was checked once, just now, and nothing enforces it.");
+                                    font-size: Typo.caption;
+                                    color: Theme.text-secondary;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: Sp.s3;
+                            QuoteLine { label: @tr("Converting"); value: ConvertState.review-pay; }
+                            QuoteLine { label: @tr("The node expects"); value: ConvertState.review-estimate; }
+                            // Bold, and the wording is deliberate: "worth doing
+                            // at", not "you will receive at least". Nothing
+                            // enforces it.
+                            QuoteLine {
+                                label: @tr("Only worth doing above");
+                                value: ConvertState.review-minimum;
+                                strong: true;
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border-subtle;
+                            }
+
+                            QuoteLine {
+                                label: @tr("Conversion fee");
+                                value: ConvertState.review-conversion-fee;
+                            }
+                            QuoteLine {
+                                label: @tr("Network fee");
+                                value: ConvertState.review-network-fee;
+                            }
+                            QuoteLine {
+                                label: @tr("Leaving your wallet");
+                                value: ConvertState.review-total;
+                                strong: true;
+                            }
+                            if ConvertState.review-balance-after != "": QuoteLine {
+                                label: @tr("Left afterwards");
+                                value: ConvertState.review-balance-after;
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                if ConvertState.problem.code != "": NoticeTitle {
+                    note: ConvertState.problem;
+                    font-size: Typo.caption;
+                    color: Theme.negative;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: @tr("Back");
+                        variant: "ghost";
+                        clicked => { ConvertState.cancel(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        text: ConvertState.busy ? @tr("Converting…") : @tr("Convert now");
+                        variant: "primary";
+                        enabled: !ConvertState.busy;
+                        clicked => { ConvertState.confirm(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Step 3: what happened ───────────────────────────────────────────
+    if ConvertState.step == "sent" || ConvertState.step == "uncertain": HorizontalLayout {
+        alignment: center;
+        Card {
+            width: 520px;
+            VerticalLayout {
+                padding: Sp.s8;
+                spacing: Sp.s6;
+
+                Text {
+                    text: ConvertState.step == "sent"
+                        ? @tr("Conversion sent")
+                        : @tr("We could not confirm your conversion was sent");
+                    font-size: Typo.title2;
+                    font-weight: Typo.w-bold;
+                    color: ConvertState.step == "sent" ? Theme.positive : Theme.warning;
+                    wrap: word-wrap;
+                }
+
+                // Sent, not done. The chain has accepted the request; the
+                // conversion itself happens on import, and what comes out is
+                // decided then.
+                if ConvertState.step == "sent": Text {
+                    text: @tr("The network has the request. What you receive is decided when it is imported, a block or more from now, at the reserves as they are then.");
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                if ConvertState.step == "uncertain": Text {
+                    text: @tr("It may already be on its way. Pecu has saved the exact transaction and can check on it. Do not send it again — that could convert twice.");
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: @tr("TRANSACTION ID"); }
+                    convtxid := TextInput {
+                        text: ConvertState.txid;
+                        read-only: true;
+                        font-family: Typo.mono;
+                        font-size: Typo.num-sm;
+                        color: Theme.text-primary;
+                        wrap: char-wrap;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Sp.s4;
+                    Btn {
+                        text: @tr("Copy id");
+                        clicked => {
+                            convtxid.select-all();
+                            convtxid.copy();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        text: @tr("Done");
+                        variant: "primary";
+                        clicked => { ConvertState.done(); }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
 }
 
 // Choosing a currency for one leg.

@@ -191,7 +191,7 @@ pub fn review(
 /// A script this build cannot read is reported as unreadable rather than
 /// guessed at. "We could not read one of the outputs of the transaction you are
 /// about to sign" is a sentence someone can act on; a blank line is not.
-fn decode_outputs(hex: &str, from: &str) -> Vec<ReviewOutputVm> {
+pub(crate) fn decode_outputs(hex: &str, from: &str) -> Vec<ReviewOutputVm> {
     let Ok(bytes) = hex::decode(hex) else {
         return Vec::new();
     };
@@ -208,7 +208,17 @@ fn decode_outputs(hex: &str, from: &str) -> Vec<ReviewOutputVm> {
             ReviewOutputVm {
                 // Change is not a label the builder attaches — it is the output
                 // that pays us back, recognised by address.
-                is_change: address.as_deref() == Some(from),
+                //
+                // **Except a conversion.** Its decoded address is the delivery
+                // destination out of the payload, and this wallet converts to
+                // itself — so an address comparison alone labels the value on
+                // its way out "Change · back to your wallet" and draws it in the
+                // quiet style meant for the output that does not matter. It is
+                // the one that does. Caught by
+                // `the_conversion_output_is_named_rather_than_reported_as_unreadable`,
+                // which is worth more than it sounds: the mistake renders as a
+                // perfectly plausible screen.
+                is_change: address.as_deref() == Some(from) && kind.code != "output-conversion",
                 address,
                 kind,
                 amount_display: coins(amount),
@@ -237,6 +247,16 @@ fn describe(script: &[u8]) -> (Option<String>, NoteVm) {
             destination_address(&destination),
             NoteVm::plain("output-token"),
         ),
+        // A conversion in flight. The address the *script* pays is a protocol
+        // constant — `RESERVE_TRANSFER_ADDRESS`, which is nobody — so the
+        // destination shown is the one inside the payload, which is where the
+        // converted value is actually delivered. Naming the holder here would
+        // put an address on the review that means nothing and belongs to no
+        // one.
+        Ok(OutputKind::ReserveTransfer { transfer, .. }) => (
+            destination_address(&transfer.destination.recipient),
+            NoteVm::plain("output-conversion"),
+        ),
         Ok(other) => (
             None,
             NoteVm::with("output-unrecognised", [format!("{other:?}")]),
@@ -257,6 +277,61 @@ fn destination_address(destination: &verus_sdk::decode::Destination) -> Option<S
         Destination::Identity(hash) => Some(Address::new(AddressKind::Identity, *hash).to_string()),
         _ => None,
     }
+}
+
+/// What a conversion's reserve-transfer output actually says, read back out of
+/// the signed bytes.
+///
+/// Everything about a conversion is inside one CryptoCondition payload: the
+/// currency, the amount, the fee and the delivery address. A review that did
+/// not open it would be showing the form back to the person who filled it in.
+pub(crate) struct Conversion {
+    /// How much of the source currency is being moved, in its smallest unit.
+    pub amount_sats: u64,
+    /// The transfer fee written into the payload.
+    pub fee_sats: u64,
+    /// The native value the output itself carries.
+    ///
+    /// Amount plus fee when the source is the chain's own currency; the fee
+    /// alone when it is a token, because a token's value travels in the payload
+    /// rather than in satoshis. Taken from the output rather than worked out,
+    /// so the review reports what was signed and not what should have been.
+    pub native_sats: u64,
+    /// Where the converted value is delivered. `None` for a destination shape
+    /// this build does not decode, which is reported rather than guessed at.
+    pub recipient: Option<String>,
+}
+
+/// Find the conversion in a signed transaction, if there is one.
+///
+/// One, not a list: everything this wallet builds carries exactly one reserve
+/// transfer. The first is taken and any second would be ignored — which is not
+/// a silent truncation, because a transaction with two of them is not something
+/// this application can produce, and `decode_outputs` shows every output
+/// regardless.
+pub(crate) fn conversion_in(hex: &str) -> Option<Conversion> {
+    use verus_sdk::decode::OutputKind;
+
+    let bytes = hex::decode(hex).ok()?;
+    let tx = verus_sdk::verus_wire::TxV4::deserialize(&bytes).ok()?;
+
+    tx.outputs.iter().find_map(|output| {
+        let OutputKind::ReserveTransfer { transfer, .. } =
+            verus_sdk::decode::decode_output_script(&output.script_pubkey).ok()?
+        else {
+            return None;
+        };
+        Some(Conversion {
+            // The payload's `CTokenOutput` carries the source currency and what
+            // is being moved. Summed rather than indexed: the shape is one pair
+            // for everything built here, and a `[0]` would panic on a
+            // transaction that was not.
+            amount_sats: transfer.tokens.iter().map(|(_, amount)| amount).sum(),
+            fee_sats: transfer.fees,
+            native_sats: output.value,
+            recipient: destination_address(&transfer.destination.recipient),
+        })
+    })
 }
 
 // ── Sending ─────────────────────────────────────────────────────────────────

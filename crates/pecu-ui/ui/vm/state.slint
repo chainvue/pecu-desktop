@@ -608,14 +608,20 @@ export global ActivityState {
 // than a promise. So it is a form and then a review, the review is built from
 // something signed, and nothing leaves until the second button.
 export global ConvertState {
-    // No `step` and no `busy` here yet.
+    // "form" | "review" | "sent" | "uncertain".
     //
-    // They were: `"form" | "review" | "converting" | "done"`, and a spinner
-    // flag. Nothing wrote either and nothing read either, because this screen
-    // has one state — a form that prices what is in it. The review and the
-    // sending it leads to do not exist, and a state machine whose other three
-    // states are unreachable describes a screen that was never built. They come
-    // back with the thing they describe.
+    // These were here once with nothing reading or writing them, and were
+    // taken out because a state machine whose other states are unreachable
+    // describes a screen that was never built. They are back with the thing
+    // they describe: the review is real, and so is the broadcast behind it.
+    //
+    // The same four `SendState` has, and the same four for the same reasons —
+    // including "uncertain", which is not a failure and not a success and
+    // needs a step of its own or it gets shown as one of them.
+    in-out property <string> step: "form";
+    // Signing or sending. One flag, because this screen does not draw the
+    // difference — see `TaskKind::Converting`.
+    in property <bool> busy: false;
 
     // The interface's own drafts. Nothing is sent from here until Review — the
     // same arrangement `SendState` uses, and for the reason recorded there: a
@@ -659,11 +665,51 @@ export global ConvertState {
     // check here.
     in property <bool> ready: false;
 
+    // ── The review ──────────────────────────────────────────────────────
+    //
+    // Flat rather than one struct, for the reason `SendState` and `MarketState`
+    // both record: Slint models nested inside a struct field are awkward to
+    // feed from Rust, and `outputs` is a list.
+    //
+    // Mirrors `ConvertReviewVm`. Every figure here except `review-estimate` and
+    // `review-minimum` is read back out of the transaction that will actually
+    // be broadcast — see the doc on that struct for why those two cannot be.
+    in property <int> ticket: 0;
+    in property <[ReviewOutput]> outputs: [];
+    in property <string> review-from: "";
+    in property <string> review-to: "";
+    in property <string> review-via: "";
+    in property <string> review-pay: "";
+    in property <string> review-estimate: "";
+    in property <string> review-minimum: "";
+    in property <string> review-conversion-fee: "";
+    in property <string> review-network-fee: "";
+    in property <string> review-total: "";
+    in property <string> review-balance-after: "";
+    in property <string> review-from-address: "";
+    // Where the converted value lands, decoded from the transfer's payload
+    // rather than from the form. See `ConvertReviewVm::recipient`.
+    in property <string> review-recipient: "";
+
+    // The outcome.
+    in property <string> txid: "";
+    // What went wrong, at whatever step it went wrong on. A named reason.
+    in-out property <Note> problem;
+
     // Anything typed or chosen. The app reads all three draft fields and sends
     // them together: which currency is being paid decides what the amount
     // means, so a signal carrying one of them says nothing about the other two.
     callback edited();
     callback swap();
+    // Build and sign what is in the form. Sends nothing.
+    callback review();
+    // Hand the signed bytes over. The screen cannot reach this without having
+    // been through `review()` first — there is no ticket otherwise.
+    callback confirm();
+    // Go back to the form, throwing the signed bytes away.
+    callback cancel();
+    // Start again after a conversion landed.
+    callback done();
 }
 
 // The markets screen.

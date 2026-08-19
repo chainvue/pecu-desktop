@@ -196,6 +196,13 @@ pub const CASES: &[Case] = &[
     ("convert", "convert-thin", crate::fixtures::converting_thin),
     ("convert", "convert-refused", crate::fixtures::converting_refused),
     ("convert", "convert-picking", crate::fixtures::converting_picking),
+    ("convert", "convert-review", crate::fixtures::converting_review),
+    (
+        "convert",
+        "convert-rejected",
+        crate::fixtures::converting_rejected,
+    ),
+    ("convert", "convert-sent", crate::fixtures::converting_sent),
     ("activity", "history", crate::fixtures::history),
     ("activity", "history-filtered", crate::fixtures::history_filtered),
     ("activity", "activity", crate::fixtures::funded),

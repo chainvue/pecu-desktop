@@ -1140,6 +1140,13 @@ pub enum TaskKind {
     ProbingNodes,
     PreparingSend,
     Broadcasting,
+    /// Building, signing or sending a conversion.
+    ///
+    /// One kind covering both halves rather than two, because the convert
+    /// screen has one busy flag and the difference between "signing" and
+    /// "sending" is not one it draws. `PreparingSend` and `Broadcasting` are
+    /// two because the send screen shows a different step for each.
+    Converting,
     CreatingWallet,
 }
 

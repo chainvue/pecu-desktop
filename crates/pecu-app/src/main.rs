@@ -1225,6 +1225,7 @@ fn wire_convert(ui: &AppWindow, dispatcher: Dispatcher) {
         // typed is a decision about money. The two address fields are written
         // back here so the boxes turn over on the click rather than after the
         // round trip; the reply sets the names to match.
+        let dispatcher = dispatcher.clone();
         let weak = ui.as_weak();
         convert.on_swap(move || {
             if let Some(ui) = weak.upgrade() {
@@ -1235,6 +1236,81 @@ fn wire_convert(ui: &AppWindow, dispatcher: Dispatcher) {
                 state.set_pay_draft(slint::SharedString::new());
             }
             dispatcher.send(Command::SwapConvertLegs);
+        });
+    }
+
+    {
+        // Build and sign. **Sends nothing** — the core's `PrepareConversion`
+        // takes no arguments precisely so this cannot describe a conversion
+        // different from the one the quote on screen is about.
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        convert.on_review(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<pecu_ui::ConvertState>()
+                    .set_problem(pecu_ui::Note::default());
+            }
+            dispatcher.send(Command::PrepareConversion);
+        });
+    }
+
+    {
+        // The one press on this screen that spends. The ticket is the only
+        // handle the interface has: the signed bytes never came over.
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        convert.on_confirm(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let ticket = ui.global::<pecu_ui::ConvertState>().get_ticket();
+            dispatcher.send(Command::ConfirmConversion {
+                ticket: u64::try_from(ticket).unwrap_or_default(),
+            });
+        });
+    }
+
+    {
+        // Back to the form, and the core forgets the bytes. Told rather than
+        // merely navigated away from: a signed conversion nobody agreed to
+        // send should not sit in memory waiting for a ticket number to be
+        // guessed.
+        let dispatcher = dispatcher.clone();
+        let weak = ui.as_weak();
+        convert.on_cancel(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<pecu_ui::ConvertState>();
+            let ticket = state.get_ticket();
+            state.set_problem(pecu_ui::Note::default());
+            state.set_step("form".into());
+            dispatcher.send(Command::CancelConversion {
+                ticket: u64::try_from(ticket).unwrap_or_default(),
+            });
+        });
+    }
+
+    {
+        // Finished with the result. The amount is cleared and the two
+        // currencies are not: converting again in the same direction is the
+        // likely next thing, and re-picking both to do it would be a form
+        // punishing somebody for having used it.
+        let weak = ui.as_weak();
+        convert.on_done(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<pecu_ui::ConvertState>();
+            state.set_pay_draft(slint::SharedString::new());
+            state.set_txid(slint::SharedString::new());
+            state.set_problem(pecu_ui::Note::default());
+            state.set_step("form".into());
+            dispatcher.send(Command::SetConvertDraft(pecu_protocol::ConvertDraft {
+                from: state.get_from_address().to_string(),
+                to: state.get_to_address().to_string(),
+                pay: String::new(),
+            }));
         });
     }
 }

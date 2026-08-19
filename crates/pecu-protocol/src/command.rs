@@ -340,6 +340,22 @@ pub enum Command {
     /// A command rather than two `SetConvertDraft`s from the interface: what
     /// happens to the amount already typed is a decision, and it is the core's.
     SwapConvertLegs,
+    /// Build and sign the conversion the form is showing. **Sends nothing.**
+    ///
+    /// No arguments, deliberately. The draft is already in the core — every
+    /// keystroke put it there — and an interface that repeated it here would
+    /// let the two disagree about what is being converted at the exact moment
+    /// it becomes a signature.
+    ///
+    /// The floor comes from the quote that was on screen, not from a fresh
+    /// calculation: it is a record of what somebody was shown and accepted,
+    /// and one worked out afterwards would be a floor nobody agreed to.
+    PrepareConversion,
+    /// Send the conversion behind `ticket`. **The other place this application
+    /// writes to the chain.**
+    ConfirmConversion { ticket: u64 },
+    /// Forget it. The bytes were signed and never left this process.
+    CancelConversion { ticket: u64 },
 
     // ── Markets ─────────────────────────────────────────────────────────
     /// Work out what everything is worth, and where.

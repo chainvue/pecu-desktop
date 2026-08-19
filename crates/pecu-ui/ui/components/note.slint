@@ -81,6 +81,11 @@ export component NoteText inherits Text {
         : root.note.code == "output-to-public-key" ? @tr("Payment to a public key")
         : root.note.code == "output-to-verusid" ? @tr("Payment to a VerusID")
         : root.note.code == "output-token" ? @tr("Token output")
+        // The address beside this one is the delivery address inside the
+        // payload, not the script's own — see `send::describe`. A conversion
+        // output pays a protocol constant that belongs to nobody, and putting
+        // that on a review would be an address somebody could not check.
+        : root.note.code == "output-conversion" ? @tr("Conversion · delivered to the address above")
         : root.note.code == "output-unreadable" ? @tr("Could not be read")
         : root.note.code == "output-unrecognised"
             ? @tr("An output this build cannot read: {0}", root.note.args[0])
@@ -364,6 +369,22 @@ export component NoteText inherits Text {
                   root.note.args[0])
         : root.note.code == "convert-unpriced"
             ? @tr("The node could not price this conversion. Nothing has been sent.")
+        : root.note.code == "convert-bad-recipient"
+            ? @tr("A conversion can only be delivered to an R-address. Nothing has been signed.")
+        : root.note.code == "convert-bad-currency"
+            ? @tr("One of those is not a currency this wallet can identify. Nothing has been signed.")
+        : root.note.code == "convert-below-floor"
+            ? @tr("The price moved while this was being prepared: the node now expects {0}, and {1} was the least this was worth doing at. Nothing has been signed.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "convert-unusable-tokens"
+            ? @tr("This wallet holds that currency in outputs that also carry another one, and a single conversion cannot spend those without destroying what else is in them.")
+        : root.note.code == "convert-build-failed"
+            ? @tr("The conversion could not be built. Nothing has been signed.")
+        // The one that will be seen most, for as long as the network has
+        // conversions paused. It says the node refused — not the wallet — and
+        // the node's own sentence is in the toast beside it.
+        : root.note.code == "convert-refused-by-node"
+            ? @tr("The network refused this conversion. Nothing was spent.")
 
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
@@ -470,6 +491,31 @@ export component NoticeTitle inherits Text {
         : root.note.code == "pending-unsaved"
             ? @tr("Could not record the payment before sending it, so it was not sent")
         : root.note.code == "resend-unconfirmed" ? @tr("That payment still could not be confirmed")
+
+        // ── Converting ──────────────────────────────────────────────────
+        //
+        // Headlines, not the paragraphs `NoteText` carries for the same codes.
+        // These appear on the review — under a card that has already explained
+        // itself — and in a toast, and both want the fact rather than the
+        // reasoning.
+        //
+        // The first will be the most-seen line in this build for as long as the
+        // network has conversions paused. It says the **network** refused, not
+        // that the wallet failed, because those call for different next moves
+        // and the difference is invisible from here otherwise.
+        : root.note.code == "convert-refused-by-node"
+            ? @tr("The network refused this conversion — nothing was spent")
+        : root.note.code == "convert-below-floor"
+            ? @tr("The price moved: the node now expects {0}, and {1} was required",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "convert-build-failed" ? @tr("Could not build this conversion")
+        : root.note.code == "convert-unpriced" ? @tr("The node could not price this conversion")
+        : root.note.code == "convert-bad-recipient"
+            ? @tr("A conversion can only be delivered to an R-address")
+        : root.note.code == "convert-bad-currency"
+            ? @tr("One of those is not a currency Pecu can identify")
+        : root.note.code == "convert-unusable-tokens"
+            ? @tr("That currency sits in outputs a single conversion cannot spend")
 
         // ── VerusIDs ────────────────────────────────────────────────────
         : root.note.code == "identity-change-failed" ? @tr("Could not build that change")

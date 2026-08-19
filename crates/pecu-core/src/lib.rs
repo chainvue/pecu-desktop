@@ -118,6 +118,7 @@ pub fn start(
         spendable: verus_sdk::money::Amount::ZERO,
         native_balance: 0,
         prepared: std::collections::HashMap::new(),
+        conversions: std::collections::HashMap::new(),
         tickets: 0,
         pending: pending::Ledger::open(paths.pending()),
         last_checked: std::collections::HashMap::new(),
@@ -141,6 +142,7 @@ pub fn start(
         convert: pecu_protocol::ConvertDraft::default(),
         convert_ticket: 0,
         convert_ready: None,
+        convert_floor: None,
         holdings: std::collections::BTreeMap::new(),
         markets: Markets::Unasked,
         pending_currency_search: None,
@@ -288,6 +290,14 @@ struct Core {
     /// estimate can be turned into a quote. Cleared by nothing: a stale one is
     /// unreachable because its ticket no longer matches.
     convert_ready: Option<convert::Ready>,
+    /// The floor from the quote last put on screen, with the ticket it belongs
+    /// to.
+    ///
+    /// Both, because the floor is a record of what somebody was *shown* and
+    /// agreed to. Recomputing it when they press Review would enforce a number
+    /// nobody saw, and carrying it without its ticket would let a floor
+    /// calculated for one pair of currencies be checked against another.
+    convert_floor: Option<(u64, verus_sdk::money::Amount)>,
     /// What the wallet holds, by currency i-address, including the chain's own.
     ///
     /// Kept because converting needs it and a balance read does not retain it —
@@ -333,6 +343,14 @@ struct Core {
     /// Signed payments waiting for a Confirm. **The bytes never leave here** —
     /// the UI holds a ticket number and a decoded summary.
     prepared: std::collections::HashMap<u64, send::Prepared>,
+    /// Signed conversions waiting for a Confirm. Same shape and same rule as
+    /// `prepared`: the bytes never leave here, and the interface holds a
+    /// number.
+    ///
+    /// A second map rather than a shared one, because the two are confirmed by
+    /// different commands and a ticket that could be either would let the send
+    /// screen's Confirm broadcast a conversion.
+    conversions: std::collections::HashMap<u64, convert::Prepared>,
     tickets: u64,
     /// Transactions handed to a node whose outcome is unknown, on disk.
     pending: pending::Ledger,
@@ -654,6 +672,17 @@ enum Work {
     Resent {
         record: u64,
         result: Box<Result<String, verus_sdk::network::FlowError>>,
+    },
+    /// A conversion was built and signed, or the attempt failed.
+    Converted {
+        ticket: u64,
+        result: Box<Result<convert::Prepared, convert::ConvertError>>,
+    },
+    /// A conversion's broadcast finished, one way or another.
+    ConversionSent {
+        /// The ledger row committed before the attempt.
+        record: u64,
+        result: Box<Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>>,
     },
     /// A broadcast finished, one way or another.
     Broadcast {
@@ -1376,6 +1405,10 @@ impl Core {
             } => self.finish_check(record, confirmations),
             Work::Resent { record, result } => self.finish_resend(record, *result),
             Work::Broadcast { record, result } => self.finish_broadcast(record, *result),
+            Work::Converted { ticket, result } => self.finish_convert_prepare(ticket, *result),
+            Work::ConversionSent { record, result } => {
+                self.finish_convert_broadcast(record, *result);
+            }
         }
     }
 
@@ -1537,6 +1570,9 @@ impl Core {
             Command::OpenMarket(address) => self.open_market(address),
             Command::SetConvertDraft(draft) => self.set_convert_draft(draft),
             Command::SwapConvertLegs => self.swap_convert_legs(),
+            Command::PrepareConversion => self.prepare_conversion(),
+            Command::ConfirmConversion { ticket } => self.confirm_conversion(ticket),
+            Command::CancelConversion { ticket } => self.cancel_conversion(ticket),
             Command::LookUpIdentity(typed) => self.look_up_identity(&typed),
             Command::SetIdentityAuthorities {
                 address,
@@ -4187,6 +4223,10 @@ impl Core {
 
         match result {
             Ok((estimate, network_fee)) => {
+                // Kept with the ticket, so pressing Review signs against the
+                // floor that was on screen rather than one worked out
+                // afterwards. See `Core::convert_floor`.
+                self.convert_floor = Some((ticket, convert::floor(estimate.estimated_out)));
                 let quote = convert::quote(
                     &ready,
                     &self.market_names,
@@ -4202,6 +4242,245 @@ impl Core {
                 self.refuse_conversion(pecu_protocol::NoteVm::plain("convert-unpriced"));
             }
         }
+    }
+
+    /// Build and sign the conversion the form is showing. **Sends nothing.**
+    ///
+    /// The draft is re-checked here rather than the last `Ready` being reused.
+    /// It costs one pass over data already in memory, and it closes the window
+    /// where a balance refresh landed between the last keystroke and this
+    /// press — a conversion whose amount is no longer held would otherwise be
+    /// signed against a balance nobody has.
+    fn prepare_conversion(&mut self) {
+        self.wallet.touch();
+
+        let ready = match convert::check(
+            &self.convert,
+            &self.market,
+            &self.holdings,
+            &self.market_names,
+        ) {
+            Ok(ready) => ready,
+            Err(note) => {
+                self.refuse_conversion(note);
+                return;
+            }
+        };
+
+        // The floor from the quote that is on screen, and only from that quote.
+        // A stale one is unreachable because its ticket no longer matches —
+        // see `convert_floor`. Without a current one there is no floor anybody
+        // has agreed to, so there is nothing to sign.
+        let Some(floor) = self
+            .convert_floor
+            .filter(|(ticket, _)| *ticket == self.convert_ticket)
+            .map(|(_, floor)| floor)
+        else {
+            self.refuse_conversion(NoteVm::plain("convert-unpriced"));
+            return;
+        };
+
+        let Some(label) = self.wallet.active_key.clone() else {
+            return;
+        };
+        let Some(vault) = self.wallet.vault() else {
+            return;
+        };
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        // The conversion is delivered to this wallet's own address, which is
+        // also the refund address. Both are the active key's, and neither is
+        // anything the interface got to choose.
+        let recipient = self.wallet.active_address().unwrap_or_default();
+        if recipient.is_empty() {
+            return;
+        }
+
+        let names = self.market_names.clone();
+
+        self.tickets += 1;
+        let ticket = self.tickets;
+        self.busy(TaskKind::Converting, true);
+
+        self.blocking.dispatch(
+            move || Work::Converted {
+                ticket,
+                result: Box::new(convert::prepare(
+                    &chain, &vault, &label, &ready, &names, &recipient, floor,
+                )),
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_convert_prepare(
+        &mut self,
+        ticket: u64,
+        result: Result<convert::Prepared, convert::ConvertError>,
+    ) {
+        self.busy(TaskKind::Converting, false);
+
+        match result {
+            Ok(prepared) => {
+                let from = self.wallet.active_address().unwrap_or_default();
+                // From the SIGNED bytes — see `convert::review`.
+                let review = convert::review(ticket, &prepared, &from, self.spendable);
+                self.conversions.insert(ticket, prepared);
+                let _ = self
+                    .events
+                    .send(Event::ConvertPrepared(Box::new(review)));
+            }
+            Err(error) => {
+                let refusal = convert_note(&error);
+                self.notice("prepare_conversion", refusal.clone(), &error);
+                let _ = self.events.send(Event::ConvertResult(
+                    pecu_protocol::SendOutcomeVm::Failed(pecu_protocol::UiError::simple(
+                        "prepare_conversion",
+                        refusal,
+                        error.to_string(),
+                        pecu_protocol::Severity::Danger,
+                    )),
+                ));
+            }
+        }
+    }
+
+    /// Send a conversion. The second — and last — place this application writes
+    /// to the chain.
+    ///
+    /// Every guard `confirm_send` has, for the same reasons, because they are
+    /// the same guards: the permit is the only route to a `Broadcaster`, and
+    /// the bytes are on disk before anything is handed over. A conversion is
+    /// not less irreversible than a payment; it is a payment that also changes
+    /// what you hold.
+    fn confirm_conversion(&mut self, ticket: u64) {
+        let Some(prepared) = self.conversions.remove(&ticket) else {
+            return;
+        };
+
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                // Put it back: the user may turn mainnet spending on and try
+                // again, and rebuilding would select different coins.
+                self.conversions.insert(ticket, prepared);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
+                return;
+            }
+        };
+
+        let Some(chain) = self.chain() else {
+            self.conversions.insert(ticket, prepared);
+            return;
+        };
+
+        // The same ledger a payment uses, and deliberately.
+        //
+        // What it exists to protect is bytes that may already be propagating,
+        // and that is exactly as true here. The recipient recorded is this
+        // wallet's own address, which is the truth — a conversion pays you —
+        // and it means an uncertain conversion turns up in the same list, is
+        // resolved by the same "ask the node whether it confirmed", and is
+        // re-sent as the same bytes rather than rebuilt.
+        let record = match self.pending.commit(
+            &prepared.unsent.txid,
+            &prepared.unsent.hex,
+            &prepared.to,
+            &portfolio::coins(prepared.amount),
+        ) {
+            Ok(id) => id,
+            Err(error) => {
+                self.conversions.insert(ticket, prepared);
+                self.notice("pending_commit", NoteVm::plain("pending-unsaved"), &error);
+                return;
+            }
+        };
+
+        self.busy(TaskKind::Converting, true);
+        self.broadcasting = true;
+        self.blocking.dispatch(
+            move || Work::ConversionSent {
+                record,
+                result: Box::new(convert::broadcast(&chain, &permit, prepared)),
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_convert_broadcast(
+        &mut self,
+        record: u64,
+        result: Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>,
+    ) {
+        use pecu_protocol::SendOutcomeVm;
+        use verus_sdk::network::FlowError;
+
+        self.busy(TaskKind::Converting, false);
+        self.broadcasting = false;
+
+        match result {
+            Ok(sent) => {
+                // The txid and the fee, and deliberately not which currencies
+                // or how much — the same rule the payment log follows. Both are
+                // on the chain and one lookup finds them, while a log holding a
+                // list of what somebody converted is a file people attach to
+                // bug reports.
+                tracing::info!(
+                    txid = %sent.txid,
+                    fee = %portfolio::coins(sent.fee),
+                    "a conversion was accepted by the network",
+                );
+                self.pending.set_state(record, pending::State::Confirmed);
+                self.pending.forget_confirmed();
+                let _ = self.events.send(Event::ConvertResult(SendOutcomeVm::Sent {
+                    txid: sent.txid,
+                    fee_display: portfolio::coins(sent.fee),
+                }));
+                self.refresh();
+            }
+
+            // The node may have taken it. The bytes are on disk and the only
+            // safe resolution is to ask whether it confirmed — never to
+            // rebuild, which would convert twice.
+            Err(FlowError::BroadcastUncertain { txid, .. }) => {
+                tracing::warn!(%txid, "the outcome of a conversion broadcast is unknown");
+                let _ = self
+                    .events
+                    .send(Event::ConvertResult(SendOutcomeVm::Uncertain {
+                        txid,
+                        pending_id: record,
+                    }));
+            }
+
+            Err(error) => {
+                // A refusal is unambiguous: the node understood it and said no.
+                // Nothing was spent, and the record would only be noise.
+                //
+                // **This is the ordinary outcome while the network has DeFi
+                // paused.** Every conversion is rejected, and it is rejected
+                // here — by a node, in a sentence, after the wallet has done
+                // everything right. That is why the message travels rather than
+                // being flattened to "it did not work".
+                self.pending.set_state(record, pending::State::Abandoned);
+                self.pending.forget_confirmed();
+                let refusal = NoteVm::plain("convert-refused-by-node");
+                self.notice("convert_broadcast", refusal.clone(), &error);
+                let _ = self.events.send(Event::ConvertResult(SendOutcomeVm::Failed(
+                    pecu_protocol::UiError::simple(
+                        "convert_broadcast",
+                        refusal,
+                        error.to_string(),
+                        pecu_protocol::Severity::Danger,
+                    ),
+                )));
+            }
+        }
+    }
+
+    /// Throw away a signed conversion nobody agreed to send.
+    fn cancel_conversion(&mut self, ticket: u64) {
+        self.conversions.remove(&ticket);
     }
 
     /// Say why there is no quote, in the shape a quote has.
@@ -5677,6 +5956,38 @@ fn send_note(error: &send::SendError) -> NoteVm {
             NoteVm::plain("send-not-enough-spendable")
         }
         send::SendError::Flow(_) => NoteVm::plain("send-build-failed"),
+    }
+}
+
+/// What the convert screen says when a build fails.
+///
+/// Named reasons rather than the error's own text, for the reason `NoteVm`
+/// records — except that the node's sentence still travels beside them, in the
+/// `UiError` this is put into. That matters more here than anywhere else in
+/// the wallet: while the network has DeFi paused, *every* conversion is
+/// refused, and the only thing that distinguishes "the chain will not do this
+/// today" from "this wallet built it wrong" is what the node said.
+fn convert_note(error: &convert::ConvertError) -> NoteVm {
+    use verus_sdk::network::FlowError;
+
+    match error {
+        convert::ConvertError::BadRecipient => NoteVm::plain("convert-bad-recipient"),
+        convert::ConvertError::BadCurrency => NoteVm::plain("convert-bad-currency"),
+        convert::ConvertError::BelowFloor { expected, floor } => {
+            NoteVm::with("convert-below-floor", [expected.clone(), floor.clone()])
+        }
+        convert::ConvertError::UnusableTokens(_) => NoteVm::plain("convert-unusable-tokens"),
+        convert::ConvertError::Vault(_) => NoteVm::plain("wallet-locked"),
+        // Same distinction the send form draws, and it is worth as much here:
+        // a conversion needs native coins for the fee even when the thing being
+        // converted is a token, so "not enough" against a screen showing a
+        // token balance reads as a bug unless it says which balance.
+        convert::ConvertError::Flow(FlowError::InsufficientFunds { .. }) => {
+            NoteVm::plain("send-not-enough-spendable")
+        }
+        convert::ConvertError::Flow(_) | convert::ConvertError::Read(_) => {
+            NoteVm::plain("convert-build-failed")
+        }
     }
 }
 

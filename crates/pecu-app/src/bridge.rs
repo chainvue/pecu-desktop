@@ -211,6 +211,9 @@ fn apply(ui: &AppWindow, event: Event) {
             state.set_ready(quote.ready);
         }
 
+        Event::ConvertPrepared(vm) => apply_convert_review(ui, &vm),
+        Event::ConvertResult(outcome) => apply_convert_outcome(ui, outcome),
+
         Event::SearchHits { query, hits } => {
             let state = ui.global::<pecu_ui::SearchState>();
             // Drop a reply to a query nobody is running any more. Two
@@ -391,6 +394,9 @@ fn apply(ui: &AppWindow, event: Event) {
                 pecu_protocol::TaskKind::PreparingSend
                 | pecu_protocol::TaskKind::Broadcasting => {
                     ui.global::<SendState>().set_busy(on);
+                }
+                pecu_protocol::TaskKind::Converting => {
+                    ui.global::<pecu_ui::ConvertState>().set_busy(on);
                 }
                 pecu_protocol::TaskKind::LoadingHistory => {
                     ui.global::<WalletState>().set_loading_history(on);
@@ -914,6 +920,71 @@ fn apply_review(ui: &AppWindow, vm: &pecu_protocol::SendReviewVm) {
 
     send.set_problem(pecu_ui::Note::default());
     send.set_step("review".into());
+}
+
+/// A conversion, signed and not sent.
+///
+/// Every figure comes off the view model rather than being derived here, for
+/// the reason `apply_review` follows: the interface formats nothing about
+/// money, and a second place that did would be a second place that could
+/// disagree with the core about what was signed.
+fn apply_convert_review(ui: &AppWindow, vm: &pecu_protocol::ConvertReviewVm) {
+    let convert = ui.global::<pecu_ui::ConvertState>();
+    convert.set_ticket(i32::try_from(vm.ticket).unwrap_or(i32::MAX));
+    convert.set_review_from(vm.from.clone().into());
+    convert.set_review_to(vm.to.clone().into());
+    convert.set_review_via(vm.via.clone().into());
+    convert.set_review_pay(vm.pay_display.clone().into());
+    convert.set_review_estimate(vm.estimate_display.clone().into());
+    convert.set_review_minimum(vm.minimum_display.clone().into());
+    convert.set_review_conversion_fee(vm.conversion_fee_display.clone().into());
+    convert.set_review_network_fee(vm.network_fee_display.clone().into());
+    convert.set_review_total(vm.total_display.clone().into());
+    convert.set_review_balance_after(vm.balance_after_display.clone().into());
+    convert.set_review_from_address(vm.from_address.clone().into());
+    convert.set_review_recipient(vm.recipient.clone().into());
+
+    let outputs: Vec<ReviewOutput> = vm
+        .outputs
+        .iter()
+        .map(|output| ReviewOutput {
+            // Empty means the script could not be decoded. The screen shows
+            // that as such rather than hiding the row.
+            address: output.address.clone().unwrap_or_default().into(),
+            kind: note(&output.kind),
+            amount: output.amount_display.clone().into(),
+            is_change: output.is_change,
+        })
+        .collect();
+    convert.set_outputs(ModelRc::from(Rc::new(VecModel::from(outputs))));
+
+    convert.set_problem(pecu_ui::Note::default());
+    convert.set_step("review".into());
+}
+
+/// What happened when a conversion's bytes were handed over.
+///
+/// The failure arm stays on whichever step it failed on, which is the whole
+/// design of it: while the network has conversions paused the refusal arrives
+/// after the review has been read and agreed to, and moving off that screen
+/// would take away the thing the refusal is about.
+fn apply_convert_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
+    let convert = ui.global::<pecu_ui::ConvertState>();
+    match outcome {
+        SendOutcomeVm::Sent { txid, .. } => {
+            convert.set_txid(txid.into());
+            convert.set_problem(pecu_ui::Note::default());
+            convert.set_step("sent".into());
+        }
+        SendOutcomeVm::Uncertain { txid, pending_id } => {
+            tracing::warn!(%txid, pending_id, "conversion broadcast outcome unknown");
+            convert.set_txid(txid.into());
+            convert.set_step("uncertain".into());
+        }
+        SendOutcomeVm::Failed(error) => {
+            convert.set_problem(note(&error.message));
+        }
+    }
 }
 
 /// What happened when the bytes were handed over.

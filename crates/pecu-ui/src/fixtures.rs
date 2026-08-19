@@ -89,6 +89,80 @@ pub fn converting_thin(ui: &AppWindow) {
     state.set_note(note("convert-slippage-high", &["2.15%"]));
 }
 
+/// The conversion review: what was actually signed.
+///
+/// Its own reference image because it is the screen that decides whether money
+/// moves, and because almost everything on it is decoded from a
+/// CryptoCondition payload — which means it is also the screen where a decoding
+/// mistake would show up as a plausible-looking number rather than as a crash.
+///
+/// The figures are `converting`'s, carried through: two hundred and fifty
+/// VRSCTEST into DAI.vETH through Bridge.vETH, the floor three per cent under
+/// the estimate the way `convert::floor` sets it.
+pub fn converting_review(ui: &AppWindow) {
+    converting(ui);
+
+    let state = ui.global::<ConvertState>();
+    state.set_step("review".into());
+    state.set_ticket(1);
+    state.set_review_from("VRSCTEST".into());
+    state.set_review_to("DAI.vETH".into());
+    state.set_review_via("Bridge.vETH".into());
+    state.set_review_pay("250.0000 0000 VRSCTEST".into());
+    state.set_review_estimate("133.5245 8143 DAI.vETH".into());
+    state.set_review_minimum("129.5188 4398 DAI.vETH".into());
+    // The transfer fee as it is written into the payload: 20 010 satoshis.
+    // Not a round number, and not this wallet's choice — see
+    // `convert::TRANSFER_FEE_SATS`.
+    state.set_review_conversion_fee("0.0002 0010".into());
+    state.set_review_network_fee("0.0001 0000".into());
+    state.set_review_total("250.0003 0010".into());
+    state.set_review_balance_after("165.2496 9990".into());
+    state.set_review_from_address(ADDRESS.into());
+    state.set_review_recipient(ADDRESS.into());
+
+    state.set_outputs(ModelRc::from(Rc::new(VecModel::from(vec![
+        ReviewOutput {
+            // The delivery address out of the payload, not the protocol
+            // constant the script pays. See `send::describe`.
+            address: ADDRESS.into(),
+            kind: note("output-conversion", &[]),
+            amount: "250.0002 0010".into(),
+            is_change: false,
+        },
+        ReviewOutput {
+            address: "RWmjzbd4Sy6zK4H4rjHXrpaWTrsJYRr6Nn".into(),
+            kind: note("output-payment", &[]),
+            amount: "165.2496 9990".into(),
+            is_change: true,
+        },
+    ]))));
+}
+
+/// The review with the network's refusal on it.
+///
+/// **The state this build will actually be in most of the time.** VRSCTEST has
+/// conversions paused, so every conversion is rejected — after the wallet has
+/// priced it, built it, signed it and had somebody agree to it. The screen has
+/// to make it clear that the node said no rather than that the wallet broke,
+/// and it has to still be showing the conversion the refusal is about.
+pub fn converting_rejected(ui: &AppWindow) {
+    converting_review(ui);
+
+    ui.global::<ConvertState>()
+        .set_problem(note("convert-refused-by-node", &[]));
+}
+
+/// It reached the network. Sent, not finished — what comes out is decided on
+/// import, and the screen says so rather than reporting a completed trade.
+pub fn converting_sent(ui: &AppWindow) {
+    converting(ui);
+
+    let state = ui.global::<ConvertState>();
+    state.set_step("sent".into());
+    state.set_txid("6a3f9c1e2b7d4f8a0c5e1937b6d2f4a8c9e0173b5d8f2a4c6e91b3d7f5a8c0e2".into());
+}
+
 /// A leg that cannot be converted at all: the design's "empty reserve".
 ///
 /// `demo.VRSCTEST` is a real currency on the scripted chain that no started

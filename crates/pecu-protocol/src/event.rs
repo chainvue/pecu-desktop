@@ -7,7 +7,7 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, ConvertQuoteVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
+    ChartVm, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
     HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
     ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NoteVm, PendingVm, PortfolioVm,
@@ -134,6 +134,20 @@ pub enum Event {
     /// empty — a quote that left the last conversion's fee on screen beside a
     /// new pair of currencies would be describing something nobody asked for.
     ConvertQuote(Box<ConvertQuoteVm>),
+    /// A conversion built and signed but not sent.
+    ///
+    /// Boxed for the reason every other review here is: the variant is much
+    /// larger than its neighbours and an enum is as wide as its widest arm.
+    ConvertPrepared(Box<ConvertReviewVm>),
+    /// What happened when those bytes were handed over.
+    ///
+    /// [`SendOutcomeVm`] rather than a type of its own, because the three
+    /// outcomes are the same three: it landed, the node refused it, or the
+    /// connection dropped in the one way that is genuinely ambiguous. A
+    /// separate event rather than `SendResult` because the two screens are
+    /// separate, and a conversion's result appearing on the send screen would
+    /// be a payment nobody made.
+    ConvertResult(SendOutcomeVm),
     /// Every currency any pool can price, and what it is worth.
     ///
     /// Replaces the table wholesale. A delta would be smaller and would also

@@ -31,8 +31,14 @@
 
 use std::collections::BTreeMap;
 
+use pecu_chain::{Chain, SpendPermit};
+use pecu_keystore::{Vault, VaultError};
 use pecu_protocol::{format, ConvertDraft, ConvertQuoteVm, NoteVm};
-use verus_sdk::money::Amount;
+use verus_sdk::convert::ConversionKind;
+use verus_sdk::currency::CurrencyId;
+use verus_sdk::money::{Amount, Utxo};
+use verus_sdk::network::{self, FlowError, Sent, Unsent};
+use verus_sdk::verus_keys::{Address, AddressKind};
 
 use crate::market::{Book, Pool, UNKNOWN};
 
@@ -70,8 +76,17 @@ pub struct Ready {
     pub from: String,
     pub to: String,
     pub amount: Amount,
-    /// The pool the conversion goes through.
+    /// The pool the conversion goes through, as the chain spells it.
     pub pool: String,
+    /// The same pool by i-address.
+    ///
+    /// Both, because the two are asked for by different halves: the node is
+    /// told the name — that is what turns up in its log — and the transaction
+    /// is built from the id, which is what a `ConversionKind` is made of. See
+    /// [`kind_for`], which is the one place the difference between the three
+    /// kinds of conversion is decided, and decides it by comparing this
+    /// against the two legs.
+    pub pool_id: String,
     /// What `estimateconversion` should be told to route through, or `None`
     /// when one side **is** the pool and there is nothing to route via.
     pub via: Option<String>,
@@ -138,6 +153,7 @@ pub fn check(
         to: draft.to.clone(),
         amount,
         pool: pool.name.clone(),
+        pool_id: pool.id.clone(),
         via: routed_via(pool, &draft.from, &draft.to),
         mid: pool.price(&draft.from, &draft.to),
     })
@@ -204,13 +220,7 @@ pub fn quote(
     let mid_out = ready.mid.map(|mid| mid * paid);
     let drop = slippage(estimated, mid_out);
 
-    // The floor. Not a protocol bound — see the module docs — so it is set from
-    // the estimate itself rather than from a preference nobody has been asked
-    // for: what the node expects, less the room the loud threshold allows.
-    let floor = estimated
-        .to_sat()
-        .saturating_mul(1000 - FLOOR_ROOM_PERMILLE)
-        / 1000;
+    let floor = floor(estimated).to_sat();
 
     ConvertQuoteVm {
         rate: if paid > 0.0 {
@@ -259,6 +269,27 @@ pub fn quote(
         },
         ready: true,
     }
+}
+
+/// The least a conversion is worth doing at, from what the node expects.
+///
+/// Not a protocol bound — see the module docs, and
+/// [`ConvertReviewVm::minimum_display`] — so it is derived from the estimate
+/// itself rather than from a preference nobody has been asked for: what the
+/// node expects, less the room the loud slippage threshold allows.
+///
+/// A function rather than an expression inside [`quote`] because two sides need
+/// the same number and must not compute it twice. The quote prints it, and the
+/// core hands it to [`prepare`] as the floor that gets checked before signing —
+/// so a second copy of this arithmetic would be a floor somebody was shown and
+/// a different floor that was enforced.
+pub fn floor(estimated: Amount) -> Amount {
+    Amount::from_sat(
+        estimated
+            .to_sat()
+            .saturating_mul(1000 - FLOOR_ROOM_PERMILLE)
+            / 1000,
+    )
 }
 
 /// A quote that says only why it is not one.
@@ -318,6 +349,360 @@ fn name_of(names: &BTreeMap<String, String>, address: &str) -> String {
         .unwrap_or_else(|| address.to_string())
 }
 
+
+// ── Signing ─────────────────────────────────────────────────────────────────
+
+/// The fee written into the reserve transfer, in the chain's own currency.
+///
+/// Not derived, and there is nothing here to derive it from. The SDK takes this
+/// as a parameter and computes nothing; `estimateconversion`'s `fee` is a
+/// different number — what the *pool* charges, denominated in the source
+/// currency, already on its own line in the quote.
+///
+/// 20 010 satoshis is the figure every conversion in the SDK uses, including
+/// `a_conversion_reaches_the_chain`, which builds against a live node and
+/// asserts the transaction confirmed. A fee VRSCTEST accepted is the only
+/// evidence available, and it is the whole reason for this value rather than a
+/// rounder one. Named here so the next person to touch it finds the provenance
+/// instead of a magic number.
+const TRANSFER_FEE_SATS: u64 = 20_010;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConvertError {
+    /// A conversion pays a bare key hash, always — see [`prepare`].
+    #[error("a conversion has to be delivered to an R-address")]
+    BadRecipient,
+    #[error("that is not a currency this wallet can name")]
+    BadCurrency,
+    /// The node's estimate had already fallen below the floor by the time this
+    /// was planned. Nothing was signed.
+    #[error("the node now expects {expected}, and {floor} was the least this was worth doing at")]
+    BelowFloor { expected: String, floor: String },
+    /// The wallet holds the token in outputs it cannot use for this.
+    #[error("this wallet cannot spend the {0} it holds in one conversion")]
+    UnusableTokens(String),
+    #[error(transparent)]
+    Vault(#[from] VaultError),
+    #[error(transparent)]
+    Flow(#[from] FlowError),
+    /// A read that failed on its own terms rather than inside a flow — asking
+    /// the chain which currency is its own, which is how the token side finds
+    /// out whether it has a token side at all.
+    #[error(transparent)]
+    Read(#[from] verus_sdk::network::RpcError),
+}
+
+/// A signed conversion that has not been sent, and what it is for.
+///
+/// **Never leaves the core**, for the reason [`crate::send::Prepared`] gives:
+/// the interface gets a view model and a ticket number, and an interface that
+/// held the signed hex would be one that could be made to send it.
+pub struct Prepared {
+    pub unsent: Unsent<Sent>,
+    /// The two currencies, by i-address and by name. Both, because the review
+    /// shows the name and the outputs decode to ids.
+    pub from: String,
+    pub to: String,
+    pub from_name: String,
+    pub to_name: String,
+    /// What goes in.
+    pub amount: Amount,
+    /// What the node expected out at the moment this was planned.
+    pub estimated: Amount,
+    /// The floor that was checked against it. See [`ConvertReviewVm::minimum_display`].
+    pub floor: Amount,
+    /// The basket routed through, spelled, or empty when the conversion is
+    /// direct.
+    pub via: String,
+}
+
+/// What the chain is being asked to do, worked out from the route.
+///
+/// The book already found the single pool that holds both sides — see
+/// [`Book::route`] — and which of the three conversions this is falls straight
+/// out of where that pool sits relative to the two legs:
+///
+/// * the pool **is** what is being bought → a reserve into its fractional;
+/// * the pool **is** what is being paid → a fractional back into a reserve;
+/// * otherwise → one reserve into another, through the pool.
+///
+/// [`ConversionKind::Preconvert`] is deliberately unreachable. It applies only
+/// to a currency that has not launched, and `Book::route` filters unstarted
+/// pools out before anything gets here — so this wallet cannot accidentally
+/// build one, which matters because the chain rejects a preconvert and an
+/// ordinary conversion at opposite sides of the same block height.
+///
+/// # Errors
+///
+/// [`ConvertError::BadCurrency`] for anything that is not an i-address. The
+/// legs come from the picker, which is built from the chain's own list, so this
+/// is a guard rather than an expected outcome.
+pub fn kind_for(pool_id: &str, from: &str, to: &str) -> Result<ConversionKind, ConvertError> {
+    let target = currency_id(to)?;
+    if pool_id == to {
+        Ok(ConversionKind::IntoFractional { fractional: target })
+    } else if pool_id == from {
+        Ok(ConversionKind::IntoReserve { reserve: target })
+    } else {
+        Ok(ConversionKind::ReserveToReserve {
+            via: currency_id(pool_id)?,
+            target,
+        })
+    }
+}
+
+/// An i-address as the twenty bytes a transaction is built from.
+fn currency_id(address: &str) -> Result<CurrencyId, ConvertError> {
+    let parsed: Address = address.parse().map_err(|_| ConvertError::BadCurrency)?;
+    Ok(CurrencyId::from_bytes(parsed.hash()))
+}
+
+/// Plan a conversion, then build and sign it. **Blocking.**
+///
+/// Two steps rather than one, and the order is the safety property.
+/// `plan_conversion` takes a [`ChainReader`](verus_sdk::network::ChainReader)
+/// and no `Broadcaster`, so it is *incapable* of sending — and it is where
+/// every refusal that does not need a key happens: an unroutable pair, a
+/// destination that is not an R-address, an estimate that has already fallen
+/// through the floor. All of that is settled before the vault is opened, so a
+/// conversion that cannot be made never causes a key to exist in memory at all.
+///
+/// Only then does `prepare_conversion` sign, inside `with_key` — the build, the
+/// signature and the key's drop all happen in that closure, and there is no
+/// accessor in this workspace that returns one.
+///
+/// # Why the recipient is checked here as well as in the SDK
+///
+/// Because the SDK's check is the last line of defence and this is the first.
+/// `build_conversion` writes the destination as a **key hash, unconditionally**,
+/// so an identity address does not pay that identity — it pays the R-form of
+/// the same twenty bytes, which nobody holds a key for, and the value is gone.
+/// This wallet always converts to its own active address, so the case should be
+/// impossible; a guard that costs one comparison is worth having on the path
+/// where "should be impossible" and "money is gone" are the same sentence.
+///
+/// # Errors
+///
+/// Everything the node refuses, plus the four above. Nothing partial: either a
+/// signed transaction comes back or nothing was built.
+pub fn prepare(
+    chain: &Chain,
+    vault: &Vault,
+    label: &str,
+    ready: &Ready,
+    names: &BTreeMap<String, String>,
+    recipient: &str,
+    floor: Amount,
+) -> Result<Prepared, ConvertError> {
+    let kind = kind_for(&ready.pool_id, &ready.from, &ready.to)?;
+
+    let refund: Address = recipient.parse().map_err(|_| ConvertError::BadRecipient)?;
+    if refund.kind() != AddressKind::PubKeyHash {
+        return Err(ConvertError::BadRecipient);
+    }
+
+    let fee = Amount::from_sat(TRANSFER_FEE_SATS);
+
+    // Priced again here, rather than reusing the quote the form is showing.
+    //
+    // The quote is as old as the last keystroke, and the floor is checked once
+    // — here — and never again by anything. A review built on a minute-old
+    // number would be showing a floor that was tested against a price nobody
+    // has looked at since.
+    let plan = network::plan_conversion(
+        chain,
+        &ready.from,
+        ready.amount,
+        kind.clone(),
+        recipient,
+        refund,
+        fee,
+        Some(floor),
+    )?;
+    if !plan.acceptable() {
+        return Err(ConvertError::BelowFloor {
+            expected: crate::portfolio::coins(plan.estimated_out),
+            floor: crate::portfolio::coins(floor),
+        });
+    }
+
+    let token_funding = token_inputs(chain, recipient, &ready.from)?;
+
+    let unsent = vault.with_key(label, |key| {
+        network::prepare_conversion(
+            chain,
+            key,
+            &ready.from,
+            ready.amount,
+            kind,
+            recipient,
+            fee,
+            Some(floor),
+            &token_funding,
+        )
+    })??;
+
+    Ok(Prepared {
+        unsent,
+        from: ready.from.clone(),
+        to: ready.to.clone(),
+        from_name: name_of(names, &ready.from),
+        to_name: name_of(names, &ready.to),
+        amount: ready.amount,
+        estimated: plan.estimated_out,
+        floor,
+        via: ready.via.clone().unwrap_or_default(),
+    })
+}
+
+/// The token-bearing outputs a conversion of `source` has to spend.
+///
+/// Empty when the source is the chain's own currency, which is not a shortcut:
+/// the builder **refuses** token inputs on a native conversion, because a
+/// native conversion's value travels in the output's satoshis and a token input
+/// there would be value it could not account for.
+///
+/// # Why every matching output goes in, and why they are filtered so narrowly
+///
+/// Every token input is spent whole and the surplus comes back as change, so
+/// including more than the conversion needs costs nothing — while leaving one
+/// out that the builder then has to balance against is how a token gets
+/// destroyed. So: all of them, of exactly this currency.
+///
+/// "Exactly" is the builder's rule, not a preference. A reserve output may
+/// carry several currencies at once, and it refuses one that does — the others
+/// would have no change output and would simply cease to exist. Such an output
+/// is filtered out here rather than sent down to be refused, so the wallet can
+/// say *which* holding it cannot spend instead of failing with a builder error
+/// about balances.
+fn token_inputs(chain: &Chain, address: &str, source: &str) -> Result<Vec<Utxo>, ConvertError> {
+    use verus_sdk::decode::{decode_output_script, OutputKind};
+    use verus_sdk::network::ChainReader;
+
+    let chain_currency = chain.chain_info()?.chain_id;
+    if source == chain_currency {
+        return Ok(Vec::new());
+    }
+
+    let wanted = currency_id(source)?;
+    let funding = network::spendable(chain, address)?;
+
+    let mut usable = Vec::new();
+    let mut unusable = false;
+    for found in &funding.other {
+        // Anything that is not a reserve output — an identity, a commitment,
+        // something this build does not decode — is not this conversion's
+        // business and is left alone.
+        if let Ok(OutputKind::ReserveOutput { tokens, .. }) =
+            decode_output_script(&found.utxo.script_pubkey)
+        {
+            if tokens.len() == 1 && tokens[0].0 == wanted {
+                usable.push(found.utxo.clone());
+            } else if tokens.iter().any(|(id, _)| *id == wanted) {
+                // Holds what is being converted and something else too.
+                // Nameable, and worth naming: the wallet's balance says it has
+                // the currency and the conversion is about to say it cannot
+                // spend it, and those two look like a contradiction unless
+                // somebody says why.
+                unusable = true;
+            }
+        }
+    }
+
+    if usable.is_empty() && unusable {
+        return Err(ConvertError::UnusableTokens(source.to_string()));
+    }
+    Ok(usable)
+}
+
+/// Read the signed conversion back out, and build the review from it.
+///
+/// Everything below that *can* come from the bytes does — see
+/// [`ConvertReviewVm`]. On this screen that is not a nicety: a conversion's
+/// entire meaning lives inside one CryptoCondition payload, so which currency,
+/// how much, which basket it routes through and where the result lands are
+/// invisible to anybody reading the transaction by eye, and a review that
+/// echoed the form could not show any of the four being wrong.
+pub fn review(
+    ticket: u64,
+    prepared: &Prepared,
+    from_address: &str,
+    spendable: Amount,
+) -> pecu_protocol::ConvertReviewVm {
+    let outputs = crate::send::decode_outputs(&prepared.unsent.hex, from_address);
+    let sent = &prepared.unsent.outcome;
+
+    let transfer = crate::send::conversion_in(&prepared.unsent.hex);
+
+    // The transfer fee as it was actually written, not as it was asked for.
+    // These are the same number unless something has gone wrong, which is the
+    // entire reason for reading it back rather than printing the constant.
+    let written_fee = transfer
+        .as_ref()
+        .map_or(TRANSFER_FEE_SATS, |found| found.fee_sats);
+
+    // What actually leaves in the chain's own currency. A token conversion's
+    // amount travels inside the payload and is not native at all, so folding it
+    // in here would overstate the outlay by the whole amount — and understate
+    // the balance left behind by the same.
+    let native_out = transfer
+        .as_ref()
+        .map_or(prepared.amount.to_sat(), |found| found.native_sats)
+        .saturating_add(sent.fee.to_sat());
+
+    pecu_protocol::ConvertReviewVm {
+        ticket,
+        outputs,
+        from: prepared.from_name.clone(),
+        to: prepared.to_name.clone(),
+        via: prepared.via.clone(),
+        pay_display: format!(
+            "{} {}",
+            format::coins_u64(
+                transfer
+                    .as_ref()
+                    .map_or(prepared.amount.to_sat(), |found| found.amount_sats)
+            ),
+            prepared.from_name
+        ),
+        estimate_display: format!(
+            "{} {}",
+            format::coins_u64(prepared.estimated.to_sat()),
+            prepared.to_name
+        ),
+        minimum_display: format!(
+            "{} {}",
+            format::coins_u64(prepared.floor.to_sat()),
+            prepared.to_name
+        ),
+        conversion_fee_display: format::coins_u64(written_fee),
+        network_fee_display: format::coins_u64(sent.fee.to_sat()),
+        total_display: format::coins_u64(native_out),
+        balance_after_display: format::coins_u64(
+            spendable.to_sat().saturating_sub(native_out),
+        ),
+        from_address: from_address.to_string(),
+        recipient: transfer
+            .as_ref()
+            .and_then(|found| found.recipient.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// Hand the bytes to a node. **Blocking, and not cancellable.**
+///
+/// Takes a [`SpendPermit`] because [`Chain::broadcaster`] does, which is the
+/// whole of the spending guard — see [`crate::send::broadcast`], which this is
+/// the twin of. Abandoning it mid-flight would manufacture exactly the
+/// ambiguity `BroadcastUncertain` exists to report.
+pub fn broadcast(
+    chain: &Chain,
+    permit: &SpendPermit,
+    prepared: Prepared,
+) -> Result<Sent, FlowError> {
+    prepared.unsent.broadcast(&chain.broadcaster(permit))
+}
+
 #[cfg(test)]
 #[allow(clippy::unreadable_literal)]
 mod tests {
@@ -355,6 +740,7 @@ mod tests {
             to: DAI.to_string(),
             amount: Amount::from_sat(pay * 100_000_000),
             pool: "Bridge.vETH".to_string(),
+            pool_id: BRIDGE.to_string(),
             via: Some("Bridge.vETH".to_string()),
             mid: Some(MID),
         }
@@ -544,6 +930,41 @@ mod tests {
         // form that scolds before anybody has done anything is a form nobody
         // reads the second message on.
         assert_eq!(refuse(draft(VRSCTEST, DAI, "")).as_str(), "");
+    }
+
+    /// The floor printed on the quote is the floor that gets checked.
+    ///
+    /// Two sides need this number — the panel prints it and `prepare` hands it
+    /// to the builder as `min_expected` — and if they ever computed it
+    /// separately, somebody would be shown one figure and have a different one
+    /// enforced. That is not a rounding bug; it is the wallet lying about the
+    /// only commitment on the screen.
+    #[test]
+    fn the_floor_on_the_quote_is_the_floor_that_is_checked() {
+        let estimated = Amount::from_sat(13_352_458_143);
+        let quote = quote(
+            &ready(250),
+            &names(),
+            &holdings(415),
+            estimated,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            quote.minimum,
+            format!("{} DAI.vETH", format::coins_u64(floor(estimated).to_sat())),
+        );
+    }
+
+    /// Three per cent under, and never above the estimate.
+    #[test]
+    fn the_floor_sits_below_what_the_node_expects() {
+        let estimated = Amount::from_sat(100_000_000);
+        assert_eq!(floor(estimated).to_sat(), 97_000_000);
+        // Zero in, zero out, and no panic on the way: an estimate of nothing is
+        // a real answer from a pool with nothing in it.
+        assert_eq!(floor(Amount::ZERO).to_sat(), 0);
     }
 
     /// `via` names the basket to route through — and must not be sent when one
