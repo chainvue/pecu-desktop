@@ -69,6 +69,23 @@ pub fn spoken(identifier: &str) -> String {
         .join(" ")
 }
 
+/// How to spell the command palette's shortcut on this platform.
+///
+/// Slint's winit backend swaps the two modifiers on Apple platforms — Command
+/// arrives as `control` — so the *handler* is the same on every platform and
+/// only the label differs. A hint that says ⌘ on Windows is worse than none.
+///
+/// The whole string rather than a modifier with a `K` glued on in a binding:
+/// macOS writes `⌘K` and everything else writes `Ctrl+K`, and the join is part
+/// of the difference.
+pub const fn search_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2318}K"
+    } else {
+        "Ctrl+K"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

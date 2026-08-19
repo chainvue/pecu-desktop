@@ -119,6 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     ui.global::<AppInfo>()
         .set_sdk_rev(pecu_protocol::SDK_REV[..8].into());
+    ui.global::<AppInfo>()
+        .set_search_shortcut(pecu_ui::search_shortcut().into());
     ui.global::<NetworkState>()
         .set_mock_mode(cfg!(feature = "mock"));
 

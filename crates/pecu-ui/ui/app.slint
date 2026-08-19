@@ -211,6 +211,19 @@ export component AppWindow inherits Window {
         Actions.navigate(screen);
     }
 
+    // Open the command palette, empty.
+    //
+    // A function rather than three statements written twice: ⌘K and the field
+    // in the title bar are the same action, and the day one of them learns to
+    // do something the other does not is the day they are two features that
+    // look like one. Empty every time — a palette that reopens holding the last
+    // search is answering a question from a minute ago.
+    public function open-search() {
+        SearchState.query = "";
+        SearchState.search("");
+        SearchState.open = true;
+    }
+
     // Keyboard shortcuts, and the switch that turns focus rings on.
     //
     // # Why this ENCLOSES the interface rather than sitting beside it
@@ -344,12 +357,9 @@ export component AppWindow inherits Window {
                 // produces a lower-case `l`.
                 if (event.text == "l") { Actions.lock(); return EventResult.accept; }
                 if (event.text == "r") { Actions.refresh(); return EventResult.accept; }
-                // ⌘K. Opens empty every time — a palette that reopens holding
-                // the last search is answering a question from a minute ago.
+                // ⌘K, and the field in the title bar, are one action.
                 if (event.text == "k") {
-                    SearchState.query = "";
-                    SearchState.search("");
-                    SearchState.open = true;
+                    root.open-search();
                     return EventResult.accept;
                 }
             }
@@ -466,9 +476,14 @@ export component AppWindow inherits Window {
                     mock-mode: NetworkState.mock-mode;
                     busy: WalletState.busy;
                     can-refresh: true;
+                    // The palette searches what this wallet holds, so there is
+                    // nothing to offer until one is open. Same condition the
+                    // palette itself is gated on, in `app.slint` below.
+                    can-search: WalletState.exists && !WalletState.locked;
                     toggle-theme => { Actions.toggle-theme(); }
                     lock => { Actions.lock(); }
                     refresh => { Actions.refresh(); }
+                    search => { root.open-search(); }
                 }
 
                 Rectangle {

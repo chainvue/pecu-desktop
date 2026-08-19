@@ -2136,6 +2136,13 @@ fn nodes(ui: &AppWindow) {
     // and the shipped app — exactly what these images are supposed to catch.
     ui.global::<AppInfo>()
         .set_sdk_rev(pecu_protocol::SDK_REV[..8].into());
+    // Pinned, **not** `crate::search_shortcut()`.
+    //
+    // That function is `cfg!(target_os = ...)`, so using it here would make the
+    // reference images say `⌘K` on a Mac and `Ctrl+K` on Linux CI — an image
+    // that depends on who rendered it is not a reference. The same rule the
+    // renderer applies to the language, for the same reason.
+    ui.global::<AppInfo>().set_search_shortcut("⌘K".into());
 
     let nodes = vec![
         node(0, "VRSCTEST (public)", "https://api.verustest.net", true),

@@ -804,6 +804,14 @@ export global ToastState {
 
 export global AppInfo {
     in property <string> sdk-rev: "unknown";
+    // How to spell the palette's shortcut on this machine: `⌘K` on macOS,
+    // `Ctrl+K` everywhere else.
+    //
+    // Set from Rust rather than chosen in a binding, because the interface has
+    // no way to ask what it is running on — and a hint that says ⌘ on Windows
+    // is worse than no hint. The whole string rather than a modifier to glue a
+    // K onto: the two platforms do not join it the same way.
+    in property <string> search-shortcut: "Ctrl+K";
     // Where the log files are. On screen because a wallet started from the
     // Finder has no terminal, so this is the only way anybody finds them.
     in property <string> log-path: "";

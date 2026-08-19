@@ -3,6 +3,7 @@ import { StatusPill } from "base.slint";
 import { Icon } from "icons.slint";
 import { Wordmark } from "brand.slint";
 import { NavItem } from "../vm/structs.slint";
+import { AppInfo } from "../vm/state.slint";
 
 // The left rail.
 //
@@ -200,8 +201,15 @@ export component TitleBar inherits Rectangle {
     callback toggle-theme();
     callback lock();
     callback refresh();
+    // Open the command palette. The same thing ⌘K does, and it goes through
+    // the same function — see `AppWindow::open-search`.
+    callback search();
     in property <bool> busy: false;
     in property <bool> can-refresh: false;
+    // Whether there is a wallet open to search. Hidden rather than disabled
+    // while there is not: an empty search box on the onboarding screen is an
+    // offer to look through a wallet that does not exist yet.
+    in property <bool> can-search: false;
 
     height: 52px;
     background: Theme.bg-base;
@@ -223,8 +231,78 @@ export component TitleBar inherits Rectangle {
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
             vertical-alignment: center;
-            horizontal-stretch: 1;
+            // No stretch: the spacer is after the search box now, so the two
+            // sit together on the left the way the design has them rather than
+            // at opposite ends of the bar.
         }
+
+        // The palette, made visible.
+        //
+        // Every screen in the design package carries a search field across the
+        // top, and this build had the palette on ⌘K and **nothing on screen
+        // that said so**. A shortcut nobody can see is a feature nobody has.
+        //
+        // A button rather than a field, and deliberately: what it opens *is* a
+        // field, focused, over a dimmed window. Two places to type the same
+        // query — one of them behind the other — is a worse arrangement than
+        // one, and the second would have to forward every keystroke to the
+        // first anyway.
+        if root.can-search: Rectangle {
+            width: 260px;
+            height: 30px;
+            y: (parent.height - self.height) / 2;
+            border-radius: R.md;
+            background: searchtouch.has-hover ? Theme.bg-hover : Theme.bg-inset;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+            HorizontalLayout {
+                padding-left: Sp.s4;
+                padding-right: Sp.s3;
+                spacing: Sp.s3;
+
+                Icon {
+                    name: "search";
+                    size: 14px;
+                    y: (parent.height - self.height) / 2;
+                    tone: Theme.text-tertiary;
+                }
+
+                Text {
+                    // The same two things `Core::search` actually answers for.
+                    // The design's placeholder names three and one of them is a
+                    // transaction id, which nothing searches — a placeholder
+                    // that promises more than the box does is a bug with a
+                    // friendly face.
+                    text: @tr("Search · address, currency");
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: AppInfo.search-shortcut;
+                    font-family: Typo.mono;
+                    font-size: Typo.micro;
+                    color: Theme.text-disabled;
+                    vertical-alignment: center;
+                }
+            }
+
+            searchtouch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.search(); }
+            }
+
+            accessible-role: button;
+            accessible-label: @tr("Search this wallet");
+            accessible-action-default => { root.search(); }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
 
         // Mock mode says so loudly and permanently. A demo build that looks
         // like the real thing is how someone eventually trusts a fake balance.
