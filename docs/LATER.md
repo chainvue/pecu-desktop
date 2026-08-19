@@ -18,9 +18,15 @@ registered on VRSCTEST for real.
 Two things it did **not** finish, recorded here rather than in a summary that
 scrolls away:
 
-- **Only registration has been done against a real chain.** Locking,
-  unlocking, revoking and recovering are covered by the scripted chain and by
-  unit tests over their wording and their gating, and by nothing else. Each
+- **Sending and registration have been done against a real chain; the identity
+  operations have not.** A payment of 5 VRSCTEST to `dude.VRSCTEST@` was made
+  from the interface on 2026-08-20 and confirmed at block 1197422, txid
+  `68320bb5eb723ca3ab3f92d26133b4309d03c59e9ce3e93dba85d68379e98883` — the
+  review screen showed exactly the two outputs the chain then recorded.
+  `tests/live_send.rs` repeats that path on demand with a funded key.
+
+  Locking, unlocking, revoking and recovering are covered by the scripted chain
+  and by unit tests over their wording and their gating, and by nothing else. Each
   changes an identity in a way a test double cannot vouch for. Revocation in
   particular deserves a run on an identity registered *with a separate recovery
   authority*, since one registered without cannot be revoked at all — which is
