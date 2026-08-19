@@ -191,3 +191,70 @@ The package asks for exactly the thing that would solve this — "16/24px: nur @
 ohne Cursor (Pixel-Hinting)" — and does not deliver it. Hand-hinted pixel art
 for 16 and 24, drawn to the grid rather than scaled onto it, is a designer's
 task. It matters for the Finder list, the window proxy icon and the ⌘-Tab strip.
+
+---
+
+## Where the built screens stand against the drawings
+
+Added after a pass comparing each rendered screen against the drawing it came
+from, so the next person asking "does this look like the design yet" reads an
+answer rather than repeating the comparison.
+
+The package covers five screens. Four of them exist in this build — Messenger
+does not and cannot; see the Chat entry above.
+
+**D1 · Dashboard — matches, and gained the one thing it was missing.** Total
+balance with the day's change, the three actions, and the Assets / Markets /
+Recent-activity columns are the drawing's layout. The balance chart is an
+addition, standing where the drawing puts two tiles that no node can answer:
+`24h volume` has no RPC source at all, and `Pooled (total)` is the same
+question one currency at a time, which the markets screen already answers per
+row as `Exit @2%`.
+
+The gap that was real: **the search field**. Every drawing carries one across
+the top and this build had ⌘K with nothing on screen to say so. Now in the
+title bar, on every screen, naming what it actually searches.
+
+Not copied, and why: the drawing's asset rows carry a fiat value and a change
+percentage per asset. There is no fiat source in this wallet — the prices it
+has are in whatever currency the markets book is quoted in — and the drawing's
+own asset list is fictional (it shows native BTC and ETH balances, which do not
+exist on Verus).
+
+**D3 · Markets + detail — matches.** Name / Price / change / `Exit @2%`, the
+detail beside it with its stats, its venues and its route, and the drawing's own
+sentence — "— means unknown, not zero" — as the footnote. The change column is
+`30d` rather than `24h` because sampling daily and labelling it 24h is a number
+that looks precise and is not; see `LATER.md` §8.
+
+**D5 · History + audit log — matches.** The four period tiles, the filter chips
+(All · Payments · Converts · Logins · Identity), day headings, per-row icons and
+the running confirmation count. The drawing's footnote promises a CSV export
+that does not exist; that is a feature request rather than a difference in
+appearance, and it is not in this build.
+
+**D2 · Send — matches in structure, and three of its parts cannot be built
+yet.** Contacts down the left (as "Paid before", from this wallet's own payment
+history rather than an address book somebody has to curate), the form in the
+middle, the summary on the right.
+
+- **No `MAX` button**, and this is a deliberate refusal rather than an
+  oversight. `MAX` means "spendable minus the fee", and the fee is not known
+  until the transaction is built — so a button that filled in the spendable
+  balance would produce a draft the builder rejects every time. Doing it
+  honestly means estimating a fee for a transaction that does not exist yet.
+  Worth doing; not worth shipping a button whose one job is to fail.
+- **No `≈ $410.40`.** Same missing fiat source as the dashboard.
+- **No encrypted note.** That is a shielded memo — `LATER.md` §2 — and every
+  part of it is unwritten.
+
+The drawing's "Recipient verified · has existed since 2025 · 34 shared
+transactions" exists in two pieces: the review's first-time-recipient warning,
+which is the half that matters, and the payment counts in the Paid-before list.
+
+**Everything else in this wallet is drawn in the package's language rather than
+from a drawing.** Settings, Network, Receive, Onboarding, the seed backup, the
+transaction sheet, the whole conversion review, and — while they are out of the
+rail — identities and the currency-launch flow. There is no drawing to hold
+those against, which is worth saying plainly: "make every screen look like the
+design" is not an executable instruction for nineteen of the twenty-four.
