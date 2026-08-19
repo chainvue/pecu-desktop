@@ -295,6 +295,25 @@ pub struct Quote {
     pub height: u32,
 }
 
+/// Every currency named anywhere in a set of converters — the baskets
+/// themselves and every reserve they hold.
+///
+/// Free, and taking the raw converters rather than a [`Book`], because it is
+/// needed **before** the book exists: the names have to be gathered while the
+/// node is still being asked things, and [`Book::currencies`] answers the same
+/// question one step too late. Parsing goes through [`Pool::from_converter`] so
+/// there is one reader of that reply and not two.
+pub fn currencies_in(converters: &[CurrencyConverter]) -> std::collections::BTreeSet<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for pool in converters.iter().filter_map(Pool::from_converter) {
+        seen.insert(pool.id);
+        for reserve in pool.reserves {
+            seen.insert(reserve.id);
+        }
+    }
+    seen
+}
+
 /// Every pool the wallet knows about, and what it can price against what.
 #[derive(Clone, Debug, Default)]
 pub struct Book {

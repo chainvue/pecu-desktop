@@ -812,6 +812,10 @@ enum Work {
                     // direct ones still work, so the failure looks like a few
                     // currencies being unpriceable rather than like a bug.
                     String,
+                    // Names for the currencies `listcurrencies` does not
+                    // return — the bridged ones, which include the currency
+                    // every price here is quoted in. See `refresh_markets`.
+                    Vec<(String, String)>,
                 ),
                 String,
             >,
@@ -4013,7 +4017,42 @@ impl Core {
                         })
                         .collect();
 
-                    Ok((catalog, converters, histories, native))
+                    // The names `listcurrencies` cannot give.
+                    //
+                    // With no query it answers `systemtype: "local"` — every
+                    // currency launched *from this chain* — and a bridged one
+                    // was launched from the system it came across, so it is
+                    // simply not in the reply. On VRSCTEST that is 316 entries
+                    // that do not include DAI.vETH, which is the currency this
+                    // wallet quotes every price in. The effect was total: no
+                    // quote id, so no price on any row, no change column and no
+                    // chart, on a screen that looked merely empty rather than
+                    // broken.
+                    //
+                    // Asked one at a time because the SDK's `list_currencies`
+                    // takes no query and this workspace does not reach past it.
+                    // Bounded by what the book actually holds — eight of
+                    // forty-nine on VRSCTEST — and it happens once, when
+                    // somebody opens the screen, beside the twenty history
+                    // reads already above it.
+                    //
+                    // A lookup that fails is dropped rather than retried: the
+                    // currency keeps its i-address on screen, which is `name_of`
+                    // already doing the right thing with an unknown id.
+                    let known: std::collections::BTreeSet<&str> = catalog
+                        .iter()
+                        .map(|summary| summary.currency_id.as_str())
+                        .collect();
+                    let imported: Vec<(String, String)> = market::currencies_in(&converters)
+                        .into_iter()
+                        .filter(|id| !known.contains(id.as_str()))
+                        .filter_map(|id| {
+                            let name = chain.currency_definition(&id).ok()?.fully_qualified_name;
+                            Some((id, name))
+                        })
+                        .collect();
+
+                    Ok((catalog, converters, histories, native, imported))
                 })();
 
                 Work::Markets(Box::new(read))
@@ -4031,6 +4070,7 @@ impl Core {
                 Vec<verus_sdk::network::CurrencyConverter>,
                 Vec<(String, Vec<verus_sdk::network::CurrencyStateAt>)>,
                 String,
+                Vec<(String, String)>,
             ),
             String,
         >,
@@ -4038,7 +4078,7 @@ impl Core {
         self.markets = Markets::Asked;
         self.busy(TaskKind::RefreshingBalance, false);
 
-        let (catalog, converters, histories, native) = match read {
+        let (catalog, converters, histories, native, imported) = match read {
             Ok(read) => read,
             Err(error) => {
                 // The last book stays on screen. A market that could not be
@@ -4072,14 +4112,24 @@ impl Core {
                 )
             })
             .collect();
+        // The bridged ones, which `listcurrencies` never returned. See the
+        // closure above.
+        self.market_names.extend(imported);
 
         // The quote currency's i-address, found by the name it is known by.
         // Without it there is nothing to price against and the book is empty —
-        // which is the honest outcome on a chain that has no stablecoin.
-        let quote = catalog
+        // which is the honest outcome on a chain that has no stablecoin, and
+        // was the *dishonest* one on a chain that has a stablecoin the catalog
+        // does not list.
+        //
+        // From the merged map rather than from `catalog`, which is the whole
+        // point: on VRSCTEST the quote currency is bridged, so it is only ever
+        // in the half that had to be asked for by name.
+        let quote = self
+            .market_names
             .iter()
-            .find(|summary| summary.fully_qualified_name == Self::QUOTE)
-            .map(|summary| summary.currency_id.clone())
+            .find(|(_, name)| name.as_str() == Self::QUOTE)
+            .map(|(id, _)| id.clone())
             .unwrap_or_default();
         let mut pools: Vec<market::Pool> = converters
             .iter()
