@@ -1014,6 +1014,67 @@ pub struct ReviewOutputVm {
     pub is_change: bool,
 }
 
+/// A conversion, signed and not sent, as the review shows it.
+///
+/// Built the same way [`SendReviewVm`] is and for the same reason: by decoding
+/// the transaction that will actually be broadcast. On this screen that matters
+/// more rather than less, because a conversion's whole meaning is in a
+/// CryptoCondition payload nobody can read by eye — which currency, how much,
+/// which basket it routes through, and where the result lands are all *inside*
+/// the output, and a review that echoed the form could not show one of them
+/// wrong.
+///
+/// Two figures here are **not** from the bytes, because they cannot be:
+/// [`Self::estimate_display`] and [`Self::minimum_display`]. Neither exists in
+/// the protocol. See [`Self::minimum_display`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvertReviewVm {
+    pub ticket: u64,
+    /// Every output as decoded from the signed bytes, change included.
+    pub outputs: Vec<ReviewOutputVm>,
+    /// The currencies, named as the chain spells them.
+    pub from: String,
+    pub to: String,
+    /// The basket this routes through, or empty when it is direct. Read out of
+    /// the transfer's own `destCurrencyID`, not copied from the quote.
+    pub via: String,
+    /// What goes in, read out of the reserve transfer.
+    pub pay_display: String,
+    /// What the node expected to come out when this was planned, moments before
+    /// it was signed. **Advisory**, like every conversion figure: the chain
+    /// performs the conversion when it imports the output, at whatever the
+    /// ratios are then.
+    pub estimate_display: String,
+    /// The floor that was checked against that estimate before signing.
+    ///
+    /// **Checked once, there, and never again.** Nothing in the protocol
+    /// enforces it — if the price moves after this is broadcast, the conversion
+    /// still executes at whatever the ratios are. It is a record of intent, and
+    /// the review has to keep saying so rather than presenting it as a bound.
+    pub minimum_display: String,
+    /// The transfer fee written into the conversion itself, in the chain's own
+    /// currency. Read out of the payload.
+    pub conversion_fee_display: String,
+    /// What the miners are paid to carry the transaction. A different fee to
+    /// different people, and never folded into the one above.
+    pub network_fee_display: String,
+    /// What leaves the wallet in the chain's own currency: the amount plus both
+    /// fees when the source **is** the chain's currency, the fees alone when it
+    /// is a token — in which case the token side leaves through the payload and
+    /// is not native at all.
+    pub total_display: String,
+    pub balance_after_display: String,
+    pub from_address: String,
+    /// Where the converted value is delivered, decoded from the transfer.
+    ///
+    /// Always this wallet's own address today, and shown anyway: it is written
+    /// as a bare key hash by the builder, so an identity address here would pay
+    /// the R-form of the same twenty bytes, which nobody holds a key for. A
+    /// destination somebody can read is the only defence against that class of
+    /// mistake.
+    pub recipient: String,
+}
+
 /// `Serialize` only — it carries a [`UiError`], whose `code` is a
 /// `&'static str`. See [`crate::error::UiError`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

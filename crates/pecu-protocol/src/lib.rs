@@ -56,7 +56,15 @@ pub use secret::Secret;
 /// `rust-version = 1.95` against a machine that has exactly 1.95.0, so which
 /// revision is in the build is a fact worth being able to read off a screen
 /// rather than out of a lock file.
-pub const SDK_REV: &str = "b849fb959ee70885327640dc796ba59932834a72";
+///
+/// Written by hand, and it had gone stale twice by the time anybody looked:
+/// the screen said `b849fb95` while the build was on `a08d652d`, which is
+/// worse than the screen not existing — somebody reading it to answer "which
+/// SDK is this" got a confident wrong answer. `the_sdk_revision_on_screen_is_
+/// the_one_in_the_build` reads the workspace manifest and holds the two
+/// together, so the next repin that forgets this line fails the test suite
+/// rather than shipping.
+pub const SDK_REV: &str = "a08d652ddb0837efafa2b5df251ca8d6c28206ae";
 
 /// Satoshis per coin. The SDK's `Amount` counts in satoshis; this is the same
 /// constant as `verus_sdk::money::SATS_PER_COIN`, restated here because this
@@ -78,3 +86,55 @@ pub const SATS_PER_COIN: i64 = 100_000_000;
 /// **The check still happens in the core**, comparing against this constant. A
 /// second interface that ignored the prompt entirely would still be refused.
 pub const REVOKE_CONFIRMATION: &str = "revoke";
+
+#[cfg(test)]
+mod sdk_rev_tests {
+    /// The revision on the About screen must be the revision in the build.
+    ///
+    /// [`super::SDK_REV`] is a hand-written string and had drifted twice before
+    /// anything checked it. There is no way to read a git dependency's `rev`
+    /// from inside the compiled crate, so this reads the workspace manifest —
+    /// the same file Cargo resolved the dependency from — and compares.
+    ///
+    /// Every `verus-*` line is checked rather than the first: three crates are
+    /// pinned separately and a repin that moved two of them would otherwise
+    /// pass on the strength of the one it did move.
+    #[test]
+    fn the_sdk_revision_on_screen_is_the_one_in_the_build() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Cargo.toml")
+            .canonicalize()
+            .expect("the workspace manifest sits two levels above this crate");
+        let text = std::fs::read_to_string(&manifest).expect("read the workspace manifest");
+
+        let pins: Vec<(&str, &str)> = text
+            .lines()
+            .filter(|line| line.starts_with("verus-") && line.contains("rev = \""))
+            .map(|line| {
+                let name = line.split_whitespace().next().unwrap_or(line);
+                let rev = line
+                    .split_once("rev = \"")
+                    .and_then(|(_, rest)| rest.split_once('"'))
+                    .map(|(rev, _)| rev)
+                    .expect("a rev = \"…\" this line was selected for");
+                (name, rev)
+            })
+            .collect();
+
+        assert!(
+            !pins.is_empty(),
+            "no git-pinned verus crate found in {}: this test has stopped \
+             checking anything",
+            manifest.display()
+        );
+
+        for (name, rev) in pins {
+            assert_eq!(
+                rev,
+                super::SDK_REV,
+                "{name} is pinned to {rev} but the About screen says {}",
+                super::SDK_REV
+            );
+        }
+    }
+}
