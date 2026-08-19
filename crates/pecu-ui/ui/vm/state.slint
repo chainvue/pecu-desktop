@@ -187,6 +187,10 @@ export global SendState {
 
     // The outcome.
     in property <string> txid: "";
+    // Where to look it up, or empty on a chain with no explorer this build
+    // knows about. Built in the core — which explorer is a fact about the
+    // chain, and the interface has no business knowing one.
+    in property <string> explorer: "";
     in-out property <Note> problem;
 }
 
@@ -693,6 +697,8 @@ export global ConvertState {
 
     // The outcome.
     in property <string> txid: "";
+    // Where to look it up. See `SendState.explorer`.
+    in property <string> explorer: "";
     // What went wrong, at whatever step it went wrong on. A named reason.
     in-out property <Note> problem;
 
@@ -823,6 +829,15 @@ export global AppInfo {
 // to see, at a glance, which calls carry secret material — and to notice
 // immediately when one is added.
 export global Actions {
+    // Open a link in the machine's browser.
+    //
+    // Rust's job, not the interface's: Slint cannot start a process, and every
+    // platform does it differently. The Rust side refuses anything that is not
+    // an `https://` URL built by this application, so a link is never something
+    // a reply from a node could talk the wallet into opening — see
+    // `open_in_browser`.
+    callback open-link(string);
+
     // ── The secret-bearing calls ──────────────────────────────────────────
     //
     // Five, and this comment is the record. Each clears its backing property

@@ -1082,11 +1082,22 @@ pub enum SendOutcomeVm {
     Sent {
         txid: String,
         fee_display: String,
+        /// Where to look this up, or empty on a chain with no explorer this
+        /// build knows about — see `pecu_chain::Network::explorer`.
+        ///
+        /// Built in the core because *which* explorer is a fact about the
+        /// chain, and the interface has no business knowing one. Empty rather
+        /// than `Option` because it crosses into `.slint`, where the empty
+        /// string is how absence is already spelled everywhere else.
+        explorer_url: String,
     },
     /// Broadcast failed in a way that is genuinely ambiguous.
     Uncertain {
         txid: String,
         pending_id: u64,
+        /// Carried here too, and it matters more: this is the state where
+        /// somebody most wants to go and look for themselves.
+        explorer_url: String,
     },
     Failed(UiError),
 }

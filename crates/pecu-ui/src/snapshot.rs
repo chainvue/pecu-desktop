@@ -227,6 +227,8 @@ pub const CASES: &[Case] = &[
         "send-review-identity",
         crate::fixtures::reviewing_identity,
     ),
+    ("send", "send-sent", crate::fixtures::sent),
+    ("send", "send-uncertain", crate::fixtures::send_uncertain),
     ("receive", "receive", crate::fixtures::receiving),
     ("settings", "settings", crate::fixtures::settings),
     ("settings", "keys", crate::fixtures::keys),

@@ -3,11 +3,11 @@
 import { ListView } from "std-widgets.slint";
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Btn, Card, Eyebrow, Money } from "../components/base.slint";
+import { Btn, Card, Eyebrow, Money, TxId } from "../components/base.slint";
 import { Icon } from "../components/icons.slint";
-import { ConvertState, MarketState } from "../vm/state.slint";
+import { Actions, ConvertState, MarketState } from "../vm/state.slint";
 import { Field, QuoteLine } from "../components/form.slint";
-import { NoteText, NoticeTitle } from "../components/note.slint";
+import { Notice, NoteText, NoticeTitle } from "../components/note.slint";
 
 // The glyph is `⊙`, and it was chosen by looking rather than by taste.
 //
@@ -412,26 +412,9 @@ export component ConvertScreen inherits VerticalLayout {
                         // and this one figure is not, and the difference is not
                         // something a person can be expected to infer from a
                         // layout.
-                        Rectangle {
-                            background: Theme.warning-soft;
-                            border-radius: R.md;
-                            VerticalLayout {
-                                padding: Sp.s5;
-                                spacing: Sp.s2;
-                                Text {
-                                    text: @tr("The price is not fixed here");
-                                    font-size: Typo.body;
-                                    font-weight: Typo.w-medium;
-                                    color: Theme.warning;
-                                    wrap: word-wrap;
-                                }
-                                Text {
-                                    text: @tr("The chain converts on import, at least a block from now, at the reserves as they are then. The protocol has no slippage bound: the floor below was checked once, just now, and nothing enforces it.");
-                                    font-size: Typo.caption;
-                                    color: Theme.text-secondary;
-                                    wrap: word-wrap;
-                                }
-                            }
+                        Notice {
+                            headline: @tr("The price is not fixed here");
+                            body: @tr("The chain converts on import, at least a block from now, at the reserves as they are then. The protocol has no slippage bound: the floor below was checked once, just now, and nothing enforces it.");
                         }
 
                         VerticalLayout {
@@ -505,7 +488,8 @@ export component ConvertScreen inherits VerticalLayout {
     if ConvertState.step == "sent" || ConvertState.step == "uncertain": HorizontalLayout {
         alignment: center;
         Card {
-            width: 520px;
+            // One line for the transaction id — see the send screen's twin.
+            width: 640px;
             VerticalLayout {
                 padding: Sp.s8;
                 spacing: Sp.s6;
@@ -537,28 +521,13 @@ export component ConvertScreen inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
-                VerticalLayout {
-                    spacing: Sp.s2;
-                    Eyebrow { text: @tr("TRANSACTION ID"); }
-                    convtxid := TextInput {
-                        text: ConvertState.txid;
-                        read-only: true;
-                        font-family: Typo.mono;
-                        font-size: Typo.num-sm;
-                        color: Theme.text-primary;
-                        wrap: char-wrap;
-                    }
+                TxId {
+                    txid: ConvertState.txid;
+                    explorer: ConvertState.explorer;
+                    open-link(url) => { Actions.open-link(url); }
                 }
 
                 HorizontalLayout {
-                    spacing: Sp.s4;
-                    Btn {
-                        text: @tr("Copy id");
-                        clicked => {
-                            convtxid.select-all();
-                            convtxid.copy();
-                        }
-                    }
                     Rectangle { horizontal-stretch: 1; }
                     Btn {
                         text: @tr("Done");

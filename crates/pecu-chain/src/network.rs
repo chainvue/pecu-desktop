@@ -126,8 +126,15 @@ impl Network {
     /// does not exist, or worse, to somebody else's chain.
     pub fn explorer(&self, txid: &str) -> Option<String> {
         match self {
+            // Chainvue's own, which is the explorer this project ships beside.
+            //
+            // **Testnet only for now.** The mainnet path under the same host is
+            // not confirmed, and a guessed one is worse than a different
+            // explorer that works: it sends somebody looking for their payment
+            // to a page that is not there. `explorer.verus.io` stays until the
+            // mainnet form is checked against the live site.
             Self::Mainnet => Some(format!("https://explorer.verus.io/tx/{txid}")),
-            Self::Testnet => Some(format!("https://testex.verus.io/tx/{txid}")),
+            Self::Testnet => Some(format!("https://markets.chainvue.io/testnet/tx/{txid}/")),
             Self::Other(_) => None,
         }
     }
@@ -170,7 +177,7 @@ mod tests {
         );
         assert_eq!(
             Network::Testnet.explorer(txid).as_deref(),
-            Some("https://testex.verus.io/tx/abc123"),
+            Some("https://markets.chainvue.io/testnet/tx/abc123/"),
         );
         // A guessed hostname sends someone to a page that does not exist, or
         // to somebody else's chain.

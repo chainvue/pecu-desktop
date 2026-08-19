@@ -124,7 +124,14 @@ export component ReceiveScreen inherits VerticalLayout {
                         ? Theme.warning-soft
                         : Theme.bg-inset;
                     border-radius: R.md;
-                    VerticalLayout {
+                    // Its own children's height, not the layout's guess at it.
+                    // A `Rectangle` in a `VerticalLayout` does not take its
+                    // height from a `VerticalLayout` inside it, so a sentence
+                    // that wraps to one more line than the parent expected
+                    // renders outside the tint — see `Notice`, which exists
+                    // because this was live on the send review.
+                    height: chainwarning.preferred-height;
+                    chainwarning := VerticalLayout {
                         padding: Sp.s4;
                         Text {
                             // One sentence with the chain in it, not a

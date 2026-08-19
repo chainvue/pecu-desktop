@@ -1,4 +1,4 @@
-import { Theme, Typo } from "../theme/theme.slint";
+import { Theme, Typo, R, Sp } from "../theme/theme.slint";
 import { Note } from "../vm/structs.slint";
 
 // The words for the reasons the core names.
@@ -614,4 +614,62 @@ export component NoticeBody inherits Text {
     height: self.text == "" ? 0px : self.preferred-height;
 
     // Styling is the caller's here too, for the same reason.
+}
+
+// A tinted box with a headline and a paragraph in it.
+//
+// # Why this is a component and not four lines at each call site
+//
+// Because those four lines were wrong at every one of them, in a way that only
+// shows up at some widths. A `Rectangle` in a `VerticalLayout` does not take
+// its height from a `VerticalLayout` inside it — so a paragraph that wraps to
+// one more line than the parent guessed renders **outside the tint**, on top of
+// whatever comes next.
+//
+// It was live on the send review: "…nothing can undo the payment." sat below
+// its own background and overlapped the PAID FROM heading, in the shipped
+// build and in the reference image, which is a reminder that a picture nobody
+// looks closely at is not a test.
+//
+// The fix is one line — `height: body.preferred-height` — and the reason it
+// belongs in a component is that there are a dozen of these boxes and the next
+// one written by hand would have the same bug.
+export component Notice inherits Rectangle {
+    in property <string> headline;
+    in property <string> body;
+    // "warning" · "negative" · "accent". Decides the tint and the headline's
+    // colour; the paragraph stays secondary text in all three, because it is
+    // the explanation rather than the alarm.
+    in property <string> tone: "warning";
+
+    background: root.tone == "negative" ? Theme.negative-soft
+        : root.tone == "accent" ? Theme.accent-soft
+        : Theme.warning-soft;
+    border-radius: R.md;
+    // The line this component exists for.
+    height: inner.preferred-height;
+
+    inner := VerticalLayout {
+        padding: Sp.s5;
+        spacing: Sp.s2;
+
+        Text {
+            text: root.headline;
+            font-size: Typo.body;
+            font-weight: Typo.w-medium;
+            color: root.tone == "negative" ? Theme.negative
+                : root.tone == "accent" ? Theme.accent
+                : Theme.warning;
+            wrap: word-wrap;
+        }
+
+        // Absent rather than empty when there is nothing to say: a blank Text
+        // still takes a row and the spacing around it.
+        if root.body != "": Text {
+            text: root.body;
+            font-size: Typo.caption;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+    }
 }

@@ -305,6 +305,7 @@ fn home_dir() -> PathBuf {
 fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_history(ui, dispatcher.clone());
     wire_search(ui, dispatcher.clone());
+    wire_links(ui);
     wire_markets(ui, dispatcher.clone());
     wire_convert(ui, dispatcher.clone());
     wire_wallet(ui, dispatcher.clone());
@@ -1406,6 +1407,17 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
     }
 }
 
+/// Opening a link in the browser.
+///
+/// Its own function rather than a block inside `wire_shell`, because it is the
+/// only callback in this application that starts a process and it goes nowhere
+/// near the core — where to look a transaction up is a fact about this machine
+/// and this chain, not about the wallet.
+fn wire_links(ui: &AppWindow) {
+    ui.global::<Actions>()
+        .on_open_link(move |url| open_in_browser(&url));
+}
+
 fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {
     let actions = ui.global::<Actions>();
 
@@ -1760,5 +1772,128 @@ mod tests {
         for platform in [Home::MacOs, Home::Windows, Home::Xdg] {
             assert_eq!(platform.resolve(env_of(&[])), None, "{platform:?}");
         }
+    }
+}
+
+/// Whether a link is one this application is willing to hand to the system.
+///
+/// Separate from [`open_in_browser`] so it can be tested without launching a
+/// browser on whoever runs the suite.
+///
+/// `https://` and an unreserved URL alphabet. Deliberately narrow: everything
+/// this wallet opens is a fixed host and path with a hex transaction id in it,
+/// so the rule costs nothing and refuses the shapes that matter — a `cmd`
+/// metacharacter on Windows, a `file://` or `javascript:` scheme anywhere.
+fn is_openable(url: &str) -> bool {
+    url.starts_with("https://")
+        && url.len() <= 512
+        && url
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-._~:/?#[]@!$'()*+,;=%".contains(c))
+}
+
+/// Hand a URL to whatever the machine opens links with.
+///
+/// # Why this is written out rather than pulled in
+///
+/// It is three lines per platform against a dependency, its transitive tree and
+/// its own supply chain — for something whose whole implementation is a process
+/// launch. The commands are the platform-documented ones and have not changed
+/// in a decade.
+///
+/// # Why it validates first
+///
+/// Nothing here goes through a shell — `Command::new` passes arguments as
+/// arguments — so there is no quoting to get wrong on macOS or Linux. Windows
+/// is the exception that makes this worth doing anyway: `cmd /C start` is
+/// parsed by `cmd`, and a URL containing `&` becomes a second command.
+///
+/// So the URL has to be one this application built: `https://`, and nothing
+/// outside an unreserved URL alphabet. Both explorer links are a fixed host and
+/// path with a hex txid in them, so they pass; anything a node could put in a
+/// reply does not. Refusing loudly beats opening something unexpected.
+fn open_in_browser(url: &str) {
+    if !is_openable(url) {
+        tracing::warn!(%url, "refused to open a link that this application did not build");
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = std::process::Command::new("cmd");
+        // The empty string is the window title `start` otherwise steals from
+        // the first quoted argument, which would be the URL.
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+
+    // Spawned and not waited on: a browser that is starting up takes seconds,
+    // and this is called from a UI callback.
+    match command.spawn() {
+        Ok(_) => tracing::info!(%url, "opened a link"),
+        Err(error) => tracing::warn!(%url, %error, "could not open a link"),
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::is_openable;
+
+    /// The two links this application actually builds.
+    #[test]
+    fn the_explorer_links_this_wallet_builds_are_allowed() {
+        let txid = "68320bb5eb723ca3ab3f92d26133b4309d03c59e9ce3e93dba85d68379e98883";
+        assert!(is_openable(&format!(
+            "https://markets.chainvue.io/testnet/tx/{txid}/"
+        )));
+        assert!(is_openable(&format!("https://explorer.verus.io/tx/{txid}")));
+    }
+
+    /// Anything that is not an `https` URL is refused, whatever it claims to be.
+    ///
+    /// `file://` and `javascript:` are the two that turn "open a link" into
+    /// something else entirely, and neither can ever be something this wallet
+    /// built.
+    #[test]
+    fn only_https_is_opened() {
+        assert!(!is_openable("http://example.com"));
+        assert!(!is_openable("file:///etc/passwd"));
+        assert!(!is_openable("javascript:alert(1)"));
+        assert!(!is_openable(""));
+        assert!(!is_openable("markets.chainvue.io/tx/abc"));
+    }
+
+    /// The Windows case, which is the reason this check exists at all.
+    ///
+    /// `cmd /C start` parses its argument, so a URL carrying `&` or a quote
+    /// would become a second command. Nothing here goes through a shell on the
+    /// other two platforms, and this makes the third one boring as well.
+    #[test]
+    fn a_link_carrying_shell_punctuation_is_refused() {
+        assert!(!is_openable("https://example.com/a&calc.exe"));
+        assert!(!is_openable("https://example.com/\"a\""));
+        assert!(!is_openable("https://example.com/a|b"));
+        assert!(!is_openable("https://example.com/a b"));
+        assert!(!is_openable("https://example.com/a^b"));
+        assert!(!is_openable("https://example.com/a>b"));
+    }
+
+    /// And a length nobody meant.
+    #[test]
+    fn an_absurd_link_is_refused() {
+        let long = format!("https://example.com/{}", "a".repeat(600));
+        assert!(!is_openable(&long));
     }
 }

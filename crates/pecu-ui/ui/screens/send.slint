@@ -2,10 +2,10 @@
 // transaction rather than from what was typed.
 
 import { R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Btn, Card, EmptyState, Eyebrow, ListRow, Money } from "../components/base.slint";
+import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, TxId } from "../components/base.slint";
 import { Actions, SendState, WalletState } from "../vm/state.slint";
 import { Field, KeyPicker, QuoteLine } from "../components/form.slint";
-import { NoteText, NoticeTitle } from "../components/note.slint";
+import { Notice, NoteText, NoticeTitle } from "../components/note.slint";
 
 export component SendForm inherits HorizontalLayout {
     spacing: Sp.s7;
@@ -287,30 +287,12 @@ export component SendScreen inherits VerticalLayout {
 
                 // Above the outputs, because it is about the one line down
                 // there that matters and somebody should read it first.
-                if SendState.first-time-recipient: Rectangle {
-                    background: Theme.warning-soft;
-                    border-radius: R.md;
-                    VerticalLayout {
-                        padding: Sp.s5;
-                        spacing: Sp.s2;
-                        Text {
-                            text: @tr("You have not paid this address before");
-                            font-size: Typo.body;
-                            font-weight: Typo.w-medium;
-                            color: Theme.warning;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            // The one thing a wallet can check that a checksum
-                            // cannot. A mistyped address that happens to be
-                            // valid looks exactly like a correct one, and coins
-                            // sent to it are gone.
-                            text: @tr("Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.");
-                            font-size: Typo.caption;
-                            color: Theme.text-secondary;
-                            wrap: word-wrap;
-                        }
-                    }
+                // The one thing a wallet can check that a checksum cannot. A
+                // mistyped address that happens to be valid looks exactly like
+                // a correct one, and coins sent to it are gone.
+                if SendState.first-time-recipient: Notice {
+                    headline: @tr("You have not paid this address before");
+                    body: @tr("Check it against where you got it from. A valid address that belongs to somebody else looks exactly like the right one, and nothing can undo the payment.");
                 }
 
                 // What was asked for, above what was built. A VerusID is a
@@ -497,7 +479,11 @@ export component SendScreen inherits VerticalLayout {
     if SendState.step == "sent" || SendState.step == "uncertain": HorizontalLayout {
         alignment: center;
         Card {
-            width: 520px;
+            // Wide enough that a 64-character transaction id sits on **one**
+            // line. A hash is read by comparing it against another one, and a
+            // hash split across two lines at an arbitrary character is a hash
+            // nobody can compare.
+            width: 640px;
             VerticalLayout {
                 padding: Sp.s8;
                 spacing: Sp.s6;
@@ -510,6 +496,17 @@ export component SendScreen inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
+                // Handed over, not confirmed. The distinction is the whole
+                // difference between this screen and Activity, and a headline
+                // reading "Payment sent" with nothing under it invites somebody
+                // to treat a mempool transaction as a settled one.
+                if SendState.step == "sent": Text {
+                    text: @tr("A node has taken it. It settles when a block includes it — Activity is where that shows up.");
+                    font-size: Typo.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
                 // The most important paragraph in the application. Someone who
                 // resends here can pay twice.
                 if SendState.step == "uncertain": Text {
@@ -519,28 +516,13 @@ export component SendScreen inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
-                VerticalLayout {
-                    spacing: Sp.s2;
-                    Eyebrow { text: @tr("TRANSACTION ID"); }
-                    txid := TextInput {
-                        text: SendState.txid;
-                        read-only: true;
-                        font-family: Typo.mono;
-                        font-size: Typo.num-sm;
-                        color: Theme.text-primary;
-                        wrap: char-wrap;
-                    }
+                TxId {
+                    txid: SendState.txid;
+                    explorer: SendState.explorer;
+                    open-link(url) => { Actions.open-link(url); }
                 }
 
                 HorizontalLayout {
-                    spacing: Sp.s4;
-                    Btn {
-                        text: @tr("Copy id");
-                        clicked => {
-                            txid.select-all();
-                            txid.copy();
-                        }
-                    }
                     Rectangle { horizontal-stretch: 1; }
                     Btn {
                         text: @tr("Done");

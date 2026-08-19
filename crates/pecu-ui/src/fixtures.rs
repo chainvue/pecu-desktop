@@ -160,7 +160,12 @@ pub fn converting_sent(ui: &AppWindow) {
 
     let state = ui.global::<ConvertState>();
     state.set_step("sent".into());
-    state.set_txid("6a3f9c1e2b7d4f8a0c5e1937b6d2f4a8c9e0173b5d8f2a4c6e91b3d7f5a8c0e2".into());
+    let txid = "6a3f9c1e2b7d4f8a0c5e1937b6d2f4a8c9e0173b5d8f2a4c6e91b3d7f5a8c0e2";
+    state.set_txid(txid.into());
+    // As the core builds it — see `pecu_chain::Network::explorer`. Spelled out
+    // rather than called, for the reason the shortcut hint is: a fixture that
+    // asks the environment renders differently on different machines.
+    state.set_explorer(format!("https://markets.chainvue.io/testnet/tx/{txid}/").into());
 }
 
 /// A leg that cannot be converted at all: the design's "empty reserve".
@@ -494,6 +499,11 @@ pub fn market_moving(ui: &AppWindow) {
 /// Seeded rather than searched: the hits are what the **core** returns, and no
 /// core is running behind a reference image. What this photographs is the
 /// panel — which is the half that can be got wrong by looking at it.
+/// The first payment this wallet made on a real chain: 5 VRSCTEST to
+/// `dude.VRSCTEST@`, accepted at block 1197422. Used wherever a fixture needs a
+/// transaction id that is not invented.
+const LANDED_TXID: &str = "68320bb5eb723ca3ab3f92d26133b4309d03c59e9ce3e93dba85d68379e98883";
+
 pub fn searching(ui: &AppWindow) {
     funded(ui);
 
@@ -863,6 +873,35 @@ pub fn reviewing(ui: &AppWindow) {
             is_change: true,
         },
     ]))));
+}
+
+/// The payment landed: the id, and the two things anybody does with one.
+///
+/// **This screen had no reference image at all**, which is how a transaction id
+/// that broke after 63 of its 64 characters — leaving one digit alone on a
+/// second line — shipped and stayed. A screen nobody photographs is a screen
+/// nobody looks at.
+///
+/// The txid is the real one from the first payment this wallet ever made on
+/// VRSCTEST, block 1197422, so the explorer link beside it is one that actually
+/// resolves.
+pub fn sent(ui: &AppWindow) {
+    funded(ui);
+    ui.set_screen("send".into());
+
+    let send = ui.global::<SendState>();
+    send.set_step("sent".into());
+    send.set_txid(LANDED_TXID.into());
+    send.set_explorer(format!("https://markets.chainvue.io/testnet/tx/{LANDED_TXID}/").into());
+}
+
+/// The broadcast whose outcome nobody knows.
+///
+/// The most important paragraph in the application is on this screen — somebody
+/// who resends here can pay twice — and it had never been rendered either.
+pub fn send_uncertain(ui: &AppWindow) {
+    sent(ui);
+    ui.global::<SendState>().set_step("uncertain".into());
 }
 
 /// The same review, for a payment addressed to a VerusID by name.

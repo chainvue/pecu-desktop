@@ -4483,9 +4483,11 @@ impl Core {
                 );
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
+                let explorer_url = self.explorer_for(&sent.txid);
                 let _ = self.events.send(Event::ConvertResult(SendOutcomeVm::Sent {
                     txid: sent.txid,
                     fee_display: portfolio::coins(sent.fee),
+                    explorer_url,
                 }));
                 self.refresh();
             }
@@ -4495,11 +4497,13 @@ impl Core {
             // rebuild, which would convert twice.
             Err(FlowError::BroadcastUncertain { txid, .. }) => {
                 tracing::warn!(%txid, "the outcome of a conversion broadcast is unknown");
+                let explorer_url = self.explorer_for(&txid);
                 let _ = self
                     .events
                     .send(Event::ConvertResult(SendOutcomeVm::Uncertain {
                         txid,
                         pending_id: record,
+                        explorer_url,
                     }));
             }
 
@@ -5632,6 +5636,20 @@ impl Core {
         }
     }
 
+    /// Where a transaction can be looked up, or empty when this chain has no
+    /// explorer this build knows about.
+    ///
+    /// One place, because both broadcast paths and both outcomes need it and a
+    /// second copy would be a second chance to send somebody to the wrong
+    /// chain's explorer.
+    fn explorer_for(&self, txid: &str) -> String {
+        self.nodes
+            .active()
+            .and_then(|node| node.network.as_ref())
+            .and_then(|network| network.explorer(txid))
+            .unwrap_or_default()
+    }
+
     /// Send. The one place in this application that writes to the chain.
     fn confirm_send(&mut self, ticket: u64) {
         let Some(prepared) = self.prepared.remove(&ticket) else {
@@ -5723,9 +5741,11 @@ impl Core {
                 self.remember_recipient(record);
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
+                let explorer_url = self.explorer_for(&sent.txid);
                 let _ = self.events.send(Event::SendResult(SendOutcomeVm::Sent {
                     txid: sent.txid,
                     fee_display: portfolio::coins(sent.fee),
+                    explorer_url,
                 }));
                 self.refresh();
             }
@@ -5735,11 +5755,13 @@ impl Core {
             // whether it confirmed — never to rebuild.
             Err(FlowError::BroadcastUncertain { txid, .. }) => {
                 tracing::warn!(%txid, "the broadcast outcome is unknown");
+                let explorer_url = self.explorer_for(&txid);
                 let _ = self
                     .events
                     .send(Event::SendResult(SendOutcomeVm::Uncertain {
                         txid,
                         pending_id: record,
+                        explorer_url,
                     }));
             }
 

@@ -971,14 +971,22 @@ fn apply_convert_review(ui: &AppWindow, vm: &pecu_protocol::ConvertReviewVm) {
 fn apply_convert_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
     let convert = ui.global::<pecu_ui::ConvertState>();
     match outcome {
-        SendOutcomeVm::Sent { txid, .. } => {
+        SendOutcomeVm::Sent {
+            txid, explorer_url, ..
+        } => {
             convert.set_txid(txid.into());
+            convert.set_explorer(explorer_url.into());
             convert.set_problem(pecu_ui::Note::default());
             convert.set_step("sent".into());
         }
-        SendOutcomeVm::Uncertain { txid, pending_id } => {
+        SendOutcomeVm::Uncertain {
+            txid,
+            pending_id,
+            explorer_url,
+        } => {
             tracing::warn!(%txid, pending_id, "conversion broadcast outcome unknown");
             convert.set_txid(txid.into());
+            convert.set_explorer(explorer_url.into());
             convert.set_step("uncertain".into());
         }
         SendOutcomeVm::Failed(error) => {
@@ -991,16 +999,24 @@ fn apply_convert_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
 fn apply_outcome(ui: &AppWindow, outcome: SendOutcomeVm) {
     let send = ui.global::<SendState>();
     match outcome {
-        SendOutcomeVm::Sent { txid, .. } => {
+        SendOutcomeVm::Sent {
+            txid, explorer_url, ..
+        } => {
             send.set_txid(txid.into());
+            send.set_explorer(explorer_url.into());
             send.set_problem(pecu_ui::Note::default());
             send.set_step("sent".into());
         }
         // Not an error, and not a success. The bytes are on disk and the
         // resolution is to ask the node — never to send again.
-        SendOutcomeVm::Uncertain { txid, pending_id } => {
+        SendOutcomeVm::Uncertain {
+            txid,
+            pending_id,
+            explorer_url,
+        } => {
             tracing::warn!(%txid, pending_id, "broadcast outcome unknown");
             send.set_txid(txid.into());
+            send.set_explorer(explorer_url.into());
             send.set_step("uncertain".into());
         }
         SendOutcomeVm::Failed(error) => {

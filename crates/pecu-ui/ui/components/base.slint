@@ -1,5 +1,6 @@
 import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
 import { NoteText } from "note.slint";
+import { Icon } from "icons.slint";
 import { Note } from "../vm/structs.slint";
 
 // A button.
@@ -572,6 +573,154 @@ export component ListRow inherits Rectangle {
     accessible-action-default => {
         if (root.interactive) {
             root.clicked();
+        }
+    }
+}
+
+// A transaction id, readable, with the two things anybody wants to do to one.
+//
+// # Why this is a component
+//
+// Because the send and convert screens both end here, with the same card and
+// the same two questions — "what is the id" and "where do I look at it" — and
+// the version written twice was wrong in the same way twice: a bare `TextInput`
+// stretched across the card, so a 64-character id broke after 63 and left a
+// single digit alone on the second line.
+//
+// The id is laid out in a monospace block at a width that fits **two even
+// halves of it**, which is how anybody actually reads a hash: in chunks, to
+// compare against another one. `Copy id` was already there and did work; it
+// simply did not look like the control it is.
+export component TxId inherits VerticalLayout {
+    in property <string> txid;
+    // Where to look it up, or empty on a chain with no explorer this build
+    // knows about — in which case no button is offered rather than a dead one.
+    in property <string> explorer;
+    callback open-link(string);
+
+    spacing: Sp.s3;
+
+    Eyebrow { text: @tr("TRANSACTION ID"); }
+
+    Rectangle {
+        background: Theme.bg-inset;
+        border-radius: R.md;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        // Its own content's height. See `Notice` for what happens without it.
+        height: idbody.preferred-height;
+
+        idbody := HorizontalLayout {
+            padding: Sp.s4;
+            spacing: Sp.s4;
+
+            field := TextInput {
+                text: root.txid;
+                read-only: true;
+                horizontal-stretch: 1;
+                font-family: Typo.mono;
+                font-size: Typo.num-sm;
+                color: Theme.text-primary;
+                // By character, because a hash has no words in it and
+                // word-wrap leaves the whole thing on one overflowing line.
+                wrap: char-wrap;
+            }
+
+            // A button that looks like one. It was a `Btn` labelled "Copy id"
+            // below the card, which reads as an afterthought next to the id it
+            // acts on.
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                y: 0;
+                border-radius: R.sm;
+                background: copytouch.has-hover ? Theme.bg-hover : transparent;
+                animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+                Icon {
+                    name: "copy";
+                    size: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tone: copied.running ? Theme.accent : Theme.text-secondary;
+                }
+
+                copytouch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        field.select-all();
+                        field.copy();
+                        // Said out loud, briefly. A copy that gives no sign it
+                        // happened gets pressed three times.
+                        copied.running = true;
+                    }
+                }
+
+                accessible-role: button;
+                accessible-label: @tr("Copy the transaction id");
+                accessible-action-default => {
+                    field.select-all();
+                    field.copy();
+                    copied.running = true;
+                }
+            }
+        }
+    }
+
+    copied := Timer {
+        interval: 1400ms;
+        running: false;
+        triggered => { self.running = false; }
+    }
+
+    HorizontalLayout {
+        spacing: Sp.s4;
+        alignment: start;
+
+        // Absent rather than disabled on a chain with no explorer: a control
+        // that cannot work is worse than one that is not offered.
+        //
+        // Accent-coloured at rest, not on hover. It is a link, and a link that
+        // only looks like one once the pointer is already on it has not helped
+        // anybody find it.
+        if root.explorer != "": HorizontalLayout {
+            spacing: Sp.s2;
+
+            Icon {
+                // Looking it up, not a market. `markets` is a trend arrow and
+                // reads as a price on a screen that has nothing to do with one.
+                name: "eye";
+                size: 13px;
+                y: (parent.height - self.height) / 2;
+                tone: Theme.accent;
+            }
+
+            Text {
+                text: @tr("Open in the block explorer");
+                font-size: Typo.caption;
+                font-weight: explorertouch.has-hover ? Typo.w-medium : Typo.w-regular;
+                color: Theme.accent;
+                vertical-alignment: center;
+            }
+
+            explorertouch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open-link(root.explorer); }
+            }
+
+            accessible-role: button;
+            accessible-label: @tr("Open this transaction in the block explorer");
+            accessible-action-default => { root.open-link(root.explorer); }
+        }
+
+        // Beside the link, never instead of it. Swapping one for the other made
+        // the link vanish for a second and a half every time somebody pressed
+        // copy, which reads as the button having broken something.
+        if copied.running: Text {
+            text: @tr("Copied");
+            font-size: Typo.caption;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
         }
     }
 }
