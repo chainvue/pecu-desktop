@@ -38,7 +38,8 @@ export component NavRail inherits Rectangle {
     VerticalLayout {
         padding: Sp.s4;
         padding-top: Sp.s6;
-        spacing: Sp.s1;
+        // No `spacing`: each nav row carries its own, so a collapsed one
+        // leaves no seam. See the `for` below.
 
         // The wordmark sits in the rail rather than in the title bar, which is
         // where the design puts it and where it stops competing with the screen
@@ -62,57 +63,72 @@ export component NavRail inherits Rectangle {
             }
         }
 
+        // A hidden entry collapses rather than being absent from the list.
+        //
+        // `root.items` is also what tells `app.slint` which screens exist, so
+        // it stays whole and the row takes no space instead.
+        //
+        // The gap between rows lives in the row, not in the layout's
+        // `spacing`. With `spacing`, two collapsed rows still contributed
+        // their two gaps and left a 4px seam above Settings that nothing had
+        // asked for. Carried by the row, a collapsed row costs nothing.
         for item[i] in root.items: Rectangle {
-            height: 40px;
-            border-radius: R.md;
-            background: root.active == item.id ? Theme.accent-soft
-                : (item.enabled && touch.has-hover) ? Theme.bg-hover
-                : transparent;
-            animate background { duration: Motion.fast; enabled: Motion.enabled; }
+            visible: !item.hidden;
+            height: item.hidden ? 0px : 40px + Sp.s1;
 
-            HorizontalLayout {
-                padding-left: Sp.s4;
-                padding-right: Sp.s4;
-                spacing: Sp.s4;
+            pill := Rectangle {
+                height: 40px;
+                y: 0;
+                border-radius: R.md;
+                background: root.active == item.id ? Theme.accent-soft
+                    : (item.enabled && touch.has-hover) ? Theme.bg-hover
+                    : transparent;
+                animate background { duration: Motion.fast; enabled: Motion.enabled; }
 
-                Icon {
-                    name: item.icon;
-                    size: 18px;
-                    y: (parent.height - self.height) / 2;
-                    tone: !item.enabled ? Theme.text-disabled
-                        : root.active == item.id ? Theme.accent
-                        : Theme.text-secondary;
-                }
+                HorizontalLayout {
+                    padding-left: Sp.s4;
+                    padding-right: Sp.s4;
+                    spacing: Sp.s4;
 
-                if root.expanded: Text {
-                    text: item.label;
-                    font-size: Typo.body;
-                    font-weight: root.active == item.id ? Typo.w-medium : Typo.w-regular;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    color: !item.enabled ? Theme.text-disabled
-                        : root.active == item.id ? Theme.text-primary
-                        : Theme.text-secondary;
-                }
+                    Icon {
+                        name: item.icon;
+                        size: 18px;
+                        y: (parent.height - self.height) / 2;
+                        tone: !item.enabled ? Theme.text-disabled
+                            : root.active == item.id ? Theme.accent
+                            : Theme.text-secondary;
+                    }
 
-                if root.expanded && item.badge != "": Rectangle {
-                    width: badge.preferred-width + Sp.s4;
-                    height: 18px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: R.full;
-                    background: Theme.bg-inset;
-                    badge := Text {
-                        text: item.badge;
-                        font-size: Typo.micro;
-                        color: Theme.text-tertiary;
+                    if root.expanded: Text {
+                        text: item.label;
+                        font-size: Typo.body;
+                        font-weight: root.active == item.id ? Typo.w-medium : Typo.w-regular;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        color: !item.enabled ? Theme.text-disabled
+                            : root.active == item.id ? Theme.text-primary
+                            : Theme.text-secondary;
+                    }
+
+                    if root.expanded && item.badge != "": Rectangle {
+                        width: badge.preferred-width + Sp.s4;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: R.full;
+                        background: Theme.bg-inset;
+                        badge := Text {
+                            text: item.badge;
+                            font-size: Typo.micro;
+                            color: Theme.text-tertiary;
+                        }
                     }
                 }
-            }
 
-            touch := TouchArea {
-                enabled: item.enabled;
-                mouse-cursor: item.enabled ? MouseCursor.pointer : MouseCursor.default;
-                clicked => { root.selected(item.id); }
+                touch := TouchArea {
+                    enabled: item.enabled;
+                    mouse-cursor: item.enabled ? MouseCursor.pointer : MouseCursor.default;
+                    clicked => { root.selected(item.id); }
+                }
             }
 
             accessible-role: button;

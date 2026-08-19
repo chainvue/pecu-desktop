@@ -42,6 +42,17 @@ export struct NavItem {
     // Reserving the space visibly is a promise; hiding it is a surprise later.
     enabled: bool,
     badge: string,
+    // Built, and deliberately kept out of the rail for now.
+    //
+    // Distinct from `enabled: false`, which reserves visible space for
+    // something unbuilt. This is the opposite case: the screen works, and is
+    // not part of the wallet being shown yet.
+    //
+    // It is a field rather than a shorter `nav` list because `nav` is also
+    // what says a screen exists at all — see `nav-index` and the `ComingSoon`
+    // fallback in `app.slint`. Dropping an entry would put "Not built yet"
+    // underneath a screen that is built.
+    hidden: bool,
 }
 
 export struct NodeRow {
