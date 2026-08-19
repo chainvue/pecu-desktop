@@ -243,20 +243,20 @@ fn apply(ui: &AppWindow, event: Event) {
                     name: row.name.clone().into(),
                     address: row.address.clone().into(),
                     kind: row.kind.clone().into(),
-                    note: row.note.clone().into(),
+                    note: note(&row.note),
                 })
                 .collect();
             state.set_choices(ModelRc::from(Rc::new(VecModel::from(rows))));
             state.set_choices_more(i32::try_from(vm.more).unwrap_or(i32::MAX));
             state.set_choices_busy(vm.loading);
-            state.set_choices_problem(vm.problem.clone().into());
+            state.set_choices_problem(note(&vm.problem));
         }
 
         Event::LaunchPending(pending) => {
             let state = ui.global::<pecu_ui::CurrencyState>();
             match pending {
                 Some(vm) => {
-                    state.set_pending_note(vm.note.clone().into());
+                    state.set_pending_note(note(&vm.note));
                     state.set_pending_can_continue(vm.can_continue);
                     state.set_pending_steps(steps_of(&vm.steps));
                     // The form has been submitted, so it closes — which puts
@@ -278,7 +278,7 @@ fn apply(ui: &AppWindow, event: Event) {
             match review {
                 Some(vm) => {
                     state.set_launch_name(vm.name.clone().into());
-                    state.set_launch_description(vm.description.clone().into());
+                    state.set_launch_description(note(&vm.description));
                     state.set_launch_fee(vm.fee_display.clone().into());
                     state.set_launch_deposit(vm.deposit_display.clone().into());
                     state.set_launch_burned(vm.burned_display.clone().into());
@@ -309,7 +309,7 @@ fn apply(ui: &AppWindow, event: Event) {
             confirmation,
         } => {
             let state = ui.global::<IdentityState>();
-            state.set_change_description(description.into());
+            state.set_change_description(note(&description));
             state.set_change_fee(fee_display.into());
             state.set_change_confirmation(confirmation.into());
             state.set_change_typed(SharedString::new());
@@ -341,13 +341,13 @@ fn apply(ui: &AppWindow, event: Event) {
             // on describes something nobody is looking at.
             let currency = ui.global::<pecu_ui::CurrencyState>();
             if currency.get_new_name().as_str() == name {
-                currency.set_new_name_problem(problem.clone().into());
+                currency.set_new_name_problem(note(&problem));
                 currency.set_new_name_fee(fee_display.clone().into());
             }
 
             let identity = ui.global::<IdentityState>();
             if identity.get_name_draft().as_str() == name {
-                identity.set_name_problem(problem.into());
+                identity.set_name_problem(note(&problem));
                 identity.set_name_fee(fee_display.into());
             }
         }
@@ -355,9 +355,9 @@ fn apply(ui: &AppWindow, event: Event) {
         Event::Registration(claim) => apply_registration(ui, claim.as_deref()),
 
         Event::IdentityMissing { typed, reason } => {
-            tracing::info!(%typed, %reason, "a VerusID lookup found nothing");
+            tracing::info!(%typed, reason = %reason.code, "a VerusID lookup found nothing");
             ui.global::<IdentityState>()
-                .set_lookup_problem(reason.into());
+                .set_lookup_problem(note(&reason));
         }
 
         // The sheet is open exactly when the address is non-empty, so `None`
@@ -500,7 +500,7 @@ fn apply_address_book(ui: &AppWindow, rows: &[pecu_protocol::KnownAddressVm]) {
 fn apply_tx_detail(ui: &AppWindow, vm: pecu_protocol::TxDetailVm) {
     let tx = ui.global::<TxState>();
     tx.set_txid(vm.txid.into());
-    tx.set_when(vm.when_display.into());
+    tx.set_when(note(&vm.when_display));
     tx.set_amount(vm.net_display.into());
     tx.set_direction(
         match vm.direction {
@@ -550,7 +550,7 @@ fn apply_history(ui: &AppWindow, delta: ListDelta<HistoryRowVm>) {
                 .iter()
                 .take(RECENT)
                 .map(|row| ActivityRow {
-                    group: SharedString::new(),
+                    group: pecu_ui::Note::default(),
                     ..row.clone()
                 })
                 .collect();
@@ -585,8 +585,8 @@ fn apply_registration(ui: &AppWindow, claim: Option<&pecu_protocol::Registration
     };
 
     state.set_reg_name(vm.name.clone().into());
-    state.set_reg_note(vm.note.clone().into());
-    state.set_reg_deadline(vm.deadline.clone().into());
+    state.set_reg_note(note(&vm.note));
+    state.set_reg_deadline(note(&vm.deadline));
     state.set_reg_fee(vm.fee_display.clone().into());
     state.set_reg_address(vm.address.clone().into());
     state.set_reg_busy(vm.busy);
@@ -660,7 +660,7 @@ fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDeta
         .stats
         .iter()
         .map(|stat| pecu_ui::Stat {
-            label: stat.label.clone().into(),
+            label: note(&stat.label),
             value: stat.value.clone().into(),
         })
         .collect();
@@ -698,7 +698,7 @@ fn apply_currencies(
             address: row.address.clone().into(),
             kind: row.kind.clone().into(),
             tone: row.tone.clone().into(),
-            note: row.note.clone().into(),
+            note: note(&row.note),
             mintable: row.mintable,
             start_block: row.start_block.clone().into(),
             started: row.started,
@@ -711,7 +711,7 @@ fn apply_currencies(
         .map(|entry| pecu_ui::EligibleIdentity {
             name: entry.name.clone().into(),
             address: entry.address.clone().into(),
-            refusal: entry.refusal.clone().into(),
+            refusal: note(&entry.refusal),
         })
         .collect();
     state.set_eligible(ModelRc::from(Rc::new(VecModel::from(picker))));
@@ -735,7 +735,7 @@ fn apply_currency_draft(ui: &AppWindow, vm: &pecu_protocol::CurrencyDraftVm) {
         .iter()
         .map(|problem| pecu_ui::CurrencyProblem {
             blocking: problem.blocking,
-            text: problem.text.clone().into(),
+            text: note(&problem.text),
         })
         .collect();
     let blocking = vm
@@ -757,7 +757,8 @@ fn apply_currency_draft(ui: &AppWindow, vm: &pecu_protocol::CurrencyDraftVm) {
         .preview
         .iter()
         .map(|field| pecu_ui::CurrencyField {
-            label: field.label.clone().into(),
+            label: note(&field.label),
+            value_note: note(&field.value_note),
             value: field.value.clone().into(),
             permanent: field.permanent,
         })
@@ -777,7 +778,7 @@ fn steps_of(steps: &[pecu_protocol::FlowStepVm]) -> ModelRc<pecu_ui::FlowStep> {
     let rows: Vec<pecu_ui::FlowStep> = steps
         .iter()
         .map(|step| pecu_ui::FlowStep {
-            label: step.label.clone().into(),
+            label: note(&step.label),
             state: step.state.clone().into(),
             costs: step.costs,
         })
@@ -807,7 +808,7 @@ fn identity_rows(rows: &[IdentityVm]) -> ModelRc<IdentityRow> {
             address: row.address.clone().into(),
             status: row.status.clone().into(),
             tone: row.tone.clone().into(),
-            note: row.note.clone().into(),
+            note: note(&row.note),
             mine: row.mine,
         })
         .collect();
@@ -821,12 +822,12 @@ fn apply_identity_detail(ui: &AppWindow, vm: &IdentityDetailVm) {
     state.set_status(vm.status.clone().into());
     state.set_tone(vm.tone.clone().into());
     state.set_signatures_required(vm.signatures_required.clone().into());
-    state.set_control_note(vm.control_note.clone().into());
+    state.set_control_note(note(&vm.control_note));
     state.set_can_sign(vm.can_sign);
     state.set_revocation_authority(vm.revocation_authority.clone().into());
     state.set_recovery_authority(vm.recovery_authority.clone().into());
     state.set_cannot_be_revoked(vm.cannot_be_revoked);
-    state.set_timelock_note(vm.timelock_note.clone().into());
+    state.set_timelock_note(note(&vm.timelock_note));
     state.set_balance(vm.balance_display.clone().into());
 
     let primary: Vec<SharedString> = vm
@@ -1171,10 +1172,10 @@ fn activity_row(row: &HistoryRowVm) -> ActivityRow {
         }
         .into(),
         amount: row.net_display.clone().into(),
-        when: row.when_display.clone().into(),
+        when: note(&row.when_display),
         pending: row.pending,
         height: i32::try_from(row.height).unwrap_or(i32::MAX),
-        group: row.group.clone().into(),
+        group: note(&row.group),
         kind: row.kind.clone().into(),
         note: row.note.clone().into(),
     }
@@ -1230,11 +1231,7 @@ fn to_row(node: &NodeVm, active: Option<u32>) -> NodeRow {
             .latency_ms
             .map(|ms| SharedString::from(format!("{ms} ms")))
             .unwrap_or_default(),
-        note: node
-            .note
-            .clone()
-            .map(SharedString::from)
-            .unwrap_or_default(),
+        note: note(&node.note),
         builtin: node.builtin,
         active: active == Some(node.id),
     }

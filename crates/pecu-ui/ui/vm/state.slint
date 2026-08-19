@@ -250,7 +250,7 @@ export global CurrencyState {
     // for.
     in property <int> choices-more: 0;
     in property <bool> choices-busy: false;
-    in property <string> choices-problem: "";
+    in property <Note> choices-problem;
 
     // What core makes of it. Everything below is computed there — the bars, the
     // captions beside them and the preview are three renderings of one
@@ -273,7 +273,7 @@ export global CurrencyState {
     // same rule the identity sheet follows, so the two cannot disagree.
     in property <int> launch-ticket: 0;
     in property <string> launch-name: "";
-    in property <string> launch-description: "";
+    in property <Note> launch-description;
     in property <string> launch-fee: "";
     in property <string> launch-deposit: "";
     in property <string> launch-burned: "";
@@ -294,7 +294,7 @@ export global CurrencyState {
     // with nothing made under it — and it can never be used for a different
     // currency.
     in property <string> pending-identity: "";
-    in property <string> pending-note: "";
+    in property <Note> pending-note;
     in property <bool> pending-can-continue: false;
     // The same diagram the form drew as a plan, now as progress. Its own
     // property rather than `steps`, because one is what will happen and the
@@ -313,7 +313,7 @@ export global CurrencyState {
     in-out property <string> new-name: "";
     // What the chain and the local rule make of that name, and what claiming it
     // costs. Both arrive from the same check the identity screen uses.
-    in property <string> new-name-problem: "";
+    in property <Note> new-name-problem;
     in property <string> new-name-fee: "";
     // Who may revoke and who may recover the identity that gets claimed.
     //
@@ -354,7 +354,7 @@ export global IdentityState {
     // The lookup field, kept here so Rust can clear it on success only.
     in-out property <string> lookup-draft: "";
     // Why a lookup found nothing. Empty when there is nothing to say.
-    in-out property <string> lookup-problem: "";
+    in-out property <Note> lookup-problem;
 
     // ── The detail sheet ────────────────────────────────────────────────
     //
@@ -366,7 +366,7 @@ export global IdentityState {
     in property <string> tone: "";
     in property <[string]> primary-addresses: [];
     in property <string> signatures-required: "";
-    in property <string> control-note: "";
+    in property <Note> control-note;
     // Whether this wallet can sign for it. Decides which actions are offered —
     // a fact, not something read out of the sentence above.
     in property <bool> can-sign: false;
@@ -377,7 +377,7 @@ export global IdentityState {
     // recovery authority. A fresh registration lands on exactly this by
     // default and nothing says so at the time.
     in property <bool> cannot-be-revoked: false;
-    in property <string> timelock-note: "";
+    in property <Note> timelock-note;
     in property <string> balance: "";
 
     // What it holds now, and everything it has ever published. Two different
@@ -398,7 +398,7 @@ export global IdentityState {
     in-out property <string> claim-authority: "";
     in-out property <string> name-draft: "";
     // Why the name will not do. Empty when it is fine.
-    in property <string> name-problem: "";
+    in property <Note> name-problem;
     // What registering it would cost. Empty until a node has said.
     in property <string> name-fee: "";
     // Who may revoke and who may recover. Blank leaves the identity as its
@@ -409,11 +409,11 @@ export global IdentityState {
     // A claim in progress. Empty step means there is none.
     in property <string> reg-step: "";
     in property <string> reg-name: "";
-    in property <string> reg-note: "";
+    in property <Note> reg-note;
     // The block the claim must be registered by. This is the fact worth the
     // whole panel: the window is about twenty blocks and missing it spends
     // the fee for nothing.
-    in property <string> reg-deadline: "";
+    in property <Note> reg-deadline;
     in property <string> reg-fee: "";
     in property <string> reg-address: "";
     // The three transactions a claim is made of, and how far it has got. Built
@@ -430,7 +430,7 @@ export global IdentityState {
     in-out property <string> lock-blocks: "";
     // A change built and signed but not sent. A ticket of 0 means none.
     in property <int> change-ticket: 0;
-    in property <string> change-description: "";
+    in property <Note> change-description;
     in property <string> change-fee: "";
     in property <bool> change-busy: false;
     // The word that has to be typed before this can be sent, empty when none
@@ -452,7 +452,7 @@ export global TxState {
     // Empty when nothing is open. The sheet is the txid being non-empty —
     // there is no second flag that could disagree with it.
     in-out property <string> txid: "";
-    in property <string> when: "";
+    in property <Note> when;
     in property <string> amount: "";
     in property <string> direction: "in";
     // False when the amount is already a token line naming its own currency —

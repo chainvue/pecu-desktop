@@ -167,6 +167,35 @@ fn without_comparisons(text: &str) -> String {
     out
 }
 
+/// A `Note`'s own `code:` field, removed.
+///
+/// `label: { code: "step-kind", args: [] }` builds a named reason, and the
+/// name is not a message — `note.slint` turns it into one. Recognised by shape
+/// for the same reason comparisons are: a list of every code the interface
+/// constructs would be a list somebody has to remember to add to.
+fn without_note_codes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("code:") {
+        out.push_str(&rest[..at]);
+        out.push_str("code:");
+        let after = &rest[at + "code:".len()..];
+        let trimmed = after.trim_start();
+        let skipped = after.len() - trimmed.len();
+        if let Some(stripped) = trimmed.strip_prefix('"') {
+            match stripped.find('"') {
+                Some(end) => rest = &stripped[end + 1..],
+                None => rest = stripped,
+            }
+        } else {
+            out.push_str(&after[..skipped]);
+            rest = trimmed;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Everything inside `@tr(…)`, removed — so what is left is what escaped it.
 ///
 /// Not a parser. `@tr` calls do not nest and their arguments are property
@@ -299,7 +328,7 @@ fn every_readable_string_is_translatable() {
             }
             spoken_block = false;
 
-            let bare = without_comparisons(&without_translated(&statement));
+            let bare = without_note_codes(&without_comparisons(&without_translated(&statement)));
             for literal in literals(&bare) {
                 if allowed.contains(literal.as_str()) {
                     continue;

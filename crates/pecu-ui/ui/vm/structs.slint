@@ -12,6 +12,25 @@
 // count exactly past ~16.7 million. Either type would silently render a wrong
 // number on a screen whose whole job is to be right about money.
 
+// One VerusID in the list.
+// A sentence the interface writes, named by the core. Mirrors `NoteVm`.
+//
+// The core decides *what is true* — that an address will not parse, that an
+// amount is above the balance — and names it. The words are here, in `@tr`,
+// where they can be translated and where the side that knows how much room the
+// line has gets to choose them.
+export struct Note {
+    // A stable identifier, never shown. Empty means say nothing.
+    code: string,
+    // Values the sentence needs, already formatted by the core. Money is
+    // spelled in exactly one place and this is not it.
+    args: [string],
+}
+
+// `Note` is first because Slint resolves types in declaration order and half
+// the structs below carry one. Moving it down is a compile error rather than
+// a subtle one, which is the only reason this comment is short.
+
 export struct NavItem {
     id: string,
     label: string,
@@ -36,7 +55,7 @@ export struct NodeRow {
     network: string,
     tip: string,
     latency: string,
-    note: string,
+    note: Note,
     builtin: bool,
     active: bool,
 }
@@ -92,24 +111,7 @@ export struct KnownAddressRow {
     summary: string,
 }
 
-// One VerusID in the list.
-// A sentence the interface writes, named by the core. Mirrors `NoteVm`.
-//
-// The core decides *what is true* — that an address will not parse, that an
-// amount is above the balance — and names it. The words are here, in `@tr`,
-// where they can be translated and where the side that knows how much room the
-// line has gets to choose them.
-export struct Note {
-    // A stable identifier, never shown. Empty means say nothing.
-    code: string,
-    // Values the sentence needs, already formatted by the core. Money is
-    // spelled in exactly one place and this is not it.
-    args: [string],
-}
 
-// Slint resolves types in declaration order, so `Note` has to be above every
-// struct that carries one — `ToastRow` does, and moving it below this line is
-// a compile error rather than a subtle one.
 
 // Something the wallet said, waiting to be read.
 //
@@ -168,7 +170,7 @@ export struct Venue {
 
 // One labelled figure on the currency detail. Mirrors `StatVm`.
 export struct Stat {
-    label: string,
+    label: Note,
     value: string,
 }
 
@@ -199,7 +201,7 @@ export struct IdentityRow {
     // The pill colour, in the same vocabulary the node list uses.
     tone: string,
     // What the status means, in a sentence. Empty for the ordinary case.
-    note: string,
+    note: Note,
     // Whether this wallet holds keys for it. A fact about the wallet, not about
     // the identity — and what decides which actions are offered.
     mine: bool,
@@ -221,7 +223,7 @@ export struct CurrencyRow {
     tone: string,
     // What the kind means, for somebody who did not define it. Empty for a
     // plain token, where the label already says everything.
-    note: string,
+    note: Note,
     // Whether the supply can still grow. A permanent property, and a different
     // promise to whoever holds it.
     mintable: bool,
@@ -242,7 +244,7 @@ export struct EligibleIdentity {
     name: string,
     address: string,
     // Empty when it may be used. Otherwise why not, in a sentence.
-    refusal: string,
+    refusal: Note,
 }
 
 // One slice of a proportional bar: a reserve's weight, or a share of supply.
@@ -275,7 +277,7 @@ export struct CurrencyPick {
     address: string,
     kind: string,
     // Something worth knowing before it is used as a reserve, or empty.
-    note: string,
+    note: Note,
 }
 
 export struct ReserveEntry {
@@ -301,8 +303,10 @@ export struct PreallocEntry {
 
 // One line of the definition preview.
 export struct CurrencyField {
-    label: string,
+    label: Note,
     value: string,
+    // …and the sentence, when the value is one. Exactly one is set.
+    value-note: Note,
     // Cannot be changed after the launch. The mark is the whole reason this
     // panel is on screen — everything else here is also in the form above it.
     permanent: bool,
@@ -312,12 +316,12 @@ export struct CurrencyField {
 export struct CurrencyProblem {
     // True stops the launch. False only has to be read.
     blocking: bool,
-    text: string,
+    text: Note,
 }
 
 // One step of the launch, for the diagram that says what happens next.
 export struct FlowStep {
-    label: string,
+    label: Note,
     // "done" | "now" | "later"
     state: string,
     // Whether reaching this step spends money. Marked, because two of the four
@@ -371,7 +375,7 @@ export struct ActivityRow {
     // "in" | "out" | "self"
     direction: string,
     amount: string,
-    when: string,
+    when: Note,
     pending: bool,
     // 0 while unconfirmed. Confirmations are DERIVED in the UI from this and a
     // single `tip` property, so a new block updates one integer instead of
@@ -389,7 +393,7 @@ export struct ActivityRow {
     // Non-empty when this row starts a new day: the heading to draw above it.
     // Computed in core, which can see the row before this one — something a
     // `for` loop over a model cannot.
-    group: string,
+    group: Note,
 }
 
 // One output of the transaction that was actually built and signed.

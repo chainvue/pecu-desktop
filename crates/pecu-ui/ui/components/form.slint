@@ -8,6 +8,7 @@ import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn } from "base.slint";
 import { FlowStep } from "../vm/structs.slint";
 import { Actions, WalletState } from "../vm/state.slint";
+import { NoteText } from "note.slint";
 
 // A single-line input.
 //
@@ -196,8 +197,8 @@ export component FlowStepper inherits HorizontalLayout {
                 VerticalLayout {
                     spacing: 0px;
                     alignment: center;
-                    Text {
-                        text: step.label;
+                    NoteText {
+                        note: step.label;
                         font-size: Typo.caption;
                         font-weight: step.state == "now" ? Typo.w-medium : Typo.w-regular;
                         color: step.state == "later" ? Theme.text-tertiary : Theme.text-primary;

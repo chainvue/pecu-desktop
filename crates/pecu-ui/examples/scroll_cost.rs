@@ -68,13 +68,21 @@ fn main() {
     }
 }
 
+/// A named reason with one value, the shape the interface reads everything in.
+fn note(code: &str, arg: &str) -> pecu_ui::Note {
+    pecu_ui::Note {
+        code: code.into(),
+        args: slint::ModelRc::new(slint::VecModel::from(vec![slint::SharedString::from(arg)])),
+    }
+}
+
 fn row(index: usize) -> ActivityRow {
     ActivityRow {
         txid: format!("{index:064x}").into(),
         txid_short: "abcd…9876".into(),
         direction: if index.is_multiple_of(3) { "out" } else { "in" }.into(),
         amount: "12.5000 0000".into(),
-        when: "2 hours ago".into(),
+        when: note("when-hours", "2"),
         pending: false,
         height: 1_000_000 - i32::try_from(index).unwrap_or(0),
         // A day heading every twentieth row, so the taller variant of the row
@@ -88,10 +96,9 @@ fn row(index: usize) -> ActivityRow {
             "".into()
         },
         group: if index.is_multiple_of(20) {
-            "13 August"
+            note("day-this-year", "13")
         } else {
-            ""
-        }
-        .into(),
+            pecu_ui::Note::default()
+        },
     }
 }

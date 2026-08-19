@@ -996,7 +996,7 @@ fn wire_identity(ui: &AppWindow, dispatcher: &Dispatcher) {
         actions.on_look_up_identity(move |typed| {
             if let Some(ui) = weak.upgrade() {
                 ui.global::<pecu_ui::IdentityState>()
-                    .set_lookup_problem(slint::SharedString::new());
+                    .set_lookup_problem(pecu_ui::Note::default());
             }
             dispatcher.send(Command::LookUpIdentity(typed.to_string()));
         });

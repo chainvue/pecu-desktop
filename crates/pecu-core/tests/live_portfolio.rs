@@ -116,10 +116,10 @@ fn a_real_address_reads_coherently() {
     .expect("a year before 292 billion AD");
 
     for row in reading.rows(now).into_iter().take(portfolio::RECENT) {
-        if !row.group.is_empty() {
-            println!("  — {}", row.group);
+        if !row.group.code.is_empty() {
+            println!("  — {:?}", row.group);
         }
-        println!("  {} {} {}", row.when_display, row.net_display, row.txid);
+        println!("  {:?} {} {}", row.when_display, row.net_display, row.txid);
     }
 }
 

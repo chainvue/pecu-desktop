@@ -5,6 +5,7 @@ import { R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Segmented } from "../components/base.slint";
 import { ActivityRow } from "../vm/structs.slint";
 import { Actions, ActivityState, TxState, WalletState } from "../vm/state.slint";
+import { NoteText } from "../components/note.slint";
 
 // One transaction, in the list.
 export component ActivityRowItem inherits VerticalLayout {
@@ -35,12 +36,12 @@ export component ActivityRowItem inherits VerticalLayout {
     // The day heading, above the first row of that day. Its own layout so the
     // breathing room above it is padding rather than a Text property that
     // silently does nothing.
-    if root.entry.group != "": VerticalLayout {
+    if root.entry.group.code != "": VerticalLayout {
         padding-top: Sp.s5;
         padding-left: Sp.s5;
         padding-bottom: Sp.s2;
-        Text {
-            text: root.entry.group;
+        NoteText {
+            note: root.entry.group;
             font-size: Typo.micro;
             font-weight: Typo.w-medium;
             letter-spacing: 0.6px;
@@ -88,9 +89,13 @@ export component ActivityRowItem inherits VerticalLayout {
         // What this was, when there is something to say — otherwise when it
         // happened. Never both: two facts in a subtitle is a subtitle nobody
         // reads either half of.
-        subtitle: root.entry.note != "" ? root.entry.note
-            : root.settled ? root.entry.when
-            : "";
+        // What this was, when there is something to say — otherwise when it
+        // happened. One is a string the core fills in and the other a named
+        // reason, which is why they arrive on two properties.
+        subtitle: root.entry.note;
+        subtitle-note: root.entry.note == "" && root.settled
+            ? root.entry.when
+            : { code: "" };
         interactive: true;
         clicked => { Actions.open-tx(root.entry.txid); }
 
@@ -151,8 +156,8 @@ export component ActivityScreen inherits VerticalLayout {
             VerticalLayout {
                 padding: Sp.s4;
                 spacing: Sp.s1;
-                Text {
-                    text: stat.label;
+                NoteText {
+                    note: stat.label;
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                 }
@@ -338,8 +343,8 @@ export component TxSheet inherits Rectangle {
                             font-weight: Typo.w-bold;
                             color: Theme.text-primary;
                         }
-                        Text {
-                            text: TxState.when;
+                        NoteText {
+                            note: TxState.when;
                             font-size: Typo.caption;
                             color: Theme.text-tertiary;
                         }

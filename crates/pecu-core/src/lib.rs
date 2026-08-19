@@ -684,7 +684,7 @@ enum Work {
     /// A change to an identity was built and signed. Nothing sent.
     IdentityChangePrepared {
         ticket: u64,
-        described: String,
+        described: NoteVm,
         /// Whether sending it needs a word typed first.
         needs_confirmation: bool,
         result: Box<Result<identity::Prepared, String>>,
@@ -788,6 +788,33 @@ enum Work {
         open: bool,
         result: Box<Result<identity::Detail, verus_sdk::network::RpcError>>,
     },
+}
+
+/// A node's condition, as a named reason.
+///
+/// `NodeStatus::note` in `pecu-chain` builds English, and it cannot do
+/// otherwise: that crate does not know `NoteVm` exists and should not — it is
+/// the layer that talks to a daemon. So the mapping is here, where the words
+/// are already the interface's business. The one string carried through is the
+/// **node's own** reason for being unreachable, which is a machine's words and
+/// is not ours to translate.
+fn node_note(status: &pecu_chain::NodeStatus) -> NoteVm {
+    use pecu_chain::NodeStatus;
+
+    match status {
+        NodeStatus::Syncing { blocks, longest } => NoteVm::with(
+            "node-catching-up",
+            [blocks.to_string(), longest.to_string()],
+        ),
+        NodeStatus::WrongNetwork { reported } => {
+            NoteVm::with("node-other-chain", [reported.to_string()])
+        }
+        NodeStatus::MethodRefused { method } => {
+            NoteVm::with("node-refused-method", [method.clone()])
+        }
+        NodeStatus::Offline { reason } => NoteVm::with("node-offline", [reason.clone()]),
+        NodeStatus::Unknown | NodeStatus::Probing | NodeStatus::Online => NoteVm::none(),
+    }
 }
 
 /// The name a currency is known by, or its i-address when it is not.
@@ -1216,7 +1243,7 @@ impl Core {
                 result,
             } => self.finish_identity_change_prepared(
                 ticket,
-                &described,
+                described,
                 needs_confirmation,
                 *result,
             ),
@@ -1882,9 +1909,9 @@ impl Core {
             .map(|watched| pecu_protocol::IdentityVm {
                 name: watched.name,
                 address: watched.address,
-                status: "Not read yet".to_string(),
+                status: "not-read-yet".to_string(),
                 tone: "unknown".to_string(),
-                note: String::new(),
+                note: NoteVm::none(),
                 mine: false,
             })
             .collect();
@@ -3126,7 +3153,7 @@ impl Core {
     fn finish_identity_change_prepared(
         &mut self,
         ticket: u64,
-        described: &str,
+        described: NoteVm,
         needs_confirmation: bool,
         result: Result<identity::Prepared, String>,
     ) {
@@ -3141,7 +3168,7 @@ impl Core {
                 }
                 let _ = self.events.send(Event::IdentityChangePrepared {
                     ticket,
-                    description: described.to_string(),
+                    description: described,
                     fee_display: fee,
                     // The word travels with the request rather than being
                     // written out again on the other side. `identity` owns what
@@ -3251,7 +3278,7 @@ impl Core {
         if name.is_empty() {
             let _ = self.events.send(Event::NameChecked {
                 name,
-                problem: String::new(),
+                problem: NoteVm::none(),
                 fee_display: String::new(),
             });
             return;
@@ -3513,8 +3540,8 @@ impl Core {
                     pecu_protocol::RegistrationVm {
                         name: registered.name,
                         step: "done".to_string(),
-                        note: "The identity exists on the chain.".to_string(),
-                        deadline: String::new(),
+                        note: NoteVm::plain("claim-registered"),
+                        deadline: NoteVm::none(),
                         fee_display: portfolio::coins(registered.fee_paid),
                         address,
                         busy: false,
@@ -3577,9 +3604,9 @@ impl Core {
         fee: Option<verus_sdk::money::Amount>,
     ) {
         let problem = match taken {
-            Some(true) => "That name is already registered.".to_string(),
-            Some(false) => String::new(),
-            None => "Could not check whether that name is free.".to_string(),
+            Some(true) => NoteVm::plain("name-taken"),
+            Some(false) => NoteVm::none(),
+            None => NoteVm::plain("name-unchecked"),
         };
         let _ = self.events.send(Event::NameChecked {
             name: name.to_string(),
@@ -3615,7 +3642,7 @@ impl Core {
         // answer is about a shorter name. The same reasoning `prepare_launch`
         // gives: the checks are the core's, and this is where they bind.
         if let Some(problem) = identity::name_problem(&name) {
-            self.notice_warning("registration_name", NoteVm::plain("name-refused"), &problem);
+            self.notice_warning("registration_name", problem, "");
             return;
         }
         if name.is_empty() {
@@ -4257,8 +4284,7 @@ impl Core {
         let Some(chain) = self.chain() else {
             let _ = self.events.send(Event::CurrencyChoices(Box::new(
                 pecu_protocol::CurrencyChoicesVm {
-                    problem: "No node is connected, so the chain's currencies cannot be listed."
-                        .to_string(),
+                    problem: NoteVm::plain("catalog-no-node"),
                     ..Default::default()
                 },
             )));
@@ -4315,7 +4341,7 @@ impl Core {
                 // whose other steps are unaffected.
                 let _ = self.events.send(Event::CurrencyChoices(Box::new(
                     pecu_protocol::CurrencyChoicesVm {
-                        problem: format!("The chain's currencies could not be listed. {error}"),
+                        problem: NoteVm::with("catalog-unreadable", [error.clone()]),
                         ..Default::default()
                     },
                 )));
@@ -4512,9 +4538,9 @@ impl Core {
                 let view = pecu_protocol::LaunchReviewVm {
                     ticket,
                     name: prepared.name.clone(),
-                    description: format!(
-                        "Defines {} under this identity. An identity can define one currency, and only once — this cannot be undone or repeated.",
-                        prepared.name,
+                    description: pecu_protocol::NoteVm::with(
+                        "launch-defines-once",
+                        [prepared.name.clone()],
                     ),
                     fee_display: portfolio::coins(split.launch_fee),
                     deposit_display: portfolio::coins(split.deposit),
@@ -4716,15 +4742,9 @@ impl Core {
                 identity: record.identity.clone(),
                 step: if ready { "ready" } else { "awaiting-identity" }.to_string(),
                 note: if ready {
-                    format!(
-                        "{} exists and nothing has been defined under it. It can never be used for a different currency.",
-                        record.identity,
-                    )
+                    NoteVm::with("launch-name-ready", [record.identity.clone()])
                 } else {
-                    format!(
-                        "Claiming {} first. The currency is defined once the name is on the chain.",
-                        record.identity,
-                    )
+                    NoteVm::with("launch-name-claiming", [record.identity.clone()])
                 },
                 can_continue: ready,
                 steps: currency::progress(record.step),
@@ -4871,9 +4891,9 @@ impl Core {
                 // the other means "we do not know".
                 let reason = match &error {
                     verus_sdk::network::RpcError::Node { code: -5, .. } => {
-                        "No VerusID by that name on this chain.".to_string()
+                        NoteVm::plain("verusid-unknown")
                     }
-                    other => format!("Could not read it: {other}"),
+                    other => NoteVm::with("verusid-unreadable", [other.to_string()]),
                 };
                 let _ = self.events.send(Event::IdentityMissing {
                     typed: typed.to_string(),
@@ -5704,7 +5724,7 @@ fn to_node_vm(node: &Node) -> NodeVm {
         network: node.network.as_ref().map(ToString::to_string),
         tip: node.tip,
         latency_ms: node.latency_ms(),
-        note: node.status.note(),
+        note: node_note(&node.status),
         builtin: node.builtin,
     }
 }
@@ -6175,8 +6195,8 @@ mod tests {
                 txid: "abc".to_string(),
                 height: 1_187_000,
                 block_time: 1_000_000_000,
-                when_display: "2 hours ago".to_string(),
-                group: "Today".to_string(),
+                when_display: NoteVm::with("when-hours", ["2".to_string()]),
+                group: NoteVm::plain("day-today"),
                 ..pecu_protocol::HistoryRowVm::default()
             }];
             store.save_snapshot(&portfolio, &history, 1_000_000_000);
@@ -6222,7 +6242,8 @@ mod tests {
         // The figures may be old; the dates must not be WRONG. "2 hours ago"
         // was written long ago, so it has been recomputed from the block time.
         assert_ne!(
-            rows[0].when_display, "2 hours ago",
+            rows[0].when_display.args.first().map(String::as_str),
+            Some("2"),
             "a restored row kept wording that was true when it was cached",
         );
 

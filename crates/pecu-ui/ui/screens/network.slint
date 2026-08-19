@@ -4,7 +4,7 @@ import { Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Segmented, StatusPill } from "../components/base.slint";
 import { Actions, NetworkState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
-import { NoticeTitle } from "../components/note.slint";
+import { NoteText, NoticeTitle } from "../components/note.slint";
 
 // Configuring an endpoint of your own.
 //
@@ -178,8 +178,8 @@ export component NodesScreen inherits VerticalLayout {
                     spacing: Sp.s5;
                     alignment: end;
 
-                    if node.note != "": Text {
-                        text: node.note;
+                    if node.note.code != "": NoteText {
+                        note: node.note;
                         font-size: Typo.caption;
                         color: Theme.warning;
                         vertical-alignment: center;

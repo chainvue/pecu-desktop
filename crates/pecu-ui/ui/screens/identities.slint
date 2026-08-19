@@ -6,6 +6,7 @@ import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Segmented, StatusPill }
 import { ContentEntry } from "../vm/structs.slint";
 import { Actions, IdentityState, WalletState } from "../vm/state.slint";
 import { Field, FlowStepper } from "../components/form.slint";
+import { NoteText } from "../components/note.slint";
 
 // The one screen that scrolls itself.
 //
@@ -36,7 +37,7 @@ export component LookUpForm inherits VerticalLayout {
 
     function submit() {
         if (field.text == "") { return; }
-        IdentityState.lookup-problem = "";
+        IdentityState.lookup-problem = { code: "" };
         Actions.look-up-identity(field.text);
     }
 
@@ -47,7 +48,7 @@ export component LookUpForm inherits VerticalLayout {
             mono: true;
             placeholder: @tr("name@ or i-address");
             text <=> IdentityState.lookup-draft;
-            invalid: IdentityState.lookup-problem != "";
+            invalid: IdentityState.lookup-problem.code != "";
             accepted => { root.submit(); }
         }
         Btn {
@@ -57,8 +58,8 @@ export component LookUpForm inherits VerticalLayout {
         }
     }
 
-    if IdentityState.lookup-problem != "": Text {
-        text: IdentityState.lookup-problem;
+    if IdentityState.lookup-problem.code != "": NoteText {
+        note: IdentityState.lookup-problem;
         font-size: Typo.caption;
         color: Theme.negative;
         wrap: word-wrap;
@@ -95,18 +96,18 @@ export component RegisterForm inherits VerticalLayout {
     FlowStepper {
         steps: [
             {
-                label: @tr("Choose the name"),
+                label: { code: "step-choose-the-name" },
                 state: IdentityState.claim-step == "name" ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Who can take it back"),
+                label: { code: "step-who-can-take-it-back" },
                 state: IdentityState.claim-step == "name" ? "later"
                     : IdentityState.claim-step == "authority" ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Check and claim"),
+                label: { code: "step-check-and-claim" },
                 state: IdentityState.claim-step == "review" ? "now" : "later",
                 costs: false,
             },
@@ -143,19 +144,19 @@ export component RegisterForm inherits VerticalLayout {
             mono: true;
             placeholder: @tr("lowercase, digits, _ and -");
             text <=> IdentityState.name-draft;
-            invalid: name.text != "" && IdentityState.name-problem != "";
+            invalid: name.text != "" && IdentityState.name-problem.code != "";
             edited => {
                 namecheck.running = false;
                 namecheck.running = true;
             }
         }
-        if IdentityState.name-problem != "": Text {
-            text: IdentityState.name-problem;
+        if IdentityState.name-problem.code != "": NoteText {
+            note: IdentityState.name-problem;
             font-size: Typo.caption;
             color: Theme.negative;
             wrap: word-wrap;
         }
-        if IdentityState.name-problem == "" && IdentityState.name-fee != "": Text {
+        if IdentityState.name-problem.code == "" && IdentityState.name-fee != "": Text {
             text: @tr("Free to claim · costs {} {}", IdentityState.name-fee, WalletState.ticker);
             font-size: Typo.caption;
             color: Theme.text-tertiary;
@@ -392,8 +393,8 @@ export component RegistrationPanel inherits VerticalLayout {
         wrap: char-wrap;
     }
 
-    Text {
-        text: IdentityState.reg-note;
+    NoteText {
+        note: IdentityState.reg-note;
         font-size: Typo.body;
         color: Theme.text-secondary;
         wrap: word-wrap;
@@ -410,14 +411,14 @@ export component RegistrationPanel inherits VerticalLayout {
     // The deadline, in the shape the send screen uses for a warning — because
     // it is one. The window is about twenty blocks and it cannot be extended:
     // the expiry is inside the bytes the claim was signed with.
-    if IdentityState.reg-deadline != "": Rectangle {
+    if IdentityState.reg-deadline.code != "": Rectangle {
         background: Theme.warning-soft;
         border-radius: R.md;
         VerticalLayout {
             padding: Sp.s5;
             spacing: Sp.s2;
-            Text {
-                text: IdentityState.reg-deadline;
+            NoteText {
+                note: IdentityState.reg-deadline;
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
                 color: Theme.warning;
@@ -692,11 +693,17 @@ export component IdentitiesScreen inherits VerticalLayout {
                                 alignment: end;
                                 StatusPill {
                                     state: row.tone;
-                                    text: row.status;
+                                    // The core names the state; the words are
+                                    // here, the same rule the node list follows.
+                                    text: row.status == "Active" ? @tr("Active")
+                                        : row.status == "Locked" ? @tr("Locked")
+                                        : row.status == "Unlocking" ? @tr("Unlocking")
+                                        : row.status == "Revoked" ? @tr("Revoked")
+                                        : row.status;
                                 }
                             }
-                            if row.note != "": Text {
-                                text: row.note;
+                            if row.note.code != "": NoteText {
+                                note: row.note;
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                                 horizontal-alignment: right;
@@ -784,11 +791,17 @@ export component IdentitiesScreen inherits VerticalLayout {
                                 alignment: end;
                                 StatusPill {
                                     state: row.tone;
-                                    text: row.status;
+                                    // The core names the state; the words are
+                                    // here, the same rule the node list follows.
+                                    text: row.status == "Active" ? @tr("Active")
+                                        : row.status == "Locked" ? @tr("Locked")
+                                        : row.status == "Unlocking" ? @tr("Unlocking")
+                                        : row.status == "Revoked" ? @tr("Revoked")
+                                        : row.status;
                                 }
                             }
-                            if row.note != "": Text {
-                                text: row.note;
+                            if row.note.code != "": NoteText {
+                                note: row.note;
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                                 horizontal-alignment: right;
@@ -995,8 +1008,8 @@ export component IdentityChangeReview inherits Rectangle {
                     color: Theme.text-secondary;
                 }
             }
-            Text {
-                text: IdentityState.change-description;
+            NoteText {
+                note: IdentityState.change-description;
                 font-size: Typo.body;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -1149,7 +1162,11 @@ export component IdentitySheet inherits Rectangle {
                     spacing: Sp.s5;
                     StatusPill {
                         state: IdentityState.tone;
-                        text: IdentityState.status;
+                        text: IdentityState.status == "Active" ? @tr("Active")
+                            : IdentityState.status == "Locked" ? @tr("Locked")
+                            : IdentityState.status == "Unlocking" ? @tr("Unlocking")
+                            : IdentityState.status == "Revoked" ? @tr("Revoked")
+                            : IdentityState.status;
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Money {
@@ -1201,8 +1218,8 @@ export component IdentitySheet inherits Rectangle {
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                     }
-                    Text {
-                        text: IdentityState.control-note;
+                    NoteText {
+                        note: IdentityState.control-note;
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -1348,10 +1365,10 @@ export component IdentitySheet inherits Rectangle {
                 VerticalLayout {
                     spacing: Sp.s3;
                     Eyebrow { text: @tr("TIMELOCK"); }
-                    Text {
+                    NoteText {
                         // Never "locked: true". The two locked states behave
                         // nothing alike and only one of them ends on its own.
-                        text: IdentityState.timelock-note;
+                        note: IdentityState.timelock-note;
                         font-size: Typo.body;
                         color: Theme.text-secondary;
                         wrap: word-wrap;

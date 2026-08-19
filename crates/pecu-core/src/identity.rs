@@ -30,6 +30,7 @@ use std::collections::BTreeMap;
 use verus_sdk::currency::CurrencyId;
 use verus_sdk::identity::{Identity, Timelock};
 use verus_sdk::network::{ContentValue, IdentityAtAddress, IdentityRecord, RpcError};
+use pecu_protocol::NoteVm;
 
 /// What state an identity is in, as a person would describe it.
 ///
@@ -283,14 +284,12 @@ pub fn row_of(record: &IdentityRecord, tip: u32, mine: &[String]) -> pecu_protoc
 
 /// The sentence under a status, for the states where the word alone is not
 /// enough. Empty for Active — a row explaining "Active" is a row nobody reads.
-fn note(state: &Status) -> String {
+fn note(state: &Status) -> NoteVm {
     match state {
-        Status::Active => String::new(),
-        Status::Locked { delay } => {
-            format!("Funds held. Unlocking starts a {delay}-block wait.")
-        }
-        Status::Unlocking { at } => format!("Unlocks at block {at}"),
-        Status::Revoked => "Only its recovery authority can bring it back.".to_string(),
+        Status::Active => NoteVm::none(),
+        Status::Locked { delay } => NoteVm::with("identity-locked", [delay.to_string()]),
+        Status::Unlocking { at } => NoteVm::with("identity-unlocking", [at.to_string()]),
+        Status::Revoked => NoteVm::plain("identity-revoked"),
     }
 }
 
@@ -450,14 +449,11 @@ pub fn detail(
         signatures_required: format!("{required} of {}", primary.len()),
         can_sign: held >= required as usize,
         control_note: if held == 0 {
-            "This wallet holds none of the keys. You can read this identity but not change it."
-                .to_string()
+            NoteVm::plain("control-none")
         } else if held >= required as usize {
-            format!("This wallet holds {held} of the {required} signatures needed.")
+            NoteVm::with("control-enough", [held.to_string(), required.to_string()])
         } else {
-            format!(
-                "This wallet holds {held} of the {required} signatures needed — not enough on its own."
-            )
+            NoteVm::with("control-short", [held.to_string(), required.to_string()])
         },
         primary_addresses: primary,
         revocation_authority: record.identity["revocationauthority"]
@@ -477,18 +473,12 @@ pub fn detail(
 }
 
 /// The lock, in a sentence somebody can act on.
-fn timelock_note(state: &Status) -> String {
+fn timelock_note(state: &Status) -> NoteVm {
     match state {
-        Status::Locked { delay } => format!(
-            "Locked. The funds cannot be spent, and nothing is counting down yet — \
-             unlocking publishes a height {delay} blocks out and the wait starts then."
-        ),
-        Status::Unlocking { at } => format!(
-            "Counting down. The funds stay held until block {at}; the transaction that \
-             started this did not end the lock."
-        ),
-        Status::Revoked => "Revoked. Only its recovery authority can bring it back.".to_string(),
-        Status::Active => "Not locked.".to_string(),
+        Status::Locked { delay } => NoteVm::with("timelock-held", [delay.to_string()]),
+        Status::Unlocking { at } => NoteVm::with("timelock-counting", [at.to_string()]),
+        Status::Revoked => NoteVm::plain("timelock-revoked"),
+        Status::Active => NoteVm::plain("timelock-none"),
     }
 }
 
@@ -555,41 +545,24 @@ pub enum Change {
 
 impl Change {
     /// What this will do, in a sentence, before it is signed.
-    pub fn describe(&self) -> String {
+    pub fn describe(&self) -> NoteVm {
         match self {
             Self::Authorities {
                 revocation,
                 recovery,
-            } => {
-                let mut parts = Vec::new();
-                if let Some(who) = revocation {
-                    parts.push(format!("revocation to {who}"));
-                }
-                if let Some(who) = recovery {
-                    parts.push(format!("recovery to {who}"));
-                }
-                if parts.is_empty() {
-                    "Nothing to change.".to_string()
-                } else {
-                    format!(
-                        "Points {} — after this, only they can take that action, \
-                         and this wallet cannot take it back.",
-                        parts.join(" and ")
-                    )
-                }
-            }
-            Self::Lock { delay } => format!(
-                "Holds the funds. Nothing counts down until somebody asks to unlock, \
-                 and then the wait is {delay} blocks."
-            ),
+            } => match (revocation.as_deref(), recovery.as_deref()) {
+                (None, None) => NoteVm::plain("change-nothing"),
+                (Some(who), None) => NoteVm::with("change-revocation", [who.to_string()]),
+                (None, Some(who)) => NoteVm::with("change-recovery", [who.to_string()]),
+                (Some(revoke), Some(recover)) => NoteVm::with(
+                    "change-both-authorities",
+                    [revoke.to_string(), recover.to_string()],
+                ),
+            },
+            Self::Lock { delay } => NoteVm::with("change-lock", [delay.to_string()]),
             Self::Unlock { .. } => unlock_note(),
-            Self::Revoke => "Revokes the identity. It can no longer be updated or spent \
-                 from by its own keys, and only its recovery authority can bring it \
-                 back — so if that authority is the identity itself, nothing can."
-                .to_string(),
-            Self::Recover => "Clears the revocation and hands the identity back to its \
-                 primary addresses."
-                .to_string(),
+            Self::Revoke => NoteVm::plain("change-revoke"),
+            Self::Recover => NoteVm::plain("change-recover"),
         }
     }
 
@@ -660,11 +633,8 @@ pub use pecu_protocol::REVOKE_CONFIRMATION;
 /// rather than from the tip, so the identity stays locked until the chain
 /// passes it. A screen that says "Unlocked" when the transaction confirms is
 /// lying for as long as the delay lasts.
-pub fn unlock_note() -> String {
-    "Starts the countdown. It does not unlock the identity: the funds stay held \
-     until the chain reaches the height this publishes, and that height is \
-     measured from this transaction rather than from now."
-        .to_string()
+pub fn unlock_note() -> NoteVm {
+    NoteVm::plain("change-unlock")
 }
 
 /// Turn a described change into the SDK's own shape.
@@ -720,22 +690,20 @@ fn authority_hash(who: &str) -> Result<[u8; 20], String> {
 /// There is no exported validator, so this states the rule the SDK's own
 /// `validate_name` applies — and [`check_name`] is tested against
 /// `NameReservation::new`, which is what actually enforces it.
-pub fn name_problem(name: &str) -> Option<String> {
+pub fn name_problem(name: &str) -> Option<NoteVm> {
     let name = name.trim();
     if name.is_empty() {
         return None;
     }
     if name.len() > 64 {
-        return Some("Too long — 64 characters at most.".to_string());
+        return Some(NoteVm::plain("name-too-long"));
     }
     let bad: String = name
         .chars()
         .filter(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-'))
         .collect();
     if !bad.is_empty() {
-        return Some(format!(
-            "Only lowercase letters, digits, `_` and `-`. Remove: {bad}"
-        ));
+        return Some(NoteVm::with("name-bad-characters", [bad]));
     }
     None
 }
@@ -761,9 +729,9 @@ pub fn name_problem(name: &str) -> Option<String> {
 /// whole of what is true.
 pub fn progress(step: &str) -> Vec<pecu_protocol::FlowStepVm> {
     const STEPS: [(&str, bool); 3] = [
-        ("Claim the name", true),
-        ("Wait for it to confirm", false),
-        ("Register it", true),
+        ("step-claim-the-name", true),
+        ("step-wait-to-confirm", false),
+        ("step-register-it", true),
     ];
 
     // How many are behind us, and whether the one we are on has been reached at
@@ -793,7 +761,7 @@ pub fn progress(step: &str) -> Vec<pecu_protocol::FlowStepVm> {
                     std::cmp::Ordering::Greater => "later",
                 }
             };
-            pecu_protocol::FlowStepVm::new(label, state, *costs)
+            pecu_protocol::FlowStepVm::new(NoteVm::plain(label), state, *costs)
         })
         .collect()
 }
@@ -809,60 +777,39 @@ pub fn registration_view(
     let expiry = record.pending.expiry_height();
     let deadline = match expiry {
         Some(at) if at > tip => {
-            let blocks = at - tip;
-            format!("Must confirm before block {at} — about {blocks} minutes")
+            NoteVm::with("claim-deadline", [at.to_string(), (at - tip).to_string()])
         }
-        Some(at) => format!("The deadline passed at block {at}"),
-        None => String::new(),
+        Some(at) => NoteVm::with("claim-deadline-passed", [at.to_string()]),
+        None => NoteVm::none(),
     };
 
     let (step, note) = match status {
         None => match record.step {
-            crate::registration::Step::Reserved => (
-                "reserved",
-                "Signed and written down. Nothing has been sent yet.".to_string(),
-            ),
-            crate::registration::Step::Committed => (
-                "committed",
-                "The claim is on its way. Waiting for it to be mined.".to_string(),
-            ),
+            crate::registration::Step::Reserved => {
+                ("reserved", NoteVm::plain("claim-signed-not-sent"))
+            }
+            crate::registration::Step::Committed => {
+                ("committed", NoteVm::plain("claim-on-its-way"))
+            }
         },
         Some(CommitmentStatus::Waiting { confirmations }) => (
             "waiting",
-            format!(
-                "The claim is on the chain with {confirmations} confirmations. \
-                 One is enough to register."
-            ),
+            NoteVm::with("claim-waiting", [confirmations.to_string()]),
         ),
-        Some(CommitmentStatus::Ready(_)) => (
-            "ready",
-            "The claim has confirmed. The name can be registered now.".to_string(),
-        ),
+        Some(CommitmentStatus::Ready(_)) => ("ready", NoteVm::plain("claim-confirmed")),
         Some(CommitmentStatus::Reorged { detail }) => (
             "waiting",
-            format!("The chain moved underneath the claim: {detail}"),
+            NoteVm::with("claim-reorged", [detail.clone()]),
         ),
-        Some(CommitmentStatus::CommitmentGone) => (
-            "lost",
-            "The claim is no longer on the chain. Its fee is spent and the name \
-             was not registered."
-                .to_string(),
-        ),
+        Some(CommitmentStatus::CommitmentGone) => ("lost", NoteVm::plain("claim-gone")),
         Some(CommitmentStatus::Expired { expiry_height, .. }) => (
             "expired",
-            format!(
-                "The claim expired at block {expiry_height}. Its fee is spent, \
-                 the name was not registered, and the same claim cannot be sent \
-                 again — the expiry is inside the bytes it was signed with."
-            ),
+            NoteVm::with("claim-expired", [expiry_height.to_string()]),
         ),
         // `CommitmentStatus` is `#[non_exhaustive]`, so a variant added upstream
         // lands here rather than failing to compile. Saying so is better than
         // guessing which of the others it resembles.
-        Some(_) => (
-            "waiting",
-            "The node reported something this build does not recognise.".to_string(),
-        ),
+        Some(_) => ("waiting", NoteVm::plain("claim-unrecognised")),
     };
 
     pecu_protocol::RegistrationVm {
@@ -1017,16 +964,18 @@ mod tests {
         // Waiting, with room left.
         let view = registration_view(&record, None, expiry - 12, false);
         assert_eq!(view.step, "committed");
-        assert!(
-            view.deadline.contains(&expiry.to_string()),
-            "the deadline does not name the block: {}",
+        assert_eq!(view.deadline.code, "claim-deadline");
+        assert_eq!(
+            view.deadline.args.first().map(String::as_str),
+            Some(expiry.to_string().as_str()),
+            "the deadline does not name the block: {:?}",
             view.deadline
         );
 
         // Past it. The wording changes rather than the number vanishing —
         // "about -3 minutes" would be worse than saying it has gone.
         let view = registration_view(&record, None, expiry + 5, false);
-        assert!(view.deadline.contains("passed"), "{}", view.deadline);
+        assert_eq!(view.deadline.code, "claim-deadline-passed", "{:?}", view.deadline);
 
         // And when the node says so outright, the panel says what it cost. Not
         // "try again": the same claim cannot be sent again, because the expiry
@@ -1041,12 +990,11 @@ mod tests {
             false,
         );
         assert_eq!(view.step, "expired");
-        assert!(view.note.contains("fee is spent"), "{}", view.note);
-        assert!(
-            view.note.contains("cannot be sent again"),
-            "the wording invites a retry that cannot work: {}",
-            view.note
-        );
+        // The code, not the sentence: what this test is about is that an
+        // expired claim is reported as expired rather than as something a
+        // retry could fix, and the words for that live in `note.slint`.
+        assert_eq!(view.note.code, "claim-expired");
+        assert_eq!(view.note.args, vec![expiry.to_string()]);
 
         // Both authorities left at the default, so the identity would land
         // unrevokable — and the screen has to be able to say so while somebody
@@ -1096,18 +1044,19 @@ mod tests {
     /// long as the delay lasts, and this is the wording that stops it.
     #[test]
     fn the_change_descriptions_do_not_promise_what_they_cannot_do() {
-        let unlock = Change::Unlock { extra_blocks: 20 }.describe();
-        assert!(
-            unlock.contains("does not unlock"),
-            "unlocking is described as unlocking: {unlock}",
+        // The **code**, not the sentence — the words are in `note.slint`
+        // now, and `pecu-ui`'s `note_coverage.rs` is what guarantees each of
+        // these has one. What this pins is that the four changes are told apart
+        // at all: an unlock described with the lock's reason would promise to
+        // unlock something that stays held.
+        assert_eq!(
+            Change::Unlock { extra_blocks: 20 }.describe().code,
+            "change-unlock",
         );
-        assert!(unlock.contains("stay held"), "{unlock}");
 
-        // Locking says the wait does not start until somebody asks — the state
-        // whose whole point is that it has no end of its own.
         let lock = Change::Lock { delay: 100 }.describe();
-        assert!(lock.contains("Nothing counts down"), "{lock}");
-        assert!(lock.contains("100 blocks"), "{lock}");
+        assert_eq!(lock.code, "change-lock");
+        assert_eq!(lock.args, vec!["100".to_string()], "the wait is not named");
 
         // Handing an authority away is the one that cannot be taken back, and
         // the sentence has to say so before it is signed.
@@ -1116,7 +1065,8 @@ mod tests {
             recovery: Some("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".to_string()),
         };
         let text = away.describe();
-        assert!(text.contains("cannot take it back"), "{text}");
+        assert_eq!(text.code, "change-recovery");
+        assert_eq!(text.args, vec!["iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".to_string()]);
         assert!(away.changes_authority());
 
         // And an authority change carries the SDK's explicit opt-in, without
@@ -1135,7 +1085,7 @@ mod tests {
             revocation: None,
             recovery: None,
         };
-        assert!(nothing.describe().contains("Nothing to change"));
+        assert_eq!(nothing.describe().code, "change-nothing");
     }
 
     /// Only the revocation asks for a word, and its sentence says why.
@@ -1164,20 +1114,12 @@ mod tests {
             );
         }
 
-        let revoke = Change::Revoke.describe();
-        assert!(
-            revoke.contains("recovery authority"),
-            "the sentence does not say who can undo it: {revoke}",
-        );
-        assert!(
-            revoke.contains("nothing can"),
-            "the sentence does not say when nobody can: {revoke}",
-        );
+        assert_eq!(Change::Revoke.describe().code, "change-revoke");
 
         // Recovery says what it restores, and deliberately does not offer to
         // move the primary addresses — which a recovery legitimately may do,
         // and which would be the most dangerous default in the application.
-        assert!(Change::Recover.describe().contains("primary addresses"));
+        assert_eq!(Change::Recover.describe().code, "change-recover");
     }
 
     /// The forward hash agrees with what the daemon derives for the same URI.

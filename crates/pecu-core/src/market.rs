@@ -453,7 +453,7 @@ pub fn detail(
     let started = venues.iter().filter(|(pool, _)| pool.started).count();
 
     let mut stats = vec![StatVm {
-        label: format!("Exit @2% · {name}"),
+        label: NoteVm::with("stat-exit-depth", [name.clone()]),
         value: quote
             .as_ref()
             .and_then(|quote| quote.depth)
@@ -461,20 +461,20 @@ pub fn detail(
     }];
     if let Some(pool) = book.pools.iter().find(|pool| pool.id == address) {
         stats.push(StatVm {
-            label: "Supply".to_string(),
+            label: NoteVm::plain("stat-supply"),
             value: pecu_protocol::format::approx(pool.supply),
         });
         stats.push(StatVm {
-            label: "Reserves".to_string(),
+            label: NoteVm::plain("stat-reserves"),
             value: pool.reserves.len().to_string(),
         });
     } else {
         stats.push(StatVm {
-            label: "Venues".to_string(),
+            label: NoteVm::plain("stat-venues"),
             value: format!("{started} of {}", venues.len()),
         });
         stats.push(StatVm {
-            label: "Quoted in".to_string(),
+            label: NoteVm::plain("stat-quoted-in"),
             value: quote_name.to_string(),
         });
     }

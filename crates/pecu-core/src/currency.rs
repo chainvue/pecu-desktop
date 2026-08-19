@@ -28,6 +28,7 @@
 
 use verus_sdk::currency::option;
 use verus_sdk::network::{CurrencySummary, RpcError};
+use pecu_protocol::NoteVm;
 
 /// What `proof_protocol` means when it is 2.
 ///
@@ -91,11 +92,11 @@ impl Kind {
     /// One sentence about what this kind *is*, for somebody who did not define
     /// it. Empty for a plain token, where the label already says everything and
     /// a row that explains "Token" is a row nobody reads.
-    pub fn note(self) -> &'static str {
+    pub fn note(self) -> NoteVm {
         match self {
-            Self::Token => "",
-            Self::Basket => "Holds reserves and converts between them.",
-            Self::Nft => "A single indivisible unit.",
+            Self::Token => NoteVm::none(),
+            Self::Basket => NoteVm::plain("kind-basket"),
+            Self::Nft => NoteVm::plain("kind-nft"),
         }
     }
 
@@ -127,7 +128,7 @@ pub fn row(summary: &CurrencySummary, tip: u32) -> pecu_protocol::CurrencyVm {
         address: summary.currency_id.clone(),
         kind: kind.label().to_string(),
         tone: kind.tone().to_string(),
-        note: kind.note().to_string(),
+        note: kind.note(),
         mintable: summary.proof_protocol == CENTRALIZED,
         start_block: thousands(u64::from(summary.start_block)),
         // A tip of zero means nothing has been read yet. Treated as started, so
@@ -203,29 +204,23 @@ pub fn classify(result: Result<CurrencySummary, RpcError>) -> Lookup {
 /// the timelock passes, so it fails at the node with nothing pointing back at
 /// the reason. Both are knowable before anything is built, from the status
 /// this wallet already reads.
-pub fn refusal(lookup: &Lookup, can_sign: bool, status: &str) -> String {
+pub fn refusal(lookup: &Lookup, can_sign: bool, status: &str) -> NoteVm {
     match lookup {
-        Lookup::Defines(summary) => format!(
-            "Already defines {}. An identity can define one currency, and only once.",
-            summary.fully_qualified_name,
+        Lookup::Defines(summary) => NoteVm::with(
+            "eligible-already-defines",
+            [summary.fully_qualified_name.clone()],
         ),
-        Lookup::Unknown(_) => {
-            "The node would not say whether this already defines a currency.".to_string()
-        }
-        Lookup::None if !can_sign => {
-            "This wallet does not hold the keys that sign for it.".to_string()
-        }
+        Lookup::Unknown(_) => NoteVm::plain("eligible-unknown"),
+        Lookup::None if !can_sign => NoteVm::plain("eligible-cannot-sign"),
         // Permanent, and the only one of these that stays true forever.
         Lookup::None if status == crate::identity::Status::Revoked.label() => {
-            "Revoked. A revoked identity cannot define a currency.".to_string()
+            NoteVm::plain("eligible-revoked")
         }
         // Not permanent, and the wording says which: a timelocked identity
         // cannot spend the output the launch has to spend, but it will be able
         // to.
-        Lookup::None if timelocked(status) => {
-            "Timelocked. Its output cannot be spent until the lock passes.".to_string()
-        }
-        Lookup::None => String::new(),
+        Lookup::None if timelocked(status) => NoteVm::plain("eligible-timelocked"),
+        Lookup::None => NoteVm::none(),
     }
 }
 
@@ -267,21 +262,23 @@ pub struct Problem {
     /// blocks a legal currency or waves through the one mistake that cannot be
     /// undone.
     pub blocking: bool,
-    pub text: String,
+    /// The reason, named. The words are in `note.slint` — the core knows a
+    /// weight set does not add up, not how to say so in Polish.
+    pub text: NoteVm,
 }
 
 impl Problem {
-    fn stop(text: impl Into<String>) -> Self {
+    fn stop(text: NoteVm) -> Self {
         Self {
             blocking: true,
-            text: text.into(),
+            text,
         }
     }
 
-    fn warn(text: impl Into<String>) -> Self {
+    fn warn(text: NoteVm) -> Self {
         Self {
             blocking: false,
-            text: text.into(),
+            text,
         }
     }
 }
@@ -351,20 +348,27 @@ fn identity_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem
     let name = draft.new_name.trim();
 
     match (identity.is_empty(), name.is_empty()) {
-        (true, true) => out.push(Problem::stop(
-            "Choose the identity this currency will be defined under, or claim a new name for it. \
-             A currency cannot exist without one.",
-        )),
+        (true, true) => out.push(Problem::stop(NoteVm::plain("draft-pick-identity"))),
         // Two answers to one question. Reachable only from a second interface
         // or a stale draft, and refused rather than resolved: guessing which
         // one was meant would define a currency under an identity nobody
         // chose.
-        (false, false) => out.push(Problem::stop(format!(
-            "This draft names both {identity} and a new name, {name}. It can only be defined under one.",
+        (false, false) => out.push(Problem::stop(NoteVm::with(
+            "draft-two-names",
+            [identity.to_string(), name.to_string()],
         ))),
         (true, false) => {
+            // The registrar's own refusal, passed through rather than wrapped.
+            // An earlier version built "{name} cannot be claimed. {problem}"
+            // and put the problem's **code** in as the second value — so the
+            // form read "LiveCoin cannot be claimed. name-bad-characters". A
+            // note's arguments are values; a note is not one of them, and there
+            // is no way to nest one inside another sentence in Slint.
+            //
+            // Nothing is lost by dropping the wrapper: the name is in the field
+            // directly above this line.
             if let Some(problem) = crate::identity::name_problem(name) {
-                out.push(Problem::stop(format!("{name} cannot be claimed. {problem}")));
+                out.push(Problem::stop(problem));
             }
         }
         (false, true) => {}
@@ -388,9 +392,7 @@ pub(crate) fn reserve_label(reserve: &pecu_protocol::ReserveDraft) -> &str {
 
 fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) {
     if draft.reserves.is_empty() {
-        out.push(Problem::stop(
-            "A basket needs at least one reserve. Without one it holds nothing and converts nothing.",
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-basket-no-reserves")));
         return;
     }
 
@@ -398,7 +400,7 @@ fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>)
     let mut seen: Vec<&str> = Vec::new();
     for reserve in &draft.reserves {
         if reserve.currency.trim().is_empty() {
-            out.push(Problem::stop("A reserve has no currency."));
+            out.push(Problem::stop(NoteVm::plain("draft-reserve-no-currency")));
             continue;
         }
         // Keyed on the i-address, exactly, and not on a lowercased name. Two
@@ -407,17 +409,17 @@ fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>)
         // what the definition will carry.
         let key = reserve.currency.trim();
         if seen.contains(&key) {
-            out.push(Problem::stop(format!(
-                "{} is listed twice. Each reserve appears once, with one weight.",
-                reserve_label(reserve),
+            out.push(Problem::stop(NoteVm::with(
+                "draft-reserve-twice",
+                [reserve_label(reserve).to_string()],
             )));
         }
         seen.push(key);
 
         match weight_units(&reserve.weight) {
-            Some(0) | None => out.push(Problem::stop(format!(
-                "{} has no weight. Every reserve needs a share of the basket.",
-                reserve_label(reserve),
+            Some(0) | None => out.push(Problem::stop(NoteVm::with(
+                "draft-reserve-no-weight",
+                [reserve_label(reserve).to_string()],
             ))),
             Some(units) => total += units,
         }
@@ -427,9 +429,9 @@ fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>)
     // one whole, and a set that sums to anything else builds a market with the
     // wrong prices in it — silently, and permanently.
     if total != ONE && !out.iter().any(|p| p.blocking) {
-        out.push(Problem::stop(format!(
-            "The weights add up to {}, not 100%. Consensus reads them as shares of one whole.",
-            percent(total),
+        out.push(Problem::stop(NoteVm::with(
+            "draft-weights-wrong",
+            [percent(total)],
         )));
     }
 }
@@ -437,27 +439,23 @@ fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>)
 fn nft_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) {
     if !draft.reserves.is_empty() {
         out.push(Problem::stop(
-            "An NFT holds no reserves. It is a single indivisible unit, and that is the whole of it.",
+            NoteVm::plain("draft-nft-no-reserves"),
         ));
     }
     if draft.preallocations.len() > 1 {
         out.push(Problem::stop(
-            "An NFT is one unit and can go to one holder.",
+            NoteVm::plain("draft-nft-one-holder"),
         ));
     }
     // Never broadcast successfully from this SDK. Said here rather than in a
     // footnote, because it is the one thing about this option somebody cannot
     // find out by reading the form.
-    out.push(Problem::warn(
-        "No NFT has ever been accepted by a node from this wallet's SDK. The transaction is built correctly against two live examples, and has never been sent.",
-    ));
+    out.push(Problem::warn(NoteVm::plain("draft-nft-never-sent")));
 }
 
 fn token_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) {
     if !draft.reserves.is_empty() {
-        out.push(Problem::stop(
-            "A token holds no reserves. Add them and it becomes a basket, which is a different thing.",
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-token-no-reserves")));
     }
 
     // The easiest catastrophic mistake in this form, and the SDK's own
@@ -472,22 +470,22 @@ fn token_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) 
 
     if supply == 0 && !draft.mintable {
         out.push(Problem::stop(
-            "This would launch a currency with no supply that can never be minted — it could never hold anything, and that cannot be undone.",
+            NoteVm::plain("draft-supply-none-ever"),
         ));
     } else if supply == 0 {
         out.push(Problem::warn(
-            "No starting supply. Nothing exists until it is minted, which only this identity can do.",
+            NoteVm::plain("draft-supply-mint-later"),
         ));
     }
 
     for allocation in &draft.preallocations {
         if allocation.recipient.trim().is_empty() {
-            out.push(Problem::stop("A preallocation has no recipient."));
+            out.push(Problem::stop(NoteVm::plain("draft-alloc-no-recipient")));
         }
         if coins_to_sats(&allocation.amount).is_none_or(|sats| sats <= 0) {
-            out.push(Problem::stop(format!(
-                "{} is allocated nothing.",
-                allocation.recipient.trim(),
+            out.push(Problem::stop(NoteVm::with(
+                "draft-alloc-nothing",
+                [allocation.recipient.trim().to_string()],
             )));
         }
     }
@@ -499,21 +497,18 @@ fn start_problems(draft: &pecu_protocol::CurrencyDraft, tip: u32, out: &mut Vec<
         // Consensus wants `start_block > tip`, and the tip moves while somebody
         // is reading the screen. A launch aimed at the current block is a
         // launch aimed at the past by the time it is signed.
-        out.push(Problem::stop(
-            "Choose how many blocks ahead it starts. Consensus refuses a currency that begins at or before the current block.",
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-start-needed")));
     } else if delay > FAR_AHEAD {
-        out.push(Problem::warn(format!(
-            "That is {} blocks away — roughly {} days. Nothing happens until then.",
-            thousands(u64::from(delay)),
-            delay / 1440,
+        out.push(Problem::warn(NoteVm::with(
+            "draft-start-far",
+            [thousands(u64::from(delay)), (delay / 1440).to_string()],
         )));
     }
 
     // Overflow rather than an argument: a delay that would push the start past
     // the end of the height space is not a schedule.
     if tip.checked_add(delay).is_none() {
-        out.push(Problem::stop("That start is beyond the end of the chain."));
+        out.push(Problem::stop(NoteVm::plain("draft-start-past-chain")));
     }
 }
 
@@ -665,12 +660,12 @@ pub fn choices(
             // reserve means, and it is invisible in a name. A basket whose
             // reserve has not begun holds something that does not exist yet.
             note: if tip > 0 && summary.start_block > tip {
-                format!(
-                    "Starts at block {}",
-                    thousands(u64::from(summary.start_block))
+                NoteVm::with(
+                    "currency-starts-at",
+                    [thousands(u64::from(summary.start_block))],
                 )
             } else {
-                String::new()
+                NoteVm::none()
             },
         })
         .collect();
@@ -679,7 +674,7 @@ pub fn choices(
         rows,
         more,
         loading: false,
-        problem: String::new(),
+        problem: NoteVm::none(),
     }
 }
 
@@ -741,15 +736,15 @@ fn bar<'a>(
 /// `plan` drops it, because by the time that list is read the name is on the
 /// screen above it.
 const CLAIMING: [(&str, bool); 4] = [
-    ("Choose a name", false),
-    ("Register the identity", true),
-    ("Wait for it to confirm", false),
-    ("Define the currency", true),
+    ("step-choose-a-name", false),
+    ("step-register-the-identity", true),
+    ("step-wait-to-confirm", false),
+    ("step-define-the-currency", true),
 ];
 
 fn flow_step(label: &str, state: &str, costs: bool) -> pecu_protocol::FlowStepVm {
     pecu_protocol::FlowStepVm {
-        label: label.to_string(),
+        label: NoteVm::plain(label),
         state: state.to_string(),
         costs,
     }
@@ -778,7 +773,7 @@ fn flow_step(label: &str, state: &str, costs: bool) -> pecu_protocol::FlowStepVm
 /// Every state here is `later`: this is read before anything has happened.
 pub fn plan(draft: &pecu_protocol::CurrencyDraft) -> Vec<pecu_protocol::FlowStepVm> {
     if draft.new_name.trim().is_empty() {
-        return vec![flow_step("Define the currency", "later", true)];
+        return vec![flow_step("step-define-the-currency", "later", true)];
     }
 
     // Everything after choosing the name, which is `CLAIMING`'s first entry and
@@ -844,20 +839,20 @@ fn under(
     if !identity.is_empty() {
         let named = identity_name.trim();
         return if named.is_empty() {
-            vec![("Defined under", identity.to_string())]
+            vec![("field-defined-under", identity.to_string())]
         } else {
             vec![
-                ("Defined under", named.to_string()),
-                ("Its address", identity.to_string()),
+                ("field-defined-under", named.to_string()),
+                ("field-its-address", identity.to_string()),
             ]
         };
     }
 
     let name = draft.new_name.trim();
     if name.is_empty() {
-        return vec![("Defined under", "— not chosen —".to_string())];
+        return vec![("field-defined-under", "— not chosen —".to_string())];
     }
-    vec![("Defined under", format!("{name}@ (to be claimed)"))]
+    vec![("field-defined-under", format!("{name}@ (to be claimed)"))]
 }
 
 /// What would go on the chain, in the order a definition is read.
@@ -874,31 +869,38 @@ fn preview(
     identity_name: &str,
 ) -> Vec<pecu_protocol::CurrencyFieldVm> {
     let field = |label: &str, value: String, permanent: bool| pecu_protocol::CurrencyFieldVm {
-        label: label.to_string(),
+        label: NoteVm::plain(label),
         value,
+        value_note: NoteVm::none(),
         permanent,
     };
+    // The two lines whose value is a sentence rather than a figure.
+    let sentence = |label: &str, value: &str| pecu_protocol::CurrencyFieldVm {
+        label: NoteVm::plain(label),
+        value: String::new(),
+        value_note: NoteVm::plain(value),
+        permanent: true,
+    };
 
-    let mut out = vec![field("Kind", kind.label().to_string(), true)];
+    let mut out = vec![field("field-kind", kind.label().to_string(), true)];
     for (label, value) in under(draft, identity_name) {
         out.push(field(label, value, true));
     }
     out.extend([
-        field("Starts at block", thousands(u64::from(start)), true),
-        field(
-            "Supply can grow",
+        field("field-starts-at-block", thousands(u64::from(start)), true),
+        sentence(
+            "field-supply-can-grow",
             if draft.mintable {
-                "Yes — this identity may mint more".to_string()
+                "field-mintable-yes"
             } else {
-                "No — fixed at launch, forever".to_string()
+                "field-mintable-no"
             },
-            true,
         ),
     ]);
 
     if kind == Kind::Basket {
         out.push(field(
-            "Reserves",
+            "field-reserves",
             if draft.reserves.is_empty() {
                 "— none —".to_string()
             } else {
@@ -921,7 +923,7 @@ fn preview(
 
     if kind != Kind::Nft {
         out.push(field(
-            "Starting supply",
+            "field-starting-supply",
             format!("{} {ticker}", sats_display(supply)),
             true,
         ));
@@ -981,8 +983,8 @@ pub fn definition(
                     .get(key)
                     .ok_or_else(|| format!("{key} could not be resolved to an identity"))?
             }
-            [] => return Err("An NFT needs a holder.".to_string()),
-            _ => return Err("An NFT needs exactly one holder.".to_string()),
+            [] => return Err("an NFT needs a holder".to_string()),
+            _ => return Err("an NFT needs exactly one holder".to_string()),
         };
         return Ok(CurrencyDefinition::nft(parent, name, start_block, holder));
     }
@@ -1289,7 +1291,7 @@ mod tests {
             message: "Invalid currency or currency not found".to_string(),
         }));
         assert!(matches!(missing, Lookup::None));
-        assert!(refusal(&missing, true, ACTIVE).is_empty());
+        assert_eq!(refusal(&missing, true, ACTIVE).code, "");
 
         // And `-5` stays accepted: a node that answers with it means the same
         // thing, and there is no reading of it here that would be dangerous.
@@ -1303,8 +1305,9 @@ mod tests {
             method: "getcurrency",
         }));
         assert!(matches!(quiet, Lookup::Unknown(_)));
-        assert!(
-            !refusal(&quiet, true, ACTIVE).is_empty(),
+        assert_eq!(
+            refusal(&quiet, true, ACTIVE).code,
+            "eligible-unknown",
             "a node that would not answer left the identity offered as free",
         );
     }
@@ -1313,8 +1316,8 @@ mod tests {
     fn an_identity_that_already_defines_one_says_which() {
         let taken = classify(Ok(summary(option::TOKEN, 1)));
         let said = refusal(&taken, true, ACTIVE);
-        assert!(said.contains("demo"), "{said}");
-        assert!(said.contains("only once"), "{said}");
+        assert_eq!(said.code, "eligible-already-defines");
+        assert!(said.args.iter().any(|arg| arg.contains("demo")), "{said:?}");
     }
 
     /// A key this wallet does not hold is a different refusal from a currency
@@ -1325,8 +1328,7 @@ mod tests {
             code: -5,
             message: String::new(),
         }));
-        let said = refusal(&free, false, ACTIVE);
-        assert!(said.contains("keys"), "{said}");
+        assert_eq!(refusal(&free, false, ACTIVE).code, "eligible-cannot-sign");
     }
 
     /// An identity nothing can be launched from is refused in the picker, not
@@ -1343,22 +1345,24 @@ mod tests {
         }));
 
         let revoked = refusal(&free, true, crate::identity::Status::Revoked.label());
-        assert!(revoked.contains("Revoked"), "{revoked}");
+        assert_eq!(revoked.code, "eligible-revoked");
 
         for status in [
             crate::identity::Status::Locked { delay: 20 },
             crate::identity::Status::Unlocking { at: 1_200_000 },
         ] {
             let said = refusal(&free, true, status.label());
-            assert!(
-                said.contains("Timelocked"),
+            assert_eq!(
+                said.code,
+                "eligible-timelocked",
                 "{} was offered as able to define a currency: {said:?}",
                 status.label(),
             );
         }
 
-        assert!(
-            refusal(&free, true, crate::identity::Status::Active.label()).is_empty(),
+        assert_eq!(
+            refusal(&free, true, crate::identity::Status::Active.label()).code,
+            "",
             "an ordinary identity was refused",
         );
     }
@@ -1418,11 +1422,16 @@ mod tests {
         }
     }
 
+    /// The codes of everything that stops a launch.
+    ///
+    /// Codes rather than sentences: what these tests are about is *which*
+    /// refusal fires, and a test that matched on wording would go red the day
+    /// somebody improved a sentence and green the day one changed meaning.
     fn blocking(problems: &[Problem]) -> Vec<String> {
         problems
             .iter()
             .filter(|p| p.blocking)
-            .map(|p| p.text.clone())
+            .map(|p| p.text.code.clone())
             .collect()
     }
 
@@ -1437,10 +1446,13 @@ mod tests {
         let mut wrong = draft("basket");
         wrong.reserves = vec![reserve("VRSCTEST", "40"), reserve("Bridge.vETH", "40")];
 
-        let said = blocking(&problems(&wrong, 1_000));
-        assert_eq!(said.len(), 1, "{said:?}");
-        assert!(said[0].contains("80%"), "{}", said[0]);
-        assert!(said[0].contains("not 100%"), "{}", said[0]);
+        let said = problems(&wrong, 1_000);
+        let stopping: Vec<&Problem> = said.iter().filter(|p| p.blocking).collect();
+        assert_eq!(stopping.len(), 1, "{said:?}");
+        assert_eq!(stopping[0].text.code, "draft-weights-wrong");
+        // The total travels with the reason, because "they do not add up" and
+        // "they add up to 80%" are different amounts of help.
+        assert_eq!(stopping[0].text.args, vec!["80%".to_string()]);
 
         let mut right = wrong.clone();
         right.reserves = vec![reserve("VRSCTEST", "40"), reserve("Bridge.vETH", "60")];
@@ -1494,7 +1506,7 @@ mod tests {
         let empty = draft("token");
         let said = blocking(&problems(&empty, 1_000));
         assert!(
-            said.iter().any(|s| s.contains("never hold anything")),
+            said.iter().any(|code| code == "draft-supply-none-ever"),
             "{said:?}",
         );
 
@@ -1518,12 +1530,12 @@ mod tests {
         token.reserves = vec![reserve("VRSCTEST", "100")];
         assert!(blocking(&problems(&token, 1_000))
             .iter()
-            .any(|s| s.contains("becomes a basket")),);
+            .any(|code| code == "draft-token-no-reserves"),);
 
         let bare = draft("basket");
         assert!(blocking(&problems(&bare, 1_000))
             .iter()
-            .any(|s| s.contains("at least one reserve")),);
+            .any(|code| code == "draft-basket-no-reserves"),);
     }
 
     /// Consensus refuses a start at or before the tip, and the tip moves while
@@ -1535,7 +1547,7 @@ mod tests {
         now.start_delay = "0".to_string();
         assert!(blocking(&problems(&now, 1_000))
             .iter()
-            .any(|s| s.contains("blocks ahead")),);
+            .any(|code| code == "draft-start-needed"),);
     }
 
     /// A currency has to be defined under something, and under exactly one
@@ -1553,7 +1565,7 @@ mod tests {
         assert!(
             blocking(&problems(&nothing, 1_000))
                 .iter()
-                .any(|s| s.contains("claim a new name")),
+                .any(|code| code == "draft-pick-identity"),
             "a draft with nothing to define under was allowed",
         );
 
@@ -1572,7 +1584,7 @@ mod tests {
         assert!(
             blocking(&problems(&both, 1_000))
                 .iter()
-                .any(|s| s.contains("only be defined under one")),
+                .any(|code| code == "draft-two-names"),
             "a draft naming two things to define under was allowed",
         );
     }
@@ -1586,10 +1598,18 @@ mod tests {
         shouting.identity = String::new();
         shouting.new_name = "LiveCoin".to_string();
 
-        let said = blocking(&problems(&shouting, 1_000));
-        assert!(
-            said.iter().any(|s| s.contains("lowercase")),
-            "a name with capitals was accepted: {said:?}",
+        // The registrar's own complaint travels as an argument: the rule is
+        // its, and restating it here would be a second copy to drift from.
+        // The registrar's refusal, unwrapped — see `identity_problems`.
+        let refused = problems(&shouting, 1_000);
+        let named = refused
+            .iter()
+            .find(|p| p.text.code == "name-bad-characters")
+            .expect("a name with capitals was accepted");
+        assert_eq!(
+            named.text.args,
+            vec!["LC".to_string()],
+            "the refusal does not name the characters to remove",
         );
     }
 
@@ -1664,12 +1684,13 @@ mod tests {
     fn a_currency_that_has_not_started_is_marked() {
         let found = choices(&catalog(), "later", &[], 1_000);
         assert_eq!(found.rows.len(), 1);
-        assert!(found.rows[0].note.contains("9 000"), "{:?}", found.rows[0]);
+        assert_eq!(found.rows[0].note.code, "currency-starts-at");
+        assert_eq!(found.rows[0].note.args, vec!["9 000".to_string()]);
 
         // And with no tip yet, nothing is claimed either way — a wallet that
         // has not read a block height cannot know what has started.
         let unknown = choices(&catalog(), "later", &[], 0);
-        assert!(unknown.rows[0].note.is_empty(), "{:?}", unknown.rows[0]);
+        assert_eq!(unknown.rows[0].note.code, "", "{:?}", unknown.rows[0]);
     }
 
     /// The kind comes off the options bitfield, which is what decides it.
@@ -1721,7 +1742,7 @@ mod tests {
             "a plan claimed something was already under way: {long:?}",
         );
         assert!(
-            !long.iter().any(|step| step.label.contains("Choose")),
+            !long.iter().any(|step| step.label.code == "step-choose-a-name"),
             "choosing the name is a form field, not a transaction: {long:?}",
         );
     }
@@ -1742,8 +1763,8 @@ mod tests {
 
         // Same steps, same order, in both renderings — the property that lets
         // one component draw a plan and a progress without them disagreeing.
-        let labels: Vec<&String> = waiting.iter().map(|s| &s.label).collect();
-        let after: Vec<&String> = ready.iter().map(|s| &s.label).collect();
+        let labels: Vec<&str> = waiting.iter().map(|s| s.label.code.as_str()).collect();
+        let after: Vec<&str> = ready.iter().map(|s| s.label.code.as_str()).collect();
         assert_eq!(labels, after);
     }
 
@@ -1757,7 +1778,7 @@ mod tests {
         assert!(
             found
                 .iter()
-                .any(|p| !p.blocking && p.text.contains("has never been sent")),
+                .any(|p| !p.blocking && p.text.code == "draft-nft-never-sent"),
             "{found:?}",
         );
     }
@@ -1789,9 +1810,9 @@ mod tests {
         let mintable = view
             .preview
             .iter()
-            .find(|f| f.label == "Supply can grow")
+            .find(|f| f.label.code == "field-supply-can-grow")
             .expect("the preview says whether the supply can grow");
-        assert!(mintable.value.contains("forever"), "{}", mintable.value);
+        assert_eq!(mintable.value_note.code, "field-mintable-no");
         assert_eq!(view.start_block, "1 188 020");
     }
 
@@ -1811,12 +1832,15 @@ mod tests {
         let value = |label: &str| {
             view.preview
                 .iter()
-                .find(|field| field.label == label)
+                .find(|field| field.label.code == label)
                 .map(|field| field.value.clone())
         };
-        assert_eq!(value("Defined under").as_deref(), Some("spare.VRSCTEST@"));
         assert_eq!(
-            value("Its address").as_deref(),
+            value("field-defined-under").as_deref(),
+            Some("spare.VRSCTEST@")
+        );
+        assert_eq!(
+            value("field-its-address").as_deref(),
             Some(token.identity.as_str())
         );
 
@@ -1827,7 +1851,7 @@ mod tests {
         assert_eq!(
             bare.preview
                 .iter()
-                .find(|field| field.label == "Defined under")
+                .find(|field| field.label.code == "field-defined-under")
                 .map(|field| field.value.as_str()),
             Some(token.identity.as_str()),
         );
@@ -1835,7 +1859,7 @@ mod tests {
             !bare
                 .preview
                 .iter()
-                .any(|field| field.label == "Its address"),
+                .any(|field| field.label.code == "field-its-address"),
             "an address was repeated under two labels",
         );
 
@@ -1850,14 +1874,14 @@ mod tests {
             ahead
                 .preview
                 .iter()
-                .find(|field| field.label == "Defined under")
+                .find(|field| field.label.code == "field-defined-under")
                 .map(|field| field.value.as_str()),
             Some("livecoin@ (to be claimed)"),
         );
         assert!(!ahead
             .preview
             .iter()
-            .any(|field| field.label == "Its address"));
+            .any(|field| field.label.code == "field-its-address"));
     }
 
     /// A currency that has not reached its start block is not shown as running.

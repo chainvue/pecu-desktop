@@ -541,30 +541,28 @@ export component AppWindow inherits Window {
                     // fields they are about, and repeating one here would put
                     // half a problem in two places.
                     note: CurrencyState.form-step == "kind"
-                        ? @tr("Nothing is spent yet.")
+                        ? { code: "bar-nothing-spent" }
                         : CurrencyState.form-step == "under"
                             ? (CurrencyState.claiming
                                 ? (CurrencyState.new-name == ""
-                                    ? @tr("Type a name to continue")
-                                    : CurrencyState.new-name-problem != ""
+                                    ? { code: "bar-type-a-name" }
+                                    : CurrencyState.new-name-problem.code != ""
                                         ? CurrencyState.new-name-problem
-                                        : @tr("Nothing is spent yet."))
+                                        : { code: "bar-nothing-spent" })
                                 : CurrencyState.identity == ""
-                                    ? @tr("Choose an identity, or claim a new name.")
-                                    : @tr("Nothing is spent yet."))
+                                    ? { code: "bar-choose-identity" }
+                                    : { code: "bar-nothing-spent" })
                             : CurrencyState.form-step == "authority"
                                 ? (CurrencyState.new-authority == ""
-                                    ? @tr("Choose one. This cannot be changed for free later.")
+                                    ? { code: "bar-choose-authority" }
                                     : CurrencyState.new-authority == "other"
                                         && CurrencyState.new-recovery == ""
-                                        ? @tr("Name the recovery authority, or choose the other answer.")
-                                        : @tr("Nothing is spent yet."))
+                                        ? { code: "bar-name-recovery" }
+                                        : { code: "bar-nothing-spent" })
                                 : CurrencyState.blocking-count > 0
-                                    ? @tr("{n} thing to fix, above"
-                                          | "{n} things to fix, above"
-                                          % CurrencyState.blocking-count)
+                                    ? { code: "bar-things-to-fix", args: [CurrencyState.blocking-count + ""] }
                                     : CurrencyState.form-step == "setup"
-                                        ? @tr("Nothing is spent yet.")
+                                        ? { code: "bar-nothing-spent" }
                                         // Not the same sentence on both paths.
                                         // Under an identity that exists, the
                                         // next screen is a review and nothing
@@ -576,11 +574,11 @@ export component AppWindow inherits Window {
                                         // above a button that spends a hundred
                                         // coins.
                                         : CurrencyState.claiming
-                                            ? @tr("This press claims the name and pays for it. The launch is reviewed after.")
-                                            : @tr("Nothing is blocking it. The next screen is a review — nothing is spent yet.");
+                                            ? { code: "bar-claims-and-pays" }
+                                            : { code: "bar-nothing-blocking" };
                     note-bad: CurrencyState.form-step == "under"
                         ? (CurrencyState.claiming
-                            ? CurrencyState.new-name-problem != ""
+                            ? CurrencyState.new-name-problem.code != ""
                             : false)
                         : CurrencyState.form-step == "authority"
                             ? CurrencyState.new-authority == ""
@@ -605,7 +603,7 @@ export component AppWindow inherits Window {
                         ? true
                         : CurrencyState.form-step == "under"
                             ? (CurrencyState.claiming
-                                ? (CurrencyState.new-name != "" && CurrencyState.new-name-problem == "")
+                                ? (CurrencyState.new-name != "" && CurrencyState.new-name-problem.code == "")
                                 : CurrencyState.identity != "")
                             : CurrencyState.form-step == "authority"
                                 ? (CurrencyState.new-authority == "none"
@@ -613,7 +611,7 @@ export component AppWindow inherits Window {
                                         && CurrencyState.new-recovery != ""))
                                 : CurrencyState.ready
                                     && (!CurrencyState.claiming
-                                        || CurrencyState.new-name-problem == "");
+                                        || CurrencyState.new-name-problem.code == "");
                     back => {
                         if (CurrencyState.form-step == "review") {
                             CurrencyState.form-step = "setup";
@@ -662,27 +660,28 @@ export component AppWindow inherits Window {
                               IdentityState.name-fee, WalletState.ticker);
                     note: IdentityState.claim-step == "name"
                         ? (IdentityState.name-draft == ""
-                            ? @tr("Type a name to continue")
-                            : IdentityState.name-problem != ""
+                            ? { code: "bar-type-a-name" }
+                            : IdentityState.name-problem.code != ""
                                 ? IdentityState.name-problem
-                                : @tr("Nothing is spent yet."))
+                                : { code: "bar-nothing-spent" })
                         : IdentityState.claim-step == "authority"
                             ? (IdentityState.claim-authority == ""
-                                ? @tr("Choose one. This cannot be changed for free later.")
+                                ? { code: "bar-choose-authority" }
                                 : IdentityState.claim-authority == "other"
                                     && IdentityState.recovery-draft == ""
-                                    ? @tr("Name the recovery authority, or choose the other answer.")
-                                    : @tr("Nothing is spent yet."))
-                            : @tr("This press signs and sends the first transaction.");
+                                    ? { code: "bar-name-recovery" }
+                                    : { code: "bar-nothing-spent" })
+                            : { code: "bar-first-transaction" };
                     note-bad: IdentityState.claim-step == "name"
-                        ? IdentityState.name-problem != ""
-                        : IdentityState.claim-step == "authority" && IdentityState.claim-authority == "";
+                        ? IdentityState.name-problem.code != ""
+                        : IdentityState.claim-step == "authority"
+                            && IdentityState.claim-authority == "";
                     back-text: IdentityState.claim-step == "name" ? @tr("Cancel") : @tr("Back");
                     primary-text: IdentityState.claim-step == "review"
                         ? (IdentityState.reg-busy ? @tr("Working…") : @tr("Claim this name"))
                         : @tr("Next");
                     primary-enabled: IdentityState.claim-step == "name"
-                        ? (IdentityState.name-draft != "" && IdentityState.name-problem == "")
+                        ? (IdentityState.name-draft != "" && IdentityState.name-problem.code == "")
                         : IdentityState.claim-step == "authority"
                             ? (IdentityState.claim-authority == "none"
                                 || (IdentityState.claim-authority == "other"

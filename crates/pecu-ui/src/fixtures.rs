@@ -134,28 +134,28 @@ pub fn history(ui: &AppWindow) {
 
     let wallet = ui.global::<WalletState>();
     wallet.set_history(ModelRc::from(Rc::new(VecModel::from(vec![
-        dated("in", "+120.0000 0000", "14:02", "Today", 1_187_400),
+        dated("in", "+120.0000 0000", "2 hours", "today", 1_187_400),
         activity_of(
             "login",
             "forum.verus.io · as robert.VRSCTEST@",
             "—",
-            "13:40",
+            "3 hours",
             "",
         ),
-        dated("out", "−50.0000 0000", "11:38", "", 1_187_380),
+        dated("out", "−50.0000 0000", "5 hours", "", 1_187_380),
         activity_of(
             "convert",
             "250 VRSCTEST → 134.12 DAI.vETH · via Bridge.vETH",
             "250.0000 0000",
-            "09:15",
+            "7 hours",
             "",
         ),
         activity_of(
             "identity",
             "Recovery address changed",
             "—",
-            "08:05",
-            "Yesterday",
+            "1 days",
+            "yesterday",
         ),
         dated("in", "+5.0000 0000", "pending", "", 0),
     ]))));
@@ -165,19 +165,19 @@ pub fn history(ui: &AppWindow) {
     ui.global::<ActivityState>()
         .set_stats(ModelRc::from(Rc::new(VecModel::from(vec![
             Stat {
-                label: "Transactions · 30d".into(),
+                label: note("stat-transactions-30d", &[]),
                 value: "48".into(),
             },
             Stat {
-                label: "Sent · 30d".into(),
+                label: note("stat-sent-30d", &[]),
                 value: "3 410.00".into(),
             },
             Stat {
-                label: "Received · 30d".into(),
+                label: note("stat-received-30d", &[]),
                 value: "5 102.00".into(),
             },
             Stat {
-                label: "Sign-ins · 30d".into(),
+                label: note("stat-signins-30d", &[]),
                 value: "12".into(),
             },
         ]))));
@@ -297,15 +297,15 @@ pub fn market_detail(ui: &AppWindow) {
     state.set_detail_tone("unknown".into());
     state.set_detail_stats(ModelRc::from(Rc::new(VecModel::from(vec![
         Stat {
-            label: "Exit @2% · VRSCTEST".into(),
+            label: note("stat-exit-depth", &["VRSCTEST"]),
             value: "1 249".into(),
         },
         Stat {
-            label: "Venues".into(),
+            label: note("stat-venues", &[]),
             value: "1 of 2".into(),
         },
         Stat {
-            label: "Quoted in".into(),
+            label: note("stat-quoted-in", &[]),
             value: "DAI.vETH".into(),
         },
     ]))));
@@ -614,7 +614,7 @@ pub fn tx_detail(ui: &AppWindow) {
 
     let tx = ui.global::<TxState>();
     tx.set_txid("685ffac53fc525a4cefa5ed334139aebace508cbe293a41e6edba096f22517a5".into());
-    tx.set_when("2 hours ago".into());
+    tx.set_when(note("when-hours", &["2"]));
     tx.set_amount("+12 345.0000 0000 mambo".into());
     tx.set_direction("in".into());
     // A token movement: the amount already names its currency.
@@ -758,7 +758,7 @@ pub fn receiving(ui: &AppWindow) {
             address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
             status: "Active".into(),
             tone: "online".into(),
-            note: SharedString::new(),
+            note: Note::default(),
             mine: true,
         }]))));
 
@@ -836,7 +836,7 @@ pub fn funded(ui: &AppWindow) {
     ]))));
 
     let recent = vec![
-        activity("in", "+120.0000 0000", "2 hours ago", false),
+        activity("in", "+120.0000 0000", "2 hours", false),
         activity("out", "−50.0000 0000", "yesterday", false),
         activity("in", "+5.0000 0000", "pending", true),
     ];
@@ -850,14 +850,14 @@ pub fn funded(ui: &AppWindow) {
     // offered — the state the Activity screen is in almost all of the time.
     wallet.set_history_complete(false);
     wallet.set_history(ModelRc::from(Rc::new(VecModel::from(vec![
-        dated("in", "+120.0000 0000", "2 hours ago", "Today", 1_187_400),
+        dated("in", "+120.0000 0000", "2 hours", "today", 1_187_400),
         dated("in", "+5.0000 0000", "pending", "", 0),
-        dated("out", "−50.0000 0000", "yesterday", "Yesterday", 1_186_200),
+        dated("out", "−50.0000 0000", "yesterday", "yesterday", 1_186_200),
         dated(
             "in",
             "+12 345.0000 0000 mambo",
-            "3 days ago",
-            "9 August",
+            "3 days",
+            "9 7",
             1_184_000,
         ),
     ]))));
@@ -941,12 +941,63 @@ fn activity_in(
         txid_short: "fixtu…ction".into(),
         direction: direction.into(),
         amount: amount.into(),
-        when: when.into(),
+        when: when_note(when),
         pending,
         height: 0,
-        group: group.into(),
+        group: group_note(group),
         kind: "payment".into(),
-        note: "".into(),
+        note: SharedString::new(),
+    }
+}
+
+/// A relative time, as the core spells one.
+///
+/// The fixtures used to write a clock — "14:02" — and the wallet has never
+/// produced one: `portfolio::when` says "2 hours ago", in the row's own
+/// language. A reference image of a format the product cannot emit is a picture
+/// of a different wallet.
+// Panicking is the point. These run only when a reference image is being
+// rendered, so a refusal here is a failed render rather than anything a user
+// could reach — and the alternative, returning an empty note, is what let
+// "2 hours ago" become the code `when-hours ago` and print itself on the
+// dashboard for one commit.
+#[allow(clippy::panic)]
+fn when_note(shorthand: &str) -> Note {
+    match shorthand {
+        "pending" => note("when-pending", &[]),
+        "now" => note("when-just-now", &[]),
+        "yesterday" => note("when-yesterday", &[]),
+        other => match other.split_once(' ') {
+            Some((count, unit))
+                if matches!(unit, "minutes" | "hours" | "days" | "months") =>
+            {
+                note(&format!("when-{unit}"), &[count])
+            }
+            // Anything else is a fixture writing a shape the core does not
+            // emit. Refused loudly rather than turned into a code nobody wrote
+            // a sentence for — "2 hours ago" became `when-hours ago`, and the
+            // dashboard printed exactly that.
+            _ => panic!("a fixture asked for a time this wallet cannot say: {other:?}"),
+        },
+    }
+}
+
+/// A day heading, likewise.
+#[allow(clippy::panic)]
+fn group_note(shorthand: &str) -> Note {
+    match shorthand {
+        "" => Note::default(),
+        "today" => note("day-today", &[]),
+        "yesterday" => note("day-yesterday", &[]),
+        "pending" => note("day-pending", &[]),
+        // "9 7" — the ninth of month index seven, which is August. The index
+        // rather than the name, because that is what the core sends: naming
+        // the month is `note.slint`'s job, and a fixture that named it here
+        // would photograph a heading the wallet cannot produce.
+        other => match other.split_once(' ') {
+            Some((day, month)) => note("day-this-year", &[day, month]),
+            None => panic!("a fixture asked for a day heading in a shape the core does not send: {other:?}"),
+        },
     }
 }
 
@@ -962,10 +1013,10 @@ fn activity_of(kind: &str, note: &str, amount: &str, when: &str, group: &str) ->
         txid_short: "fixtu…ction".into(),
         direction: "self".into(),
         amount: amount.into(),
-        when: when.into(),
+        when: when_note(when),
         pending: false,
         height: 1_187_400,
-        group: group.into(),
+        group: group_note(group),
         kind: kind.into(),
         note: note.into(),
     }
@@ -1048,7 +1099,7 @@ pub fn network_trouble(ui: &AppWindow) {
             network: "Testnet".into(),
             tip: "1 187 102".into(),
             latency: "612 ms".into(),
-            note: "behind the chain by 398 blocks".into(),
+            note: note("node-catching-up", &["1 187 102", "1 187 500"]),
             builtin: true,
             active: true,
         },
@@ -1060,7 +1111,7 @@ pub fn network_trouble(ui: &AppWindow) {
             network: "Mainnet".into(),
             tip: "3 402 118".into(),
             latency: "132 ms".into(),
-            note: "this node is on Mainnet".into(),
+            note: note("node-other-chain", &["Mainnet"]),
             builtin: true,
             active: false,
         },
@@ -1072,7 +1123,7 @@ pub fn network_trouble(ui: &AppWindow) {
             network: SharedString::new(),
             tip: SharedString::new(),
             latency: SharedString::new(),
-            note: "connection refused".into(),
+            note: note("node-offline", &["connection refused"]),
             builtin: false,
             active: false,
         },
@@ -1158,7 +1209,7 @@ pub fn identities(ui: &AppWindow) {
             address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
             status: "Active".into(),
             tone: "online".into(),
-            note: "".into(),
+            note: Note::default(),
             mine: true,
         },
         IdentityRow {
@@ -1166,7 +1217,7 @@ pub fn identities(ui: &AppWindow) {
             address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
             status: "Locked".into(),
             tone: "degraded".into(),
-            note: "Funds held. Unlocking starts a 100-block wait.".into(),
+            note: note("identity-locked", &["100"]),
             mine: true,
         },
         IdentityRow {
@@ -1174,7 +1225,7 @@ pub fn identities(ui: &AppWindow) {
             address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
             status: "Unlocking".into(),
             tone: "degraded".into(),
-            note: "Unlocks at block 1 188 900".into(),
+            note: note("identity-unlocking", &["1 188 900"]),
             mine: true,
         },
     ];
@@ -1194,7 +1245,7 @@ pub fn identities(ui: &AppWindow) {
         address: "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr".into(),
         status: "Revoked".into(),
         tone: "offline".into(),
-        note: "Only its recovery authority can bring it back.".into(),
+        note: note("identity-revoked", &[]),
         mine: false,
     }]))));
 }
@@ -1218,7 +1269,7 @@ pub fn currencies(ui: &AppWindow) {
             address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
             kind: "Token".into(),
             tone: "online".into(),
-            note: "".into(),
+            note: Note::default(),
             mintable: false,
             start_block: "1 170 000".into(),
             started: true,
@@ -1228,7 +1279,7 @@ pub fn currencies(ui: &AppWindow) {
             address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
             kind: "Basket".into(),
             tone: "online".into(),
-            note: "Holds reserves and converts between them.".into(),
+            note: note("kind-basket", &[]),
             mintable: true,
             start_block: "1 171 402".into(),
             // Launched and not yet begun — the twenty-minute window in which a
@@ -1242,9 +1293,7 @@ pub fn currencies(ui: &AppWindow) {
         EligibleIdentity {
             name: "demo.VRSCTEST@".into(),
             address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
-            refusal:
-                "Already defines demo.VRSCTEST. An identity can define one currency, and only once."
-                    .into(),
+            refusal: note("eligible-already-defines", &["demo.VRSCTEST"]),
         },
         // The second currency's own identity. Present with a refusal rather
         // than absent: every identity appears in this list, and one that had
@@ -1253,7 +1302,7 @@ pub fn currencies(ui: &AppWindow) {
         EligibleIdentity {
             name: "market.VRSCTEST@".into(),
             address: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
-            refusal: "Already defines market.VRSCTEST. An identity can define one currency, and only once.".into(),
+            refusal: note("eligible-already-defines", &["market.VRSCTEST"]),
         },
         // The two refusals that are about the identity's state rather than
         // about a currency. Both are refused in the picker now, and neither had
@@ -1263,17 +1312,17 @@ pub fn currencies(ui: &AppWindow) {
         EligibleIdentity {
             name: "vault.VRSCTEST@".into(),
             address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
-            refusal: "Timelocked. Its output cannot be spent until the lock passes.".into(),
+            refusal: note("eligible-timelocked", &[]),
         },
         EligibleIdentity {
             name: "gone.VRSCTEST@".into(),
             address: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
-            refusal: "Revoked. A revoked identity cannot define a currency.".into(),
+            refusal: note("eligible-revoked", &[]),
         },
         EligibleIdentity {
             name: "spare.VRSCTEST@".into(),
             address: "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr".into(),
-            refusal: "".into(),
+            refusal: Note::default(),
         },
         EligibleIdentity {
             name: "borrowed.VRSCTEST@".into(),
@@ -1284,7 +1333,7 @@ pub fn currencies(ui: &AppWindow) {
             // has, so the same twenty bytes appeared twice on one screen under
             // two different names.
             address: "i5irTLNFVvjQESy3bMjxoG7CXg8Ntmdc9V".into(),
-            refusal: "This wallet does not hold the keys that sign for it.".into(),
+            refusal: note("eligible-cannot-sign", &[]),
         },
     ]))));
 }
@@ -1351,16 +1400,16 @@ pub fn defining_currency(ui: &AppWindow) {
     state.set_fee("200.0000 0000".into());
 
     state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
-        field("Kind", "Basket"),
+        field("field-kind", "Basket"),
         // Both, because they answer different halves of one check: the name
         // is what was chosen, the address is what goes on the chain, and
         // nobody can verify an address they never typed.
-        field("Defined under", "spare.VRSCTEST@"),
-        field("Its address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
-        field("Starts at block", "1 187 520"),
-        field("Supply can grow", "Yes — this identity may mint more"),
-        field("Reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
-        field("Starting supply", "1 000 000.0000 0000 VRSCTEST"),
+        field("field-defined-under", "spare.VRSCTEST@"),
+        field("field-its-address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
+        field("field-starts-at-block", "1 187 520"),
+        sentence("field-supply-can-grow", "field-mintable-yes"),
+        field("field-reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
+        field("field-starting-supply", "1 000 000.0000 0000 VRSCTEST"),
     ]))));
 
     // One transaction, because this is the short path: an identity that already
@@ -1456,21 +1505,18 @@ pub fn currency_nft(ui: &AppWindow) {
         Vec::<CurrencySlice>::new(),
     ))));
     state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
-        field("Kind", "NFT"),
-        field("Defined under", "spare.VRSCTEST@"),
-        field("Its address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
-        field("Starts at block", "1 187 520"),
-        field("Supply can grow", "No — fixed at launch, forever"),
+        field("field-kind", "NFT"),
+        field("field-defined-under", "spare.VRSCTEST@"),
+        field("field-its-address", "i92nDT1FzULuXGGXbCt8VHC4qpYc2R1Bfr"),
+        field("field-starts-at-block", "1 187 520"),
+        sentence("field-supply-can-grow", "field-mintable-no"),
     ]))));
 
     problems(
         &state,
         vec![CurrencyProblem {
             blocking: false,
-            text: "No NFT has ever been accepted by a node from this wallet's SDK. The \
-                   transaction is built correctly against two live examples, and has never \
-                   been sent."
-                .into(),
+            text: note("draft-nft-never-sent", &[]),
         }],
     );
 }
@@ -1496,11 +1542,7 @@ pub fn launch_pending(ui: &AppWindow) {
     currencies(ui);
 
     let state = ui.global::<CurrencyState>();
-    state.set_pending_note(
-        "market.VRSCTEST@ exists and nothing has been defined under it. It can never be \
-         used for a different currency."
-            .into(),
-    );
+    state.set_pending_note(note("launch-name-ready", &["market.VRSCTEST@"]));
     state.set_pending_can_continue(true);
     // Progress, not a plan: the first three have happened and two of them were
     // paid for. This is the state where the money is already gone and the thing
@@ -1543,12 +1585,12 @@ pub fn claiming_a_name_for_a_currency(ui: &AppWindow) {
         step("Define the currency", "later", true),
     ]))));
     state.set_preview(ModelRc::from(Rc::new(VecModel::from(vec![
-        field("Kind", "Basket"),
-        field("Defined under", "livecoin@ (to be claimed)"),
-        field("Starts at block", "1 187 520"),
-        field("Supply can grow", "Yes — this identity may mint more"),
-        field("Reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
-        field("Starting supply", "1 000 000.0000 0000 VRSCTEST"),
+        field("field-kind", "Basket"),
+        field("field-defined-under", "livecoin@ (to be claimed)"),
+        field("field-starts-at-block", "1 187 520"),
+        sentence("field-supply-can-grow", "field-mintable-yes"),
+        field("field-reserves", "VRSCTEST 50%, Bridge.vETH 30%, vUSDC.vETH 20%"),
+        field("field-starting-supply", "1 000 000.0000 0000 VRSCTEST"),
     ]))));
 }
 
@@ -1579,11 +1621,7 @@ pub fn launching_currency(ui: &AppWindow) {
 
     let state = ui.global::<CurrencyState>();
     state.set_launch_name("market.VRSCTEST".into());
-    state.set_launch_description(
-        "Defines market.VRSCTEST under this identity. An identity can define one currency, \
-         and only once — this cannot be undone or repeated."
-            .into(),
-    );
+    state.set_launch_description(note("launch-defines-once", &["market.VRSCTEST"]));
     // VRSCTEST's own figures, and the halves add back to the fee — the property
     // `currency::cost` is tested for.
     state.set_launch_fee("200.0000 0000".into());
@@ -1615,9 +1653,7 @@ pub fn currency_weights_wrong(ui: &AppWindow) {
         &state,
         vec![CurrencyProblem {
             blocking: true,
-            text:
-                "The weights add up to 70%, not 100%. Consensus reads them as shares of one whole."
-                    .into(),
+            text: note("draft-weights-wrong", &["70%"]),
         }],
     );
 }
@@ -1649,12 +1685,16 @@ const VRSCTEST: &str = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
 const BRIDGE: &str = "iPy29AAA5AUgVPzDvCWtWkNTVCyyMn8X4X";
 const VUSDC: &str = "i3XUvfqfZ3eT6iwNgyVEVzFVimMrziG5Ws";
 
-fn pick(name: &str, address: &str, kind: &str, note: &str) -> CurrencyPick {
+fn pick(name: &str, address: &str, kind: &str, starts_at: &str) -> CurrencyPick {
     CurrencyPick {
         name: name.into(),
         address: address.into(),
         kind: kind.into(),
-        note: note.into(),
+        note: if starts_at.is_empty() {
+            Note::default()
+        } else {
+            note("currency-starts-at", &[starts_at])
+        },
     }
 }
 
@@ -1685,17 +1725,28 @@ fn slice(label: &str, percent: f32, offset: f32, display: &str, tone: &str) -> C
 
 fn field(label: &str, value: &str) -> CurrencyField {
     CurrencyField {
-        label: label.into(),
+        label: note(label, &[]),
         value: value.into(),
+        value_note: Note::default(),
         // Every field in a currency definition is permanent, which is the
         // reason the panel exists.
         permanent: true,
     }
 }
 
+/// The two lines whose value is a sentence rather than a figure.
+fn sentence(label: &str, value: &str) -> CurrencyField {
+    CurrencyField {
+        label: note(label, &[]),
+        value: slint::SharedString::new(),
+        value_note: note(value, &[]),
+        permanent: true,
+    }
+}
+
 fn step(label: &str, state: &str, costs: bool) -> FlowStep {
     FlowStep {
-        label: label.into(),
+        label: note(label, &[]),
         state: state.into(),
         costs,
     }
@@ -1713,7 +1764,7 @@ pub fn currencies_empty(ui: &AppWindow) {
             EligibleIdentity {
                 name: "demo.VRSCTEST@".into(),
                 address: "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into(),
-                refusal: "".into(),
+                refusal: Note::default(),
             },
         ]))));
 }
@@ -1770,15 +1821,11 @@ pub fn identity_detail(ui: &AppWindow) {
     state.set_tone("degraded".into());
     state.set_balance("48.5000 0000".into());
     state.set_signatures_required("1 of 1".into());
-    state.set_control_note("This wallet holds 1 of the 1 signatures needed.".into());
+    state.set_control_note(note("control-enough", &["1", "1"]));
     state.set_revocation_authority("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
     state.set_recovery_authority("iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".into());
     state.set_cannot_be_revoked(true);
-    state.set_timelock_note(
-        "Locked. The funds cannot be spent, and nothing is counting down yet — unlocking \
-         publishes a height 100 blocks out and the wait starts then."
-            .into(),
-    );
+    state.set_timelock_note(note("timelock-held", &["100"]));
 
     state.set_primary_addresses(ModelRc::from(Rc::new(VecModel::from(vec![
         slint::SharedString::from("RK9izAySZHQAaCEkRmVV4Xtu73uV5sqsZy"),
@@ -1800,7 +1847,7 @@ pub fn identity_detail(ui: &AppWindow) {
             key: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
             name: "".into(),
             first: true,
-            text: "".into(),
+            text: SharedString::new(),
             hex: "018787a1035a9bd4179a3e0538ba9f90be7f231b69b0b588bac7b83800".into(),
             size: "29 bytes".into(),
             structured: "".into(),
@@ -1835,11 +1882,10 @@ pub fn identity_change_review(ui: &AppWindow) {
     identity_detail(ui);
 
     let state = ui.global::<IdentityState>();
-    state.set_change_description(
-        "Points recovery to iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq — after this, only they can \
-         take that action, and this wallet cannot take it back."
-            .into(),
-    );
+    state.set_change_description(note(
+        "change-recovery",
+        &["iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq"],
+    ));
     state.set_change_fee("0.0001 0000".into());
     // Last, because a non-zero ticket is what opens the review.
     state.set_change_ticket(1);
@@ -1854,12 +1900,7 @@ pub fn identity_revoke_review(ui: &AppWindow) {
     identity_detail(ui);
 
     let state = ui.global::<IdentityState>();
-    state.set_change_description(
-        "Revokes the identity. It can no longer be updated or spent from by its own keys, \
-         and only its recovery authority can bring it back — so if that authority is the \
-         identity itself, nothing can."
-            .into(),
-    );
+    state.set_change_description(note("change-revoke", &[]));
     state.set_change_fee("0.0001 0000".into());
     // The word the core requires, read from the protocol rather than typed out
     // again — a fixture that spelled it itself would keep photographing
@@ -1880,10 +1921,8 @@ pub fn registering(ui: &AppWindow) {
     let state = ui.global::<IdentityState>();
     state.set_reg_step("waiting".into());
     state.set_reg_name("pecu".into());
-    state.set_reg_note(
-        "The claim is on the chain with 0 confirmations. One is enough to register.".into(),
-    );
-    state.set_reg_deadline("Must confirm before block 1 188 674 — about 18 minutes".into());
+    state.set_reg_note(note("claim-waiting", &["0"]));
+    state.set_reg_deadline(note("claim-deadline", &["1 188 674", "18"]));
     state.set_reg_fee("100.0000 0000".into());
     state.set_reg_cannot_be_revoked(true);
     // Where it has got to: the first transaction is mined, the wait is running,
@@ -1913,13 +1952,13 @@ pub fn network(ui: &AppWindow) {
             network: "Mainnet".into(),
             tip: "3 402 118".into(),
             latency: "132 ms".into(),
-            note: "this node is on Mainnet".into(),
+            note: note("node-other-chain", &["Mainnet"]),
             ..node(1, "VRSC (public)", "https://api.verus.services", false)
         },
         NodeRow {
             builtin: false,
             status: "offline".into(),
-            note: "connection refused".into(),
+            note: note("node-offline", &["connection refused"]),
             ..node(1000, "my node", "https://my-node.example:27486", false)
         },
     ];
@@ -1963,7 +2002,7 @@ fn node(id: i32, label: &str, url: &str, active: bool) -> NodeRow {
         network: SharedString::new(),
         tip: SharedString::new(),
         latency: SharedString::new(),
-        note: SharedString::new(),
+        note: Note::default(),
         builtin: true,
         active,
     }

@@ -327,7 +327,7 @@ fn the_scripted_chain_offers_one_identity_and_explains_the_others() {
             .expect("the scripted chain knows the identity it seeded");
         let lookup = currency::classify(wallet.chain.currency_definition(&record.identity_address));
         let refusal = currency::refusal(&lookup, true, status);
-        if refusal.is_empty() {
+        if refusal.code.is_empty() {
             offered.push(typed.clone());
         }
     }

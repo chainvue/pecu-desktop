@@ -33,6 +33,7 @@ use verus_sdk::currency::CurrencyId;
 use verus_sdk::money::Amount;
 use verus_sdk::network::{self, FlowError, HistoryEntry, SignedAmount};
 use verus_sdk::verus_keys::{Address, AddressKind};
+use pecu_protocol::NoteVm;
 
 /// How many transactions the dashboard's "recent" list shows. The Activity
 /// screen gets everything fetched so far.
@@ -504,7 +505,7 @@ pub fn rows_from(
     // The heading goes on the first row of each day. Done after the rows
     // exist because it depends on comparing neighbours, which is exactly
     // what a `for` loop over a Slint model cannot do.
-    let mut previous: Option<String> = None;
+    let mut previous: Option<NoteVm> = None;
     for row in &mut rows {
         let day = calendar_day(row.block_time, now);
         if previous.as_ref() != Some(&day) {
@@ -525,18 +526,18 @@ pub fn rows_from(
 ///
 /// An unconfirmed transaction has no timestamp and gets its own heading — it is
 /// not on any day yet.
-fn calendar_day(block_time: i64, now: i64) -> String {
+fn calendar_day(block_time: i64, now: i64) -> NoteVm {
     use chrono::{Datelike, Local, TimeZone};
 
     if block_time == 0 {
-        return "Pending".to_string();
+        return NoteVm::plain("day-pending");
     }
 
     let Some(when) = Local.timestamp_opt(block_time, 0).single() else {
-        return "Unknown date".to_string();
+        return NoteVm::plain("day-unknown");
     };
     let Some(today) = Local.timestamp_opt(now, 0).single() else {
-        return "Unknown date".to_string();
+        return NoteVm::plain("day-unknown");
     };
 
     let days = today
@@ -544,35 +545,29 @@ fn calendar_day(block_time: i64, now: i64) -> String {
         .signed_duration_since(when.date_naive())
         .num_days();
     match days {
-        0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
+        0 => NoteVm::plain("day-today"),
+        1 => NoteVm::plain("day-yesterday"),
         _ => {
-            let month = MONTHS.get(when.month0() as usize).copied().unwrap_or("");
+            // The month as a **number**, not a name. Naming it here would put
+            // twelve English words in the core and no catalogue could reach
+            // them; `note.slint` turns the index back into a word, and the
+            // order of day and month is the sentence's business rather than
+            // this function's — "12 March" and "March 12" are the same fact.
+            //
             // The year only once it is not this one. Repeating it on every
             // heading is noise until the moment it is not.
+            let month = when.month0().to_string();
             if when.year() == today.year() {
-                format!("{} {month}", when.day())
+                NoteVm::with("day-this-year", [when.day().to_string(), month])
             } else {
-                format!("{} {month} {}", when.day(), when.year())
+                NoteVm::with(
+                    "day-other-year",
+                    [when.day().to_string(), month, when.year().to_string()],
+                )
             }
         }
     }
 }
-
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
 
 /// Redo the wording on rows that were cached earlier.
 ///
@@ -581,13 +576,13 @@ const MONTHS: [&str; 12] = [
 /// today. Every row keeps its `block_time`, so the wording is recomputed rather
 /// than trusted — the figures are stale, the dates are not allowed to be wrong.
 pub fn restamp(rows: &mut [HistoryRowVm], now: i64) {
-    let mut previous: Option<String> = None;
+    let mut previous: Option<NoteVm> = None;
     for row in rows.iter_mut() {
         row.when_display = when(row.block_time, now);
 
         let day = calendar_day(row.block_time, now);
         if previous.as_ref() == Some(&day) {
-            row.group.clear();
+            row.group = NoteVm::none();
         } else {
             row.group.clone_from(&day);
             previous = Some(day);
@@ -675,7 +670,7 @@ fn row(entry: &HistoryEntry, now: i64, named: &BTreeMap<String, String>) -> Hist
         currency_lines,
         when_display: when(entry.block_time, now),
         // Filled in by `rows`, which can see the row before this one.
-        group: String::new(),
+        group: NoteVm::none(),
         pending: entry.height == 0,
         // Everything this path produces is a payment. It reads address deltas,
         // and a delta is money moving — a login, a conversion or an identity
@@ -739,29 +734,26 @@ fn signed_coins(amount: SignedAmount) -> String {
 /// No year for anything inside the last year, because the year is noise until
 /// it is not. `block_time` is miner-chosen and only loosely monotonic, so this
 /// is display only — never ordering.
-fn when(block_time: i64, now: i64) -> String {
+fn when(block_time: i64, now: i64) -> NoteVm {
     if block_time == 0 {
-        return "pending".to_string();
+        return NoteVm::plain("when-pending");
     }
 
     // A block claiming to be from the future is a miner's clock, not something
     // worth showing anyone — hence the negative arm folding into "just now".
+    //
+    // The count travels as a value and the unit as part of the code, so the
+    // one-versus-many choice is made by `@tr`'s plural form rather than by an
+    // `== 1` here. English has two cases; Polish has three, and which exist is
+    // a property of the language rather than of this function.
     let age = now.saturating_sub(block_time);
     match age {
-        ..60 => "just now".to_string(),
-        60..3_600 => plural(age / 60, "minute"),
-        3_600..86_400 => plural(age / 3_600, "hour"),
-        86_400..172_800 => "yesterday".to_string(),
-        172_800..2_592_000 => plural(age / 86_400, "day"),
-        _ => plural(age / 2_592_000, "month"),
-    }
-}
-
-fn plural(count: i64, unit: &str) -> String {
-    if count == 1 {
-        format!("1 {unit} ago")
-    } else {
-        format!("{count} {unit}s ago")
+        ..60 => NoteVm::plain("when-just-now"),
+        60..3_600 => NoteVm::with("when-minutes", [(age / 60).to_string()]),
+        3_600..86_400 => NoteVm::with("when-hours", [(age / 3_600).to_string()]),
+        86_400..172_800 => NoteVm::plain("when-yesterday"),
+        172_800..2_592_000 => NoteVm::with("when-days", [(age / 86_400).to_string()]),
+        _ => NoteVm::with("when-months", [(age / 2_592_000).to_string()]),
     }
 }
 
@@ -814,16 +806,30 @@ mod tests {
     #[test]
     fn ages_read_the_way_people_say_them() {
         let now = 1_000_000_000;
-        assert_eq!(when(0, now), "pending");
-        assert_eq!(when(now, now), "just now");
-        assert_eq!(when(now - 60, now), "1 minute ago");
-        assert_eq!(when(now - 7_200, now), "2 hours ago");
-        assert_eq!(when(now - 90_000, now), "yesterday");
-        assert_eq!(when(now - 86_400 * 5, now), "5 days ago");
-        assert_eq!(when(now - 86_400 * 90, now), "3 months ago");
+        // The code and the count. The words — and whether "1 minute" needs a
+        // different ending from "2 minutes" — are `@tr`'s plural form's
+        // business in `note.slint`, and this is where the *bands* are pinned.
+        let said = |at: i64| {
+            let note = when(at, now);
+            (note.code, note.args.first().cloned().unwrap_or_default())
+        };
+
+        assert_eq!(said(0).0, "when-pending");
+        assert_eq!(said(now).0, "when-just-now");
+        assert_eq!(said(now - 60), ("when-minutes".to_string(), "1".to_string()));
+        assert_eq!(said(now - 7_200), ("when-hours".to_string(), "2".to_string()));
+        assert_eq!(said(now - 90_000).0, "when-yesterday");
+        assert_eq!(
+            said(now - 86_400 * 5),
+            ("when-days".to_string(), "5".to_string())
+        );
+        assert_eq!(
+            said(now - 86_400 * 90),
+            ("when-months".to_string(), "3".to_string())
+        );
         // A block claiming to be from the future is a miner's clock, not a bug
         // worth showing anyone.
-        assert_eq!(when(now + 500, now), "just now");
+        assert_eq!(said(now + 500).0, "when-just-now");
     }
 
     /// A currency id must reach the screen as an `i…` address.

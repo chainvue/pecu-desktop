@@ -443,7 +443,7 @@ export component ActivityPanel inherits Card {
             title: tx.direction == "in" ? @tr("Received")
                 : tx.direction == "out" ? @tr("Sent")
                 : @tr("Moved");
-            subtitle: tx.when;
+            subtitle-note: tx.when;
             interactive: true;
 
             HorizontalLayout {

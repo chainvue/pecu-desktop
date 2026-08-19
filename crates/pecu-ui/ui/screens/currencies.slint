@@ -2,9 +2,10 @@
 
 import { InputMode, Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, StatusPill } from "../components/base.slint";
-import { CurrencyField, CurrencySlice } from "../vm/structs.slint";
+import { CurrencyField, CurrencySlice, Note } from "../vm/structs.slint";
 import { Actions, CurrencyState, WalletState } from "../vm/state.slint";
 import { Field, FlowStepper } from "../components/form.slint";
+import { NoteText } from "../components/note.slint";
 
 // What this wallet's identities define, and what they could still define.
 //
@@ -42,6 +43,12 @@ import { Field, FlowStepper } from "../components/form.slint";
 export component ChoiceRow inherits Rectangle {
     in property <string> title;
     in property <string> body;
+    // The same line, when the **core** is the one saying it. Two properties
+    // rather than one because these rows carry two different kinds of sentence:
+    // this file's own explanation of what a Basket is, which is a design
+    // decision, and the core's reason for refusing an identity, which is a fact
+    // about the chain. Only one is ever set.
+    in property <Note> body-note;
     // A value belonging to the answer rather than a sentence about it — an
     // i-address, so far. Monospaced and last, because it is what somebody checks
     // rather than what they read.
@@ -86,6 +93,10 @@ export component ChoiceRow inherits Rectangle {
             color: root.enabled ? Theme.text-secondary : Theme.text-tertiary;
             wrap: word-wrap;
         }
+        if root.body-note.code != "": NoteText {
+            note: root.body-note;
+            color: root.enabled ? Theme.text-secondary : Theme.text-tertiary;
+        }
         if root.note != "": Text {
             text: root.note;
             font-family: Typo.mono;
@@ -105,6 +116,10 @@ export component ChoiceRow inherits Rectangle {
     // reason in its label, rather than being silently inert.
     accessible-role: AccessibleRole.button;
     accessible-enabled: root.enabled;
+    // The refused ones are announced with their reason, which is why the label
+    // is built from both halves. A `Note` cannot be interpolated into a string
+    // here, so a row refused by the core announces its title — see
+    // `docs/LATER.md`.
     accessible-label: root.body == "" ? root.title : @tr("{}. {}", root.title, root.body);
     accessible-action-default => {
         if (root.enabled) {
@@ -245,14 +260,11 @@ export component DefinitionPreview inherits VerticalLayout {
     // column is fixed so the values line up down the page.
     for field in root.fields: HorizontalLayout {
         spacing: Sp.s5;
-        Text {
-            text: field.label;
+        NoteText {
+            note: field.label;
             width: 180px;
-            font-size: Typo.caption;
-            color: Theme.text-tertiary;
-            wrap: word-wrap;
         }
-        Text {
+        if field.value != "": Text {
             text: field.value;
             horizontal-stretch: 1;
             font-family: Typo.mono;
@@ -262,6 +274,13 @@ export component DefinitionPreview inherits VerticalLayout {
             // tokens — an i-address has no spaces to break at — and
             // word-wrapping one just clips it.
             wrap: char-wrap;
+        }
+        // The two lines whose value is a sentence. Not monospaced: a sentence
+        // set in the figure face is a sentence that reads as a value.
+        if field.value == "": NoteText {
+            note: field.value-note;
+            horizontal-stretch: 1;
+            color: Theme.text-primary;
         }
     }
 }
@@ -342,22 +361,22 @@ export component CurrencyForm inherits VerticalLayout {
     if !CurrencyState.claiming: FlowStepper {
         steps: [
             {
-                label: @tr("Kind"),
+                label: { code: "step-kind" },
                 state: root.at == 0 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Identity"),
+                label: { code: "step-identity" },
                 state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Set it up"),
+                label: { code: "step-set-it-up" },
                 state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Check and launch"),
+                label: { code: "step-check-and-launch" },
                 state: root.at < 3 ? "later" : "now",
                 costs: false,
             },
@@ -366,27 +385,27 @@ export component CurrencyForm inherits VerticalLayout {
     if CurrencyState.claiming: FlowStepper {
         steps: [
             {
-                label: @tr("Kind"),
+                label: { code: "step-kind" },
                 state: root.at == 0 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Name"),
+                label: { code: "step-name" },
                 state: root.at < 1 ? "later" : root.at == 1 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Who can take it back"),
+                label: { code: "step-who-can-take-it-back" },
                 state: root.at < 2 ? "later" : root.at == 2 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Set it up"),
+                label: { code: "step-set-it-up" },
                 state: root.at < 3 ? "later" : root.at == 3 ? "now" : "done",
                 costs: false,
             },
             {
-                label: @tr("Check and launch"),
+                label: { code: "step-check-and-launch" },
                 state: root.at < 4 ? "later" : "now",
                 costs: false,
             },
@@ -514,9 +533,9 @@ export component CurrencyForm inherits VerticalLayout {
                 // The refusal when there is one, and the address when there is
                 // not. Never both: a row that can be pressed does not need to
                 // explain itself, and one that cannot has nothing else to say.
-                body: entry.refusal;
-                note: entry.refusal == "" ? entry.address : "";
-                enabled: entry.refusal == "";
+                body-note: entry.refusal;
+                note: entry.refusal.code == "" ? entry.address : "";
+                enabled: entry.refusal.code == "";
                 selected: !CurrencyState.claiming && CurrencyState.identity == entry.address;
                 chosen => {
                     CurrencyState.claiming = false;
@@ -579,7 +598,7 @@ export component CurrencyForm inherits VerticalLayout {
                 mono: true;
                 placeholder: @tr("lowercase, digits, _ and -");
                 text <=> CurrencyState.new-name;
-                invalid: newname.text != "" && CurrencyState.new-name-problem != "";
+                invalid: newname.text != "" && CurrencyState.new-name-problem.code != "";
                 edited => {
                     // Restarted, not merely started: each keystroke pushes the
                     // question back, so it is asked once about the name
@@ -589,8 +608,8 @@ export component CurrencyForm inherits VerticalLayout {
                     root.recheck();
                 }
             }
-            if CurrencyState.new-name-problem != "": Text {
-                text: CurrencyState.new-name-problem;
+            if CurrencyState.new-name-problem.code != "": NoteText {
+                note: CurrencyState.new-name-problem;
                 font-size: Typo.caption;
                 color: Theme.negative;
                 wrap: word-wrap;
@@ -598,7 +617,7 @@ export component CurrencyForm inherits VerticalLayout {
             // Both fees, together. They are charged by two different
             // transactions and a screen that showed one of them would understate
             // what this commits to by the larger half.
-            if CurrencyState.new-name-problem == "" && CurrencyState.new-name-fee != "": Text {
+            if CurrencyState.new-name-problem.code == "" && CurrencyState.new-name-fee != "": Text {
                 text: @tr("Free to claim · the name costs {0} {1}, and the launch costs {2} {1} on top.",
                           CurrencyState.new-name-fee, WalletState.ticker, CurrencyState.fee);
                 font-size: Typo.caption;
@@ -1073,8 +1092,8 @@ export component CurrencyForm inherits VerticalLayout {
                 border-radius: R.md;
                 VerticalLayout {
                     padding: Sp.s5;
-                    Text {
-                        text: problem.text;
+                    NoteText {
+                        note: problem.text;
                         font-size: Typo.caption;
                         color: problem.blocking ? Theme.negative : Theme.warning;
                         wrap: word-wrap;
@@ -1214,8 +1233,8 @@ export component CurrencyForm inherits VerticalLayout {
                         font-size: Typo.num-sm;
                         color: Theme.text-tertiary;
                     }
-                    Text {
-                        text: step.label;
+                    NoteText {
+                        note: step.label;
                         font-size: Typo.caption;
                         color: Theme.text-secondary;
                         horizontal-stretch: 1;
@@ -1262,8 +1281,8 @@ export component CurrencyForm inherits VerticalLayout {
                 border-radius: R.md;
                 VerticalLayout {
                     padding: Sp.s5;
-                    Text {
-                        text: problem.text;
+                    NoteText {
+                        note: problem.text;
                         font-size: Typo.caption;
                         color: problem.blocking ? Theme.negative : Theme.warning;
                         wrap: word-wrap;
@@ -1312,8 +1331,8 @@ export component LaunchReview inherits Rectangle {
                 }
             }
 
-            Text {
-                text: CurrencyState.launch-description;
+            NoteText {
+                note: CurrencyState.launch-description;
                 font-size: Typo.body;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -1546,14 +1565,14 @@ export component ReservePicker inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            if CurrencyState.choices-problem != "": Rectangle {
+            if CurrencyState.choices-problem.code != "": Rectangle {
                 background: Theme.negative-soft;
                 border-radius: R.md;
                 VerticalLayout {
                     padding: Sp.s5;
                     spacing: Sp.s3;
-                    Text {
-                        text: CurrencyState.choices-problem;
+                    NoteText {
+                        note: CurrencyState.choices-problem;
                         font-size: Typo.caption;
                         color: Theme.negative;
                         wrap: word-wrap;
@@ -1568,7 +1587,7 @@ export component ReservePicker inherits Rectangle {
                 }
             }
 
-            if !CurrencyState.choices-busy && CurrencyState.choices-problem == ""
+            if !CurrencyState.choices-busy && CurrencyState.choices-problem.code == ""
                 && CurrencyState.choices.length == 0: Text {
                 text: CurrencyState.choices-query == ""
                     ? @tr("This chain lists no currencies that are not already reserves of this basket.")
@@ -1613,8 +1632,8 @@ export component ReservePicker inherits Rectangle {
                                 // Only when there is something to say. A
                                 // reserve that has not started yet is a reserve
                                 // holding something that does not exist.
-                                if row.note != "": Text {
-                                    text: row.note;
+                                if row.note.code != "": NoteText {
+                                    note: row.note;
                                     font-size: Typo.micro;
                                     color: Theme.warning;
                                 }
@@ -1623,7 +1642,13 @@ export component ReservePicker inherits Rectangle {
                                 alignment: center;
                                 StatusPill {
                                     state: "online";
-                                    text: row.kind;
+                                    // The core names the kind; the words are
+                                    // here, the same rule the status pills
+                                    // follow. Three values, so a ternary.
+                                    text: row.kind == "Token" ? @tr("Token")
+                                        : row.kind == "Basket" ? @tr("Basket")
+                                        : row.kind == "NFT" ? @tr("NFT")
+                                        : row.kind;
                                 }
                             }
                         }
@@ -1638,8 +1663,11 @@ export component ReservePicker inherits Rectangle {
                         }
 
                         accessible-role: AccessibleRole.button;
-                        accessible-label: @tr("{}, {}", row.name, row.kind)
-                            + (row.note == "" ? "" : ", " + row.note);
+                        // The "not started yet" note is not in the spoken
+                        // label: a `Note` cannot be interpolated into a string
+                        // in Slint, and it is announced by the `NoteText`
+                        // beside this row anyway. `docs/LATER.md` §10.
+                        accessible-label: @tr("{}, {}", row.name, row.kind);
                         accessible-action-default => {
                             Actions.choose-reserve(
                                 CurrencyState.picking-reserve, row.name, row.address);
@@ -1694,7 +1722,7 @@ export component ActionBar inherits Rectangle {
     // buttons and no figure invites the press it exists to qualify.
     in property <string> cost;
     // Why the button is off, or what it will do when it is on.
-    in property <string> note;
+    in property <Note> note;
     // Whether that note is a refusal. Decides its colour, so a screen cannot
     // say "1 thing to fix" in the tone of an aside.
     in property <bool> note-bad: false;
@@ -1731,8 +1759,8 @@ export component ActionBar inherits Rectangle {
                 color: Theme.text-primary;
                 overflow: elide;
             }
-            Text {
-                text: root.note;
+            NoteText {
+                note: root.note;
                 font-size: Typo.caption;
                 color: root.note-bad ? Theme.negative : Theme.text-tertiary;
                 overflow: elide;
@@ -1871,7 +1899,10 @@ export component CurrenciesScreen inherits VerticalLayout {
                             }
                             StatusPill {
                                 state: row.tone;
-                                text: row.kind;
+                                text: row.kind == "Token" ? @tr("Token")
+                                    : row.kind == "Basket" ? @tr("Basket")
+                                    : row.kind == "NFT" ? @tr("NFT")
+                                    : row.kind;
                             }
                         }
                         // A launch is not instant. Between the definition being
@@ -1885,8 +1916,8 @@ export component CurrenciesScreen inherits VerticalLayout {
                             color: Theme.warning;
                             horizontal-alignment: right;
                         }
-                        if row.note != "": Text {
-                            text: row.note;
+                        if row.note.code != "": NoteText {
+                            note: row.note;
                             font-size: Typo.caption;
                             color: Theme.text-tertiary;
                             horizontal-alignment: right;
@@ -1916,8 +1947,8 @@ export component CurrenciesScreen inherits VerticalLayout {
                     font-size: Typo.title3;
                     color: Theme.text-primary;
                 }
-                Text {
-                    text: CurrencyState.pending-note;
+                NoteText {
+                    note: CurrencyState.pending-note;
                     font-size: Typo.body;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -1988,7 +2019,7 @@ export component CurrenciesScreen inherits VerticalLayout {
                 padding: Sp.s3;
                 for entry in CurrencyState.eligible: ListRow {
                     glyph: "◇";
-                    glyph-tone: entry.refusal == "" ? Theme.positive : Theme.text-tertiary;
+                    glyph-tone: entry.refusal.code == "" ? Theme.positive : Theme.text-tertiary;
                     title: entry.name;
                     subtitle: entry.address;
                     subtitle-mono: true;
@@ -2000,16 +2031,16 @@ export component CurrenciesScreen inherits VerticalLayout {
                         VerticalLayout {
                             width: 420px;
                             alignment: center;
-                            Text {
-                                text: entry.refusal == ""
-                                    ? @tr("Free to define a currency")
-                                    : entry.refusal;
+                            if entry.refusal.code == "": Text {
+                                text: @tr("Free to define a currency");
                                 font-size: Typo.caption;
-                                color: entry.refusal == ""
-                                    ? Theme.text-secondary
-                                    : Theme.text-tertiary;
+                                color: Theme.text-secondary;
                                 horizontal-alignment: right;
                                 wrap: word-wrap;
+                            }
+                            if entry.refusal.code != "": NoteText {
+                                note: entry.refusal;
+                                horizontal-alignment: right;
                             }
                         }
                     }

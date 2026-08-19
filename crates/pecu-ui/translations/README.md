@@ -81,32 +81,45 @@ Two kinds of literal are exempt and both are recognised rather than tolerated:
   which the *core* compares the typed confirmation against, so a translated one
   would ask for a word the wallet then refuses.
 
-## What is still not covered
+## The core builds no sentences any more
 
-`@tr` reaches `.slint` and nothing else, so a sentence built in Rust is one no
-catalogue can touch. There were about a hundred and seven of them. There are
-now **forty-one**, and all but a handful are in two files:
+There were a hundred and seven when this started, then forty-one, and now
+**five** — `Active`, `Locked`, `Unlocking`, `Revoked` and `Basket`. All five are
+**vocabulary the code branches on**: `status == Status::Revoked.label()` is a
+comparison in Rust, and translating the value would take the wrong branch
+rather than produce a bad sentence. They are said in the interface with a
+ternary, the same way a node's status is.
 
-| file | left | what they feed |
-|---|---|---|
-| `pecu-core/src/currency.rs` | 17 | the currency draft validator's refusals and notes |
-| `pecu-core/src/identity.rs` | 16 | the identity lookup and authority verdicts |
-| `pecu-core/src/lib.rs` | 7 | `RegistrationVm.note`, the name check, the currency picker's problem |
+Everything else travels as a **named reason** — a `NoteVm` of a code and its
+values — and the words live in `components/note.slint`, in three chains:
 
-Everything else goes through a **named reason** now. The core says what is
-wrong and supplies the values; `components/note.slint` has the words, in three
-chains: `NoteText` for a refusal beside a field, `NoticeTitle` for the headline
-on a toast, `NoticeBody` for the line under it.
+| component | what it spells |
+|---|---|
+| `NoteText` | a refusal beside a field, a figure's label, a relative time |
+| `NoticeTitle` | the headline on a toast, and the same reason inline on a form |
+| `NoticeBody` | the line under it, where there is one |
 
-An unknown code renders as itself, which is ugly on purpose — a code with no
-sentence is a bug, and it should be visible the first time it is drawn rather
-than the first time somebody reads a screenshot carefully. That is not
-theoretical: it caught a sentence filed in the wrong chain during this very
-change, in the first render after the mistake.
+Two hundred and thirty-four sentences, and 815 `@tr` calls across the interface.
 
-## The German catalogue here is a fixture
+### What that bought, beyond the translation
 
-`de/` has the eight navigation labels and nothing else. It exists so
-`tests/translation.rs` has something real to switch to, and so the untranslated
-fallback can be checked. It is not an offer of German — shipping a language
-means a translator, not a developer with a dictionary.
+- **Dates.** `portfolio` used to build "12 March" and "2 hours ago" in Rust,
+  with twelve English month names and a hand-rolled `== 1` plural. It now sends
+  a day, a month **index** and a count; `note.slint` names the month and lets
+  `@tr`'s plural form choose. A language that writes "March 12", or has three
+  plural cases, can now say so.
+- **A dead-code check.** `tests/note_coverage.rs` asserts both directions: every
+  reason the wallet names has words, and no words are written for a reason
+  nothing names. The second half found two sentences whose emitters had been
+  removed an hour earlier.
+
+### Two tests are what keep it
+
+`tests/translatable.rs` reads the `.slint` sources and fails on a literal in a
+user-visible property that is not inside a `@tr(…)`. `tests/note_coverage.rs`
+reads `pecu-core`'s sources and fails on a code with no sentence. Neither
+depends on `pecu-core` as a crate — they read files, which is what a lint over a
+repository does.
+
+Both have caught real mistakes during the work that introduced them, which is
+the only evidence a guard is worth having.

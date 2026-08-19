@@ -28,6 +28,24 @@ export component NoteText inherits Text {
     // What the sentence is *about*, when a caller wants the tone to say so.
     in property <bool> problem: false;
 
+    // The month a day heading names, from the index the core sent. Twelve
+    // words that would otherwise be twelve untranslatable strings in Rust.
+    property <string> month:
+          root.note.args.length < 2 ? ""
+        : root.note.args[1] == "0" ? @tr("January")
+        : root.note.args[1] == "1" ? @tr("February")
+        : root.note.args[1] == "2" ? @tr("March")
+        : root.note.args[1] == "3" ? @tr("April")
+        : root.note.args[1] == "4" ? @tr("May")
+        : root.note.args[1] == "5" ? @tr("June")
+        : root.note.args[1] == "6" ? @tr("July")
+        : root.note.args[1] == "7" ? @tr("August")
+        : root.note.args[1] == "8" ? @tr("September")
+        : root.note.args[1] == "9" ? @tr("October")
+        : root.note.args[1] == "10" ? @tr("November")
+        : root.note.args[1] == "11" ? @tr("December")
+        : root.note.args[1];
+
     // Positional, because a translated sentence puts its values in its own
     // order — German moves them and English does not, and `{0}` is what lets a
     // catalogue do that without the core knowing.
@@ -66,6 +84,261 @@ export component NoteText inherits Text {
         : root.note.code == "output-unreadable" ? @tr("Could not be read")
         : root.note.code == "output-unrecognised"
             ? @tr("An output this build cannot read: {0}", root.note.args[0])
+
+        // ── When something happened ─────────────────────────────────────
+        //
+        // A relative time and a day heading, both built from a code and a
+        // count. The core cannot spell either: "2 hours ago" has a plural in
+        // it, and "12 March" puts the day before the month in about half the
+        // languages this will be translated into and after it in the rest.
+        : root.note.code == "when-pending" ? @tr("pending")
+        : root.note.code == "when-just-now" ? @tr("just now")
+        : root.note.code == "when-yesterday" ? @tr("yesterday")
+        : root.note.code == "when-minutes"
+            ? @tr("{n} minute ago" | "{n} minutes ago" % root.note.args[0].to-float())
+        : root.note.code == "when-hours"
+            ? @tr("{n} hour ago" | "{n} hours ago" % root.note.args[0].to-float())
+        : root.note.code == "when-days"
+            ? @tr("{n} day ago" | "{n} days ago" % root.note.args[0].to-float())
+        : root.note.code == "when-months"
+            ? @tr("{n} month ago" | "{n} months ago" % root.note.args[0].to-float())
+
+        : root.note.code == "day-pending" ? @tr("Pending")
+        : root.note.code == "day-unknown" ? @tr("Unknown date")
+        : root.note.code == "day-today" ? @tr("Today")
+        : root.note.code == "day-yesterday" ? @tr("Yesterday")
+        // The month arrives as an index, so the name is chosen here and the
+        // order of the two is the sentence's to decide.
+        : root.note.code == "day-this-year" ? @tr("{0} {1}", root.note.args[0], root.month)
+        : root.note.code == "day-other-year"
+            ? @tr("{0} {1} {2}", root.note.args[0], root.month, root.note.args[2])
+
+        // ── The bar above a form, saying why the button is off ──────────
+        //
+        // The interface's own sentences, in the same table as the core's. They
+        // are here rather than inline because the bar's note is sometimes the
+        // **core's** refusal instead — a name the registrar will not take —
+        // and a property that is a sentence on one branch and a reason on the
+        // next cannot be either.
+        : root.note.code == "bar-nothing-spent" ? @tr("Nothing is spent yet.")
+        : root.note.code == "bar-type-a-name" ? @tr("Type a name to continue")
+        : root.note.code == "bar-choose-identity" ? @tr("Choose an identity, or claim a new name.")
+        : root.note.code == "bar-choose-authority"
+            ? @tr("Choose one. This cannot be changed for free later.")
+        : root.note.code == "bar-name-recovery"
+            ? @tr("Name the recovery authority, or choose the other answer.")
+        : root.note.code == "bar-claims-and-pays"
+            ? @tr("This press claims the name and pays for it. The launch is reviewed after.")
+        : root.note.code == "bar-nothing-blocking"
+            ? @tr("Nothing is blocking it. The next screen is a review — nothing is spent yet.")
+        : root.note.code == "bar-first-transaction"
+            ? @tr("This press signs and sends the first transaction.")
+        : root.note.code == "bar-things-to-fix"
+            // The count arrives as a string, because that is what a `Note`
+            // carries; `to-float` hands it back to the plural form, which is
+            // the only thing in Slint that can choose between one and many in
+            // a language that has more than two cases.
+            ? @tr("{n} thing to fix, above" | "{n} things to fix, above"
+                  % root.note.args[0].to-float())
+
+        // ── What this wallet can do with a VerusID ──────────────────────
+        : root.note.code == "control-none"
+            ? @tr("This wallet holds none of the keys. You can read this identity but not change it.")
+        : root.note.code == "control-enough"
+            ? @tr("This wallet holds {0} of the {1} signatures needed.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "control-short"
+            ? @tr("This wallet holds {0} of the {1} signatures needed — not enough on its own.",
+                  root.note.args[0], root.note.args[1])
+
+        // ── A timelock, in the words that do not overpromise ────────────
+        : root.note.code == "timelock-held"
+            ? @tr("Locked. The funds cannot be spent, and nothing is counting down yet — unlocking publishes a height {0} blocks out and the wait starts then.",
+                  root.note.args[0])
+        : root.note.code == "timelock-counting"
+            ? @tr("Counting down. The funds stay held until block {0}; the transaction that started this did not end the lock.",
+                  root.note.args[0])
+        : root.note.code == "timelock-revoked"
+            ? @tr("Revoked. Only its recovery authority can bring it back.")
+        : root.note.code == "timelock-none" ? @tr("Not locked.")
+
+        // ── What a change will do, before it is signed ──────────────────
+        : root.note.code == "change-nothing" ? @tr("Nothing to change.")
+        : root.note.code == "change-revocation"
+            ? @tr("Points revocation to {0} — after this, only they can take that action, and this wallet cannot take it back.",
+                  root.note.args[0])
+        : root.note.code == "change-recovery"
+            ? @tr("Points recovery to {0} — after this, only they can take that action, and this wallet cannot take it back.",
+                  root.note.args[0])
+        : root.note.code == "change-both-authorities"
+            ? @tr("Points revocation to {0} and recovery to {1} — after this, only they can take those actions, and this wallet cannot take them back.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "change-lock"
+            ? @tr("Holds the funds. Nothing counts down until somebody asks to unlock, and then the wait is {0} blocks.",
+                  root.note.args[0])
+        : root.note.code == "change-unlock"
+            ? @tr("Starts the countdown. It does not unlock the identity: the funds stay held until the chain reaches the height this publishes, and that height is measured from this transaction rather than from now.")
+        : root.note.code == "change-revoke"
+            ? @tr("Revokes the identity. It can no longer be updated or spent from by its own keys, and only its recovery authority can bring it back — so if that authority is the identity itself, nothing can.")
+        : root.note.code == "change-recover"
+            ? @tr("Clears the revocation and hands the identity back to its primary addresses.")
+
+        // ── Claiming a name: the deadline, and the name itself ──────────
+        : root.note.code == "claim-deadline"
+            ? @tr("Must confirm before block {0} — about {1} minutes",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "claim-deadline-passed"
+            ? @tr("The deadline passed at block {0}", root.note.args[0])
+        : root.note.code == "name-too-long" ? @tr("Too long — 64 characters at most.")
+        : root.note.code == "name-bad-characters"
+            ? @tr("Only lowercase letters, digits, _ and -. Remove: {0}", root.note.args[0])
+        : root.note.code == "name-taken" ? @tr("That name is already registered.")
+        : root.note.code == "name-unchecked" ? @tr("Could not check whether that name is free.")
+        : root.note.code == "verusid-unreadable"
+            ? @tr("Could not read it: {0}", root.note.args[0])
+
+        // ── The definition preview, line by line ────────────────────────
+        : root.note.code == "field-kind" ? @tr("Kind")
+        : root.note.code == "field-defined-under" ? @tr("Defined under")
+        : root.note.code == "field-its-address" ? @tr("Its address")
+        : root.note.code == "field-starts-at-block" ? @tr("Starts at block")
+        : root.note.code == "field-supply-can-grow" ? @tr("Supply can grow")
+        : root.note.code == "field-mintable-yes" ? @tr("Yes — this identity may mint more")
+        : root.note.code == "field-mintable-no" ? @tr("No — fixed at launch, forever")
+        : root.note.code == "field-reserves" ? @tr("Reserves")
+        : root.note.code == "field-starting-supply" ? @tr("Starting supply")
+
+        // ── What a currency is, and what a draft gets wrong ─────────────
+        : root.note.code == "kind-basket" ? @tr("Holds reserves and converts between them.")
+        : root.note.code == "kind-nft" ? @tr("A single indivisible unit.")
+        : root.note.code == "currency-starts-at" ? @tr("Starts at block {0}", root.note.args[0])
+        : root.note.code == "draft-pick-identity"
+            ? @tr("Choose the identity this currency will be defined under, or claim a new name for it. A currency cannot exist without one.")
+        : root.note.code == "draft-two-names"
+            ? @tr("This draft names both {0} and a new name, {1}. It can only be defined under one.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "draft-basket-no-reserves"
+            ? @tr("A basket needs at least one reserve. Without one it holds nothing and converts nothing.")
+        : root.note.code == "draft-reserve-no-currency" ? @tr("A reserve has no currency.")
+        : root.note.code == "draft-reserve-twice"
+            ? @tr("{0} is listed twice. Each reserve appears once, with one weight.", root.note.args[0])
+        : root.note.code == "draft-reserve-no-weight"
+            ? @tr("{0} has no weight. Every reserve needs a share of the basket.", root.note.args[0])
+        : root.note.code == "draft-weights-wrong"
+            ? @tr("The weights add up to {0}, not 100%. Consensus reads them as shares of one whole.",
+                  root.note.args[0])
+        : root.note.code == "draft-nft-no-reserves"
+            ? @tr("An NFT holds no reserves. It is a single indivisible unit, and that is the whole of it.")
+        : root.note.code == "draft-nft-one-holder" ? @tr("An NFT is one unit and can go to one holder.")
+        : root.note.code == "draft-nft-never-sent"
+            ? @tr("No NFT has ever been accepted by a node from this wallet's SDK. The transaction is built correctly against two live examples, and has never been sent.")
+        : root.note.code == "draft-token-no-reserves"
+            ? @tr("A token holds no reserves. Add them and it becomes a basket, which is a different thing.")
+        : root.note.code == "draft-supply-none-ever"
+            ? @tr("This would launch a currency with no supply that can never be minted — it could never hold anything, and that cannot be undone.")
+        : root.note.code == "draft-supply-mint-later"
+            ? @tr("No starting supply. Nothing exists until it is minted, which only this identity can do.")
+        : root.note.code == "draft-alloc-no-recipient" ? @tr("A preallocation has no recipient.")
+        : root.note.code == "draft-alloc-nothing" ? @tr("{0} is allocated nothing.", root.note.args[0])
+        : root.note.code == "draft-start-needed"
+            ? @tr("Choose how many blocks ahead it starts. Consensus refuses a currency that begins at or before the current block.")
+        : root.note.code == "draft-start-far"
+            ? @tr("That is {0} blocks away — roughly {1} days. Nothing happens until then.",
+                  root.note.args[0], root.note.args[1])
+        : root.note.code == "draft-start-past-chain" ? @tr("That start is beyond the end of the chain.")
+
+        // ── Which identity may define a currency ────────────────────────
+        : root.note.code == "eligible-already-defines"
+            ? @tr("Already defines {0}. An identity can define one currency, and only once.",
+                  root.note.args[0])
+        : root.note.code == "eligible-unknown"
+            ? @tr("The node would not say whether this already defines a currency.")
+        : root.note.code == "eligible-cannot-sign"
+            ? @tr("This wallet does not hold the keys that sign for it.")
+        : root.note.code == "eligible-revoked" ? @tr("Revoked. A revoked identity cannot define a currency.")
+        : root.note.code == "eligible-timelocked"
+            ? @tr("Timelocked. Its output cannot be spent until the lock passes.")
+
+        // ── A VerusID's condition ───────────────────────────────────────
+        : root.note.code == "identity-locked"
+            ? @tr("Funds held. Unlocking starts a {0}-block wait.", root.note.args[0])
+        : root.note.code == "identity-unlocking" ? @tr("Unlocks at block {0}", root.note.args[0])
+        : root.note.code == "identity-revoked" ? @tr("Only its recovery authority can bring it back.")
+
+        // ── Claiming a name ─────────────────────────────────────────────
+        : root.note.code == "claim-signed-not-sent"
+            ? @tr("Signed and written down. Nothing has been sent yet.")
+        : root.note.code == "claim-on-its-way" ? @tr("The claim is on its way. Waiting for it to be mined.")
+        : root.note.code == "claim-waiting"
+            ? @tr("The claim is on the chain with {0} confirmations. One is enough to register.",
+                  root.note.args[0])
+        : root.note.code == "claim-confirmed" ? @tr("The claim has confirmed. The name can be registered now.")
+        : root.note.code == "claim-reorged"
+            ? @tr("The chain moved underneath the claim: {0}", root.note.args[0])
+        : root.note.code == "claim-gone"
+            ? @tr("The claim is no longer on the chain. Its fee is spent and the name was not registered.")
+        : root.note.code == "claim-expired"
+            ? @tr("The claim expired at block {0}. Its fee is spent, the name was not registered, and the same claim cannot be sent again — the expiry is inside the bytes it was signed with.",
+                  root.note.args[0])
+        : root.note.code == "claim-unrecognised"
+            ? @tr("The node reported something this build does not recognise.")
+        : root.note.code == "claim-registered" ? @tr("The identity exists on the chain.")
+
+        // ── Launching, and reading the chain's currency list ────────────
+        : root.note.code == "launch-defines-once"
+            ? @tr("Defines {0} under this identity. An identity can define one currency, and only once — this cannot be undone or repeated.",
+                  root.note.args[0])
+        : root.note.code == "launch-name-ready"
+            ? @tr("{0} exists and nothing has been defined under it. It can never be used for a different currency.",
+                  root.note.args[0])
+        : root.note.code == "launch-name-claiming"
+            ? @tr("Claiming {0} first. The currency is defined once the name is on the chain.",
+                  root.note.args[0])
+        : root.note.code == "catalog-no-node"
+            ? @tr("No node is connected, so the chain's currencies cannot be listed.")
+        : root.note.code == "catalog-unreadable"
+            ? @tr("The chain's currencies could not be listed. {0}", root.note.args[0])
+
+        // ── What a node is doing ────────────────────────────────────────
+        : root.note.code == "node-catching-up"
+            ? @tr("catching up — {0} of {1} blocks", root.note.args[0], root.note.args[1])
+        : root.note.code == "node-other-chain" ? @tr("this node is on {0}", root.note.args[0])
+        : root.note.code == "node-refused-method" ? @tr("refused {0}", root.note.args[0])
+        : root.note.code == "node-offline" ? root.note.args[0]
+
+        // ── The figures over a history ──────────────────────────────────
+        : root.note.code == "stat-transactions-30d" ? @tr("Transactions · 30d")
+        : root.note.code == "stat-sent-30d" ? @tr("Sent · 30d")
+        : root.note.code == "stat-received-30d" ? @tr("Received · 30d")
+        : root.note.code == "stat-signins-30d" ? @tr("Sign-ins · 30d")
+
+        // ── The steps a flow is made of ─────────────────────────────────
+        //
+        // Both the interface's own breadcrumb — which question you are on — and
+        // the core's plan of what the chain will be asked to do. Two different
+        // lists, one vocabulary: a form that said "Check and launch" over a
+        // plan that said "Review the launch" would be describing two products.
+        : root.note.code == "step-choose-the-name" ? @tr("Choose the name")
+        : root.note.code == "step-choose-a-name" ? @tr("Choose a name")
+        : root.note.code == "step-who-can-take-it-back" ? @tr("Who can take it back")
+        : root.note.code == "step-check-and-claim" ? @tr("Check and claim")
+        : root.note.code == "step-check-and-launch" ? @tr("Check and launch")
+        : root.note.code == "step-kind" ? @tr("Kind")
+        : root.note.code == "step-identity" ? @tr("Identity")
+        : root.note.code == "step-name" ? @tr("Name")
+        : root.note.code == "step-set-it-up" ? @tr("Set it up")
+        : root.note.code == "step-claim-the-name" ? @tr("Claim the name")
+        : root.note.code == "step-register-the-identity" ? @tr("Register the identity")
+        : root.note.code == "step-register-it" ? @tr("Register it")
+        : root.note.code == "step-wait-to-confirm" ? @tr("Wait for it to confirm")
+        : root.note.code == "step-define-the-currency" ? @tr("Define the currency")
+
+        // ── The figures beside a market ─────────────────────────────────
+        : root.note.code == "stat-exit-depth" ? @tr("Exit @2% · {0}", root.note.args[0])
+        : root.note.code == "stat-supply" ? @tr("Supply")
+        : root.note.code == "stat-reserves" ? @tr("Reserves")
+        : root.note.code == "stat-venues" ? @tr("Venues")
+        : root.note.code == "stat-quoted-in" ? @tr("Quoted in")
 
         // ── Where a price came from ─────────────────────────────────────
         : root.note.code == "price-from-notarization"
@@ -208,7 +481,6 @@ export component NoticeTitle inherits Text {
         : root.note.code == "name-claim-uncertain" ? @tr("We could not confirm the claim was sent")
         : root.note.code == "name-register-failed" ? @tr("Could not finish registering that name")
         : root.note.code == "name-claim-busy" ? @tr("A name is already being registered")
-        : root.note.code == "name-refused" ? @tr("That name cannot be claimed")
 
         // ── Currencies ──────────────────────────────────────────────────
         : root.note.code == "launch-draft-invalid" ? @tr("That currency cannot be launched yet")

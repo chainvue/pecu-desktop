@@ -10,7 +10,7 @@ use crate::models::{
     ChartVm, ConvertQuoteVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
     HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
-    ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, PendingVm, PortfolioVm,
+    ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NoteVm, PendingVm, PortfolioVm,
     RegistrationVm, SeedWordVm,
     SearchHitVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
@@ -72,13 +72,17 @@ pub enum Event {
     /// typed, so a reply arriving after the field moved on is discardable.
     IdentityMissing {
         typed: String,
-        reason: String,
+        /// Why, as a named reason. The one string it can carry is a node's own
+        /// error text, which is not the wallet's to translate.
+        reason: NoteVm,
     },
     /// A change to an identity, built and signed but not sent.
     IdentityChangePrepared {
         ticket: u64,
-        /// What it will do, in a sentence.
-        description: String,
+        /// What it will do, as a named reason. `note.slint` has the sentence —
+        /// this one is read before signing something that cannot be undone, so
+        /// it is the last place prose should be stuck in English.
+        description: NoteVm,
         fee_display: String,
         /// The word that has to be typed before this can be sent, or empty when
         /// none is needed. Only a revocation asks for one.
@@ -96,8 +100,8 @@ pub enum Event {
     /// Whether a name can be claimed, and what it would cost.
     NameChecked {
         name: String,
-        /// Empty when the name is fine. Otherwise why it is not.
-        problem: String,
+        /// `NoteVm::none()` when the name is fine. Otherwise why it is not.
+        problem: NoteVm,
         /// The registration fee, formatted. Empty when it is not known yet.
         fee_display: String,
     },

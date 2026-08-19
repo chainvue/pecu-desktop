@@ -1,4 +1,6 @@
 import { Theme, Sp, R, Typo, Motion, InputMode } from "../theme/theme.slint";
+import { NoteText } from "note.slint";
+import { Note } from "../vm/structs.slint";
 
 // A button.
 //
@@ -478,6 +480,10 @@ export component ListRow inherits Rectangle {
     // set in a proportional font reads as prose.
     in property <bool> title-mono: false;
     in property <string> subtitle;
+    // The same line, when what goes there is a **named reason** rather than a
+    // string — a relative time, mostly, which the core cannot spell because
+    // "2 hours ago" has a plural in it. Exactly one of the two is ever set.
+    in property <Note> subtitle-note;
     // Every subtitle in this application is either prose or an identifier — a
     // URL, an address, a transaction id — and an identifier set in a
     // proportional font reads as prose. Mono says "this is a thing you compare
@@ -529,6 +535,15 @@ export component ListRow inherits Rectangle {
                 text: root.subtitle;
                 font-family: root.subtitle-mono ? Typo.mono : "";
                 font-size: root.subtitle-mono ? Typo.num-sm : Typo.caption;
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+            // Inside the title's column, not beside it. Put one line out of
+            // that layout and the relative time floats above the row instead of
+            // sitting under the word it qualifies.
+            if root.subtitle-note.code != "": NoteText {
+                note: root.subtitle-note;
+                font-size: Typo.caption;
                 color: Theme.text-tertiary;
                 overflow: elide;
             }

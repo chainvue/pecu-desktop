@@ -146,7 +146,7 @@ pub struct NodeVm {
     pub tip: Option<u32>,
     pub latency_ms: Option<u32>,
     /// Why it is degraded, in words, when it is.
-    pub note: Option<String>,
+    pub note: NoteVm,
     /// Built-in nodes cannot be deleted.
     pub builtin: bool,
 }
@@ -236,10 +236,10 @@ pub struct RegistrationVm {
     /// | "expired" | "lost"
     pub step: String,
     /// What is happening, in a sentence somebody can act on.
-    pub note: String,
+    pub note: NoteVm,
     /// The block the commitment must be registered by, and how long that is.
     /// Empty when there is no deadline to state yet.
-    pub deadline: String,
+    pub deadline: NoteVm,
     /// The registration fee, formatted.
     pub fee_display: String,
     /// The identity's address, once it exists.
@@ -271,7 +271,7 @@ pub struct IdentityVm {
     pub tone: String,
     /// What the status means, in a sentence. Empty for the ordinary case,
     /// because a row that explains "Active" is a row nobody reads.
-    pub note: String,
+    pub note: NoteVm,
     /// Whether this wallet holds enough keys to sign for it. Decides which
     /// actions are offered, and is a fact about this wallet rather than about
     /// the identity.
@@ -303,7 +303,7 @@ pub struct CurrencyVm {
     pub tone: String,
     /// What this currency is, in a sentence somebody who did not define it can
     /// read. Empty when the kind alone says it.
-    pub note: String,
+    pub note: NoteVm,
     /// Whether it has reached its start block.
     ///
     /// False for the window between the definition being mined and the currency
@@ -333,7 +333,7 @@ pub struct EligibleIdentityVm {
     /// an identity already carrying a currency, or one this wallet cannot sign
     /// for. Shown rather than hidden: a name missing from a list with no
     /// explanation reads as a bug.
-    pub refusal: String,
+    pub refusal: NoteVm,
 }
 
 /// One reserve of a basket, as typed.
@@ -422,7 +422,7 @@ pub struct CurrencyProblemVm {
     /// True when this stops the launch, false when it only has to be read.
     pub blocking: bool,
     /// What is wrong, in a sentence somebody can act on.
-    pub text: String,
+    pub text: NoteVm,
 }
 
 /// What core makes of a draft: the problems, and the numbers the picture is
@@ -476,7 +476,7 @@ pub struct CurrencyPickVm {
     pub kind: String,
     /// Something worth knowing before it is used as a reserve, or empty.
     /// Currently only "has not started yet".
-    pub note: String,
+    pub note: NoteVm,
 }
 
 /// The answer to one search of the currency list.
@@ -501,7 +501,7 @@ pub struct CurrencyChoicesVm {
     pub loading: bool,
     /// Why there is nothing to choose from, or empty. A node that could not be
     /// asked is not the same as a chain with no currencies on it.
-    pub problem: String,
+    pub problem: NoteVm,
 }
 
 /// One slice of a proportional bar.
@@ -541,7 +541,7 @@ pub struct CurrencySliceVm {
 /// itself would be a second opinion about what is about to be spent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowStepVm {
-    pub label: String,
+    pub label: NoteVm,
     /// "done" | "now" | "later" | "failed".
     ///
     /// `failed` exists because one of these flows can end without finishing: a
@@ -559,9 +559,9 @@ pub struct FlowStepVm {
 impl FlowStepVm {
     /// One step. Here rather than in each caller because two modules in the
     /// core build these lists and a third would otherwise copy the shape.
-    pub fn new(label: &str, state: &str, costs: bool) -> Self {
+    pub fn new(label: NoteVm, state: &str, costs: bool) -> Self {
         Self {
-            label: label.to_string(),
+            label,
             state: state.to_string(),
             costs,
         }
@@ -571,8 +571,14 @@ impl FlowStepVm {
 /// One line of the definition preview.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrencyFieldVm {
-    pub label: String,
+    /// What this line is, named. The words are in `note.slint`.
+    pub label: NoteVm,
+    /// What it says, when that is a value — a name, an address, an amount.
     pub value: String,
+    /// …and when it is a **sentence** instead. Two fields because most of these
+    /// lines carry data the core must not translate and two of them carry prose
+    /// it must not write. Exactly one is ever set.
+    pub value_note: NoteVm,
     /// True for the fields that cannot be changed after the launch. The preview
     /// marks them, because "permanent" is the only property of this screen
     /// worth interrupting somebody for.
@@ -592,7 +598,7 @@ pub struct LaunchReviewVm {
     /// The currency's name, off the definition that was signed.
     pub name: String,
     /// What it will be, in a sentence.
-    pub description: String,
+    pub description: NoteVm,
     /// What chain policy charges, and the two halves it splits into. Both are
     /// funded; only one of them comes back as an output.
     pub fee_display: String,
@@ -615,7 +621,7 @@ pub struct LaunchPendingVm {
     /// "awaiting-identity" | "ready".
     pub step: String,
     /// What is happening, in a sentence somebody can act on.
-    pub note: String,
+    pub note: NoteVm,
     /// Whether the wallet is waiting on a press rather than on the chain.
     pub can_continue: bool,
     /// How far along it is, as the same diagram the form drew as a plan.
@@ -647,7 +653,7 @@ pub struct IdentityDetailVm {
     pub primary_addresses: Vec<String>,
     pub signatures_required: String,
     /// "This wallet holds 1 of the 1 key needed" — or that it holds none.
-    pub control_note: String,
+    pub control_note: NoteVm,
     /// Whether this wallet holds enough keys to sign for it.
     ///
     /// Its own field rather than something inferred from `control_note`. A
@@ -664,7 +670,7 @@ pub struct IdentityDetailVm {
     pub cannot_be_revoked: bool,
     /// The lock, in words. Never "locked: true" — the two locked states behave
     /// nothing alike and only one of them ends on its own.
-    pub timelock_note: String,
+    pub timelock_note: NoteVm,
     /// What it holds, already formatted.
     pub balance_display: String,
     /// Published content as it stands now.
@@ -789,14 +795,14 @@ pub struct HistoryRowVm {
     /// Non-native currencies this transaction moved, pre-formatted.
     pub currency_lines: Vec<String>,
     /// Pre-formatted "2 hours ago" / "yesterday".
-    pub when_display: String,
+    pub when_display: NoteVm,
     /// Non-empty when this row begins a new day: the heading to draw above it
     /// ("Today", "Yesterday", "12 March 2026").
     ///
     /// Computed here rather than in the UI because it depends on comparing this
     /// row with the one before it, which a `for` loop over a model cannot do —
     /// and because a calendar day is a fact about a timezone, not about a list.
-    pub group: String,
+    pub group: NoteVm,
     pub pending: bool,
     /// "payment" · "convert" · "login" · "identity".
     ///
@@ -834,7 +840,7 @@ pub struct TxDetailVm {
     pub height: u32,
     pub confirmations: Option<u32>,
     pub block_time: i64,
-    pub when_display: String,
+    pub when_display: NoteVm,
     pub net_display: String,
     /// Whether `net_display` is the chain's own currency.
     ///
@@ -1187,7 +1193,7 @@ pub struct VenueVm {
 /// One labelled figure on the currency detail.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StatVm {
-    pub label: String,
+    pub label: NoteVm,
     pub value: String,
 }
 
