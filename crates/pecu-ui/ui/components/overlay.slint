@@ -17,15 +17,20 @@ import { NoticeBody, NoticeTitle } from "note.slint";
 //
 // # What it searches, and what it does not
 //
-// Identities and currencies — the things that have a name and an i-address, and
-// the two the design's placeholder names. **Not screens**: those are reachable
-// with ⌘1–⌘8, which this wallet already has and the design's shortcut map also
-// lists, and putting the navigation into the core's search would mean the core
-// knowing what the interface is arranged into.
+// Addresses this wallet has paid or named, and currencies the markets read has
+// named — the two things it holds that have a name and an identifier, and whose
+// screens are both in the rail. It used to search identities as well; that
+// destination is hidden in this build, and a result nobody can get back from is
+// worse than no result. See `Core::search`.
 //
-// Transaction ids are in the placeholder and are not searched yet. History is
-// loaded per screen rather than held, so answering for a txid means the core
-// keeping an index it currently has no reason to build.
+// **Not screens**: those are reachable with ⌘1–⌘7 and ⌘,, which this wallet
+// already has and the design's shortcut map also lists, and putting the
+// navigation into the core's search would mean the core knowing what the
+// interface is arranged into.
+//
+// Transaction ids are not searched. History is loaded per screen rather than
+// held, so answering for a txid means the core keeping an index it currently
+// has no reason to build.
 //
 // # There is no empty state
 //
@@ -66,7 +71,7 @@ export component CommandPalette inherits Rectangle {
 
             field := Field {
                 mono: true;
-                placeholder: @tr("Search · currency, identity, address");
+                placeholder: @tr("Search · address, currency");
                 text <=> SearchState.query;
                 edited => { SearchState.search(SearchState.query); }
             }
@@ -85,7 +90,7 @@ export component CommandPalette inherits Rectangle {
                         spacing: Sp.s4;
 
                         Icon {
-                            name: hit.kind == "identity" ? "profile" : "currency";
+                            name: hit.kind == "address" ? "send" : "currency";
                             size: 18px;
                             y: (parent.height - self.height) / 2;
                             tone: Theme.text-secondary;

@@ -1240,16 +1240,22 @@ pub struct MarketDetailVm {
 /// have rendered would answer for the screen rather than for the wallet.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchHitVm {
-    /// "identity" · "currency". Chooses the icon and tells the interface which
+    /// "address" · "currency". Chooses the icon and tells the interface which
     /// screen to open, without it having to parse `target`.
+    ///
+    /// Both destinations are screens that are in the rail, which is the whole
+    /// of the rule: a hit whose only home is a hidden screen strands whoever
+    /// picks it. `Core::search` says what that cost.
     pub kind: String,
-    /// What to show: the name, as the chain spells it.
+    /// What to show: a saved address's label, or a currency's name as the chain
+    /// spells it. An address nobody has named repeats its address here rather
+    /// than leaving the line empty.
     pub label: String,
-    /// The i-address, under the name. A person searching for a name recognises
+    /// The address, under the name. A person searching for a name recognises
     /// it; a person searching for an address needs to see it echoed back or
     /// they cannot tell which of two similar rows they matched.
     pub sub: String,
-    /// The i-address again, as the thing to act on. Separate from `sub` because
+    /// The address again, as the thing to act on. Separate from `sub` because
     /// what is *shown* and what is *opened* are allowed to diverge later, and
     /// discovering that they had been the same field is how a display change
     /// breaks navigation.

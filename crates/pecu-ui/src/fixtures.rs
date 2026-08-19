@@ -428,22 +428,25 @@ pub fn searching(ui: &AppWindow) {
     state.set_query("ve".into());
     state.set_hits(ModelRc::from(Rc::new(VecModel::from(vec![
         SearchHit {
-            kind: "identity".into(),
-            label: "vault.VRSCTEST@".into(),
-            sub: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
-            target: "i5Qcj82gvrHdHCCvTwy2yCFeMz3s3dgB6m".into(),
+            kind: "address".into(),
+            label: "Vera".into(),
+            sub: "RQxJPwqCvMHqCiZKPyzXvRXjT2Y5vd8Xhi".into(),
+            target: "RQxJPwqCvMHqCiZKPyzXvRXjT2Y5vd8Xhi".into(),
+        },
+        // Paid once, never named. Photographed on purpose: it is the row that
+        // shows the same string twice, and the only way to know that reads as a
+        // deliberate fallback rather than a rendering fault is to look at it.
+        SearchHit {
+            kind: "address".into(),
+            label: "RVe7T8FwqhLmMzTNbEo3vjFJ8yfXxJ4vDk".into(),
+            sub: "RVe7T8FwqhLmMzTNbEo3vjFJ8yfXxJ4vDk".into(),
+            target: "RVe7T8FwqhLmMzTNbEo3vjFJ8yfXxJ4vDk".into(),
         },
         SearchHit {
             kind: "currency".into(),
             label: "Bridge.vETH".into(),
             sub: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
             target: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
-        },
-        SearchHit {
-            kind: "identity".into(),
-            label: "moving.VRSCTEST@".into(),
-            sub: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
-            target: "i87QZVSS7SosM5choTJE7Dy4SNRt5vAEhr".into(),
         },
     ]))));
 }

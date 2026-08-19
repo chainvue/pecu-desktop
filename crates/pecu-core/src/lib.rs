@@ -854,6 +854,92 @@ fn search_matches(needle: &str, name: &str, address: &str) -> bool {
     name.to_lowercase().contains(needle) || address.to_lowercase().contains(needle)
 }
 
+/// Everything the command palette shows for one query.
+///
+/// Free rather than a method so it can be tested: `Core` owns channels, a node
+/// manager and an open database, and none of those have anything to do with
+/// which rows a substring matches.
+///
+/// `known` comes back from the store most-recently-paid first, and the order is
+/// load-bearing — see `MOST`.
+fn palette_hits(
+    query: &str,
+    known: &[pecu_store::KnownAddress],
+    currencies: &std::collections::BTreeMap<String, String>,
+) -> Vec<pecu_protocol::SearchHitVm> {
+    /// How many results the panel will show.
+    ///
+    /// It has no scroll and sizes itself to its content, so an uncapped list
+    /// would grow the panel off the bottom of the window. Eight fits an
+    /// 800px-tall window and leaves the field visible, which is the one thing
+    /// that must never be pushed off the top.
+    ///
+    /// Truncation is silent, and is the reason both lists are walked in an
+    /// order somebody would choose: addresses most-recently-paid first, and
+    /// currencies alphabetically because a `BTreeMap` is. A cap over an
+    /// arbitrary order would drop arbitrary rows.
+    const MOST: usize = 8;
+
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut hits: Vec<pecu_protocol::SearchHitVm> = Vec::new();
+
+    // Addresses first, and deliberately: in a wallet whose subject is sending
+    // money, what somebody opens a search box to find is usually somebody to
+    // pay.
+    //
+    // An address that has been paid but never named shows its address on both
+    // lines rather than leaving the first empty: the row is two lines tall
+    // whatever it holds, and a blank top line reads as a broken row instead of
+    // an unnamed one.
+    for entry in known {
+        if hits.len() >= MOST {
+            break;
+        }
+        if !search_matches(&needle, &entry.label, &entry.address) {
+            continue;
+        }
+        hits.push(pecu_protocol::SearchHitVm {
+            kind: "address".to_string(),
+            label: if entry.label.is_empty() {
+                entry.address.clone()
+            } else {
+                entry.label.clone()
+            },
+            sub: entry.address.clone(),
+            target: entry.address.clone(),
+        });
+    }
+
+    // Then currencies, from the names the markets read brought back.
+    //
+    // That list and not `Core::cached.names`, which is the other set of
+    // currency names the core holds: its keys are `CurrencyId`s, and a
+    // `CurrencyId` prints as its bytes rather than as the i-address
+    // `OpenMarket` takes. A target built from one would look right and open
+    // nothing. So a session that has not been to the markets screen finds no
+    // currencies here, which is the honest answer to "what is in hand".
+    for (address, name) in currencies {
+        if hits.len() >= MOST {
+            break;
+        }
+        if !search_matches(&needle, name, address) {
+            continue;
+        }
+        hits.push(pecu_protocol::SearchHitVm {
+            kind: "currency".to_string(),
+            label: name.clone(),
+            sub: address.clone(),
+            target: address.clone(),
+        });
+    }
+
+    hits
+}
+
 impl Core {
     async fn run(
         mut self,
@@ -4241,11 +4327,40 @@ impl Core {
         self.emit_currencies();
     }
 
-    /// Check a draft and hand back everything the configure screen draws.
+    /// Answer the command palette.
     ///
-    /// Runs on every keystroke, so it touches nothing but memory: every rule is
-    /// arithmetic over what was typed, plus the tip and the launch fee the
-    /// wallet is already holding. No node is asked anything.
+    /// Over what is already in hand — the addresses this wallet has paid or
+    /// named, and the currencies the markets read has named — rather than over
+    /// the chain. A palette that made a request per keystroke would stutter,
+    /// and neither list changes between two letters being typed.
+    ///
+    /// An empty query clears rather than listing everything: a palette that
+    /// opens showing the whole wallet has answered a question nobody asked.
+    ///
+    /// # Why it no longer searches identities
+    ///
+    /// It searched the identities these keys control and the currencies they
+    /// define, and both of those screens are out of the rail for this build.
+    /// A result that lands on a screen the wallet is otherwise not offering is
+    /// worse than no result — there is no visible way back from it. The two
+    /// loops are deleted rather than filtered, because a filter here would have
+    /// to encode which screens the interface is currently showing, and the core
+    /// does not know that and should not learn it.
+    ///
+    /// `kind` is the whole of the contract: it picks the icon and the screen.
+    /// Adding identities back is one loop in [`palette_hits`] and one arm in
+    /// `wire_search`.
+    fn search(&mut self, query: &str) {
+        let hits = match &self.store {
+            Some(store) => palette_hits(query, &store.known_addresses(), &self.market_names),
+            None => palette_hits(query, &[], &self.market_names),
+        };
+        let _ = self.events.send(Event::SearchHits {
+            query: query.to_string(),
+            hits,
+        });
+    }
+
     /// Answer the reserve picker, fetching the chain's currency list if this is
     /// the first search of the session.
     ///
@@ -4256,66 +4371,6 @@ impl Core {
     /// it; paying for that on the way past the Currencies screen would be a
     /// request nobody asked for. The first search pays, and it is the one
     /// moment somebody is waiting for exactly this answer.
-    /// Answer the command palette.
-    ///
-    /// Over what is already in hand — the identities these keys control and the
-    /// currencies they define — rather than over the chain. A palette that made
-    /// a request per keystroke would stutter, and neither list changes between
-    /// two letters being typed.
-    ///
-    /// An empty query clears rather than listing everything: a palette that
-    /// opens showing the whole wallet has answered a question nobody asked.
-    ///
-    /// Matching is a case-insensitive substring over the name **and** the
-    /// i-address. The address matters more than it looks: it is the identifier
-    /// this wallet tells people to prefer for anything destructive, so it is
-    /// the one somebody arrives with pasted on the clipboard.
-    fn search(&mut self, query: &str) {
-        let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
-            let _ = self.events.send(Event::SearchHits {
-                query: query.to_string(),
-                hits: Vec::new(),
-            });
-            return;
-        }
-
-        let matches = |name: &str, address: &str| search_matches(&needle, name, address);
-
-        let mut hits: Vec<pecu_protocol::SearchHitVm> = Vec::new();
-
-        // Identities first, and deliberately: a name is what a person searches
-        // for, and a currency shares its address with the identity that defines
-        // it — so an address query matches both and the identity is the one
-        // that explains the other.
-        for identity in self.identities.values() {
-            if matches(&identity.name, &identity.address) {
-                hits.push(pecu_protocol::SearchHitVm {
-                    kind: "identity".to_string(),
-                    label: identity.name.clone(),
-                    sub: identity.address.clone(),
-                    target: identity.address.clone(),
-                });
-            }
-        }
-
-        for currency in &self.currencies {
-            if matches(&currency.name, &currency.address) {
-                hits.push(pecu_protocol::SearchHitVm {
-                    kind: "currency".to_string(),
-                    label: currency.name.clone(),
-                    sub: currency.address.clone(),
-                    target: currency.address.clone(),
-                });
-            }
-        }
-
-        let _ = self.events.send(Event::SearchHits {
-            query: query.to_string(),
-            hits,
-        });
-    }
-
     fn search_currencies(&mut self, query: String, exclude: Vec<String>) {
         if let Catalog::Ready(all) = &self.currency_catalog {
             let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
@@ -4399,6 +4454,11 @@ impl Core {
         }
     }
 
+    /// Check a draft and hand back everything the configure screen draws.
+    ///
+    /// Runs on every keystroke, so it touches nothing but memory: every rule is
+    /// arithmetic over what was typed, plus the tip and the launch fee the
+    /// wallet is already holding. No node is asked anything.
     fn validate_currency(&mut self, draft: &pecu_protocol::CurrencyDraft) {
         let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
         let ticker = self.nodes.requested().map_or_else(
@@ -5875,6 +5935,111 @@ mod tests {
     #[test]
     fn a_search_refuses_what_does_not_match() {
         assert!(!search_matches("bridge", "vault.VRSCTEST@", "i5Qcj82"));
+    }
+
+    // ── The command palette's results ───────────────────────────────────────
+
+    fn known(label: &str, address: &str) -> pecu_store::KnownAddress {
+        pecu_store::KnownAddress {
+            address: address.to_string(),
+            label: label.to_string(),
+            paid_at: None,
+            payments: 0,
+        }
+    }
+
+    fn currencies(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(address, name)| ((*address).to_string(), (*name).to_string()))
+            .collect()
+    }
+
+    /// Addresses before currencies, whatever the query matched.
+    ///
+    /// The order is the answer to "who am I paying", which is what a wallet's
+    /// search box is mostly asked.
+    #[test]
+    fn the_palette_puts_addresses_above_currencies() {
+        let hits = palette_hits(
+            "ve",
+            &[known("Vera", "RQxJPwq")],
+            &currencies(&[("iBoaN7s", "Bridge.vETH")]),
+        );
+
+        let kinds: Vec<&str> = hits.iter().map(|hit| hit.kind.as_str()).collect();
+        assert_eq!(kinds, ["address", "currency"]);
+    }
+
+    /// An address nobody has named shows its address on both lines.
+    ///
+    /// Not an empty label: the row is two lines tall either way, and a blank
+    /// top line reads as a broken row rather than an unnamed one.
+    #[test]
+    fn an_unnamed_address_falls_back_to_its_address_rather_than_showing_nothing() {
+        let hits = palette_hits("rqx", &[known("", "RQxJPwq")], &currencies(&[]));
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].label, "RQxJPwq");
+        assert_eq!(hits[0].sub, "RQxJPwq");
+    }
+
+    /// An empty query answers with nothing rather than with everything.
+    ///
+    /// A palette that opens showing the whole wallet has answered a question
+    /// nobody asked — and `SearchState.search("")` is exactly what ⌘K sends on
+    /// the way in.
+    #[test]
+    fn an_empty_query_clears_rather_than_listing_the_wallet() {
+        let hits = palette_hits(
+            "   ",
+            &[known("Vera", "RQxJPwq")],
+            &currencies(&[("iBoaN7s", "Bridge.vETH")]),
+        );
+
+        assert!(hits.is_empty());
+    }
+
+    /// The panel has no scroll and sizes itself to its content, so the list is
+    /// capped — and the cap has to hold across *both* lists, not per list.
+    #[test]
+    fn the_palette_stops_before_it_grows_past_the_window() {
+        let addresses: Vec<pecu_store::KnownAddress> = (0..20)
+            .map(|i| known(&format!("saved {i}"), &format!("Raddr{i}")))
+            .collect();
+        let names: Vec<(String, String)> = (0..20)
+            .map(|i| (format!("iCur{i}"), format!("saved{i}.vETH")))
+            .collect();
+        let catalog: std::collections::BTreeMap<String, String> = names.into_iter().collect();
+
+        let hits = palette_hits("saved", &addresses, &catalog);
+
+        assert_eq!(hits.len(), 8, "the panel would run off the bottom");
+        assert!(
+            hits.iter().all(|hit| hit.kind == "address"),
+            "the cap is over the whole list, not one per kind"
+        );
+    }
+
+    /// Nothing the palette hands back may point at a screen that is not in the
+    /// rail. `wire_search` routes on `kind` alone, and the two it knows are the
+    /// two screens this build shows.
+    #[test]
+    fn every_hit_names_a_screen_this_build_actually_offers() {
+        let hits = palette_hits(
+            "e",
+            &[known("Vera", "RQxJPwq")],
+            &currencies(&[("iBoaN7s", "Bridge.vETH")]),
+        );
+
+        assert!(!hits.is_empty(), "the fixture has to match something");
+        for hit in &hits {
+            assert!(
+                hit.kind == "address" || hit.kind == "currency",
+                "{} has nowhere to go",
+                hit.kind
+            );
+        }
     }
 
     /// The one line the send form gets about a VerusID, in priority order.

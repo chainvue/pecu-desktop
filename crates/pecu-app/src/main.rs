@@ -1271,6 +1271,7 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
         // Not debounced. The search is a filter over two lists already in
         // memory, with no request and no I/O behind it, so a timer here would
         // add latency and buy nothing.
+        let dispatcher = dispatcher.clone();
         search.on_search(move |query| {
             dispatcher.send(Command::Search {
                 query: query.to_string(),
@@ -1282,17 +1283,47 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
         // Picking a result goes to the screen that can show it, rather than
         // opening a sheet over the palette: a detour that lands somewhere
         // recognisable is one a person can find their way back from.
+        //
+        // Both arms land on a screen that is in the rail. That is the whole
+        // reason the core stopped answering with identities — a result whose
+        // only destination is hidden strands whoever picked it.
         let weak = ui.as_weak();
         search.on_pick(move |hit| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
-            let screen = if hit.kind == "identity" {
-                "identities"
-            } else {
-                "currencies"
-            };
-            ui.invoke_go(screen.into());
+
+            if hit.kind == "address" {
+                // Filled in, not sent. The form is where a payment starts and
+                // the amount is still empty, so this is the same state as
+                // having pasted the address — one field further along, and no
+                // further.
+                //
+                // `step` is set as well as the text: arriving at a half-built
+                // review because the last visit left one there would put the
+                // recipient somewhere nobody can see it.
+                let send = ui.global::<pecu_ui::SendState>();
+                send.set_step("form".into());
+                send.set_to_draft(hit.target.clone());
+                // Through the same callback the field uses, so the note, the
+                // validity flag and the label under the box are filled by the
+                // one piece of code that knows how — rather than by a second
+                // path that would have to agree with it forever.
+                ui.global::<Actions>()
+                    .invoke_validate_draft(hit.target.clone(), send.get_amount_draft());
+                ui.invoke_go("send".into());
+                return;
+            }
+
+            // Written here as well as dispatched, for the reason `on_select`
+            // gives on the markets screen: the row highlights on the pick
+            // rather than after the round trip, and the reply setting it again
+            // to the same value is what keeps a selection the core refused from
+            // sticking.
+            ui.global::<pecu_ui::MarketState>()
+                .set_selected(hit.target.clone());
+            dispatcher.send(Command::OpenMarket(hit.target.to_string()));
+            ui.invoke_go("markets".into());
         });
     }
 }
