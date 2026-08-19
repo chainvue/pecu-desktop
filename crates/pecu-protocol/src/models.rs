@@ -1206,6 +1206,13 @@ pub struct MarketDetailVm {
     pub price: String,
     pub change: String,
     pub tone: String,
+    /// What the price did, over `market::WINDOW_DAYS`. Oldest first, in
+    /// satoshis of the quote currency per one unit — an integer, because a
+    /// series of floats renders differently on two machines.
+    ///
+    /// Empty for a pool with no published history, which is the honest picture
+    /// of an idle market rather than a chart that failed.
+    pub series: Vec<ChartPointVm>,
     pub stats: Vec<StatVm>,
     pub venues: Vec<VenueVm>,
     /// How the price was arrived at, as a chain of hops. On a wallet whose

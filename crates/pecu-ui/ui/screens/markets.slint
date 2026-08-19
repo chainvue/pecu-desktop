@@ -125,7 +125,10 @@ export component MarketsScreen inherits HorizontalLayout {
                 width: 74px;
             }
             Text {
-                text: @tr("24h");
+                // Thirty days, not a day: the series is sampled daily, and a
+                // column headed 24h filled from two daily samples is a figure
+                // that looks precise and is not. See `Book::change_over_window`.
+                text: @tr("30d");
                 font-size: Typo.micro;
                 color: Theme.text-tertiary;
                 horizontal-alignment: right;
@@ -219,30 +222,50 @@ export component MarketsScreen inherits HorizontalLayout {
                 }
             }
 
-            // Where the price chart goes, and why it is not here yet.
+            // Thirty days of price, when the pool published anything.
             //
-            // This used to be a row of range buttons — 1D, 1W, 1M — with
-            // nothing behind them and no chart under them. A control that does
-            // nothing is a worse answer than no control: it says the wallet
-            // could show you a week of prices and has chosen not to.
-            //
-            // It cannot. A price here is derived from a currency's reserve
-            // state, and reserve state at a past height is `getcurrencystate`
-            // with a block range — which the SDK this wallet is pinned to takes
-            // no argument for. Until that changes there is no series, which is
-            // also why every change column on this screen reads `—`.
+            // No axis, no cursor, no fill: this is a thumbnail beside a figure,
+            // and the figure above it is the number somebody came for. The
+            // balance chart on the dashboard is the one built to be read.
             Card {
                 VerticalLayout {
                     padding: Sp.s5;
-                    spacing: Sp.s2;
-                    Text {
-                        text: @tr("No price history");
-                        font-size: Typo.body;
-                        font-weight: Typo.w-bold;
-                        color: Theme.text-secondary;
+                    spacing: Sp.s3;
+
+                    HorizontalLayout {
+                        Text {
+                            text: @tr("30 days");
+                            font-size: Typo.micro;
+                            color: Theme.text-tertiary;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: MarketState.detail-change;
+                            font-family: Typo.mono;
+                            font-size: Typo.num-sm;
+                            color: MarketState.detail-tone == "positive" ? Theme.positive
+                                : MarketState.detail-tone == "negative" ? Theme.negative
+                                : Theme.text-tertiary;
+                        }
                     }
-                    Text {
-                        text: @tr("Prices are read from reserve state at the tip. Reading it at a past block needs a node call this build cannot make yet, so there is no chart and no 24-hour change.");
+
+                    if MarketState.has-series: Rectangle {
+                        height: 96px;
+                        spark := Path {
+                            width: parent.width;
+                            height: parent.height;
+                            commands: MarketState.spark-at(self.width, self.height);
+                            stroke: Theme.accent;
+                            stroke-width: 1.5px;
+                        }
+                    }
+
+                    // Not a failure, and worded so. A pool that nobody has
+                    // traded through in a month has published nothing to draw,
+                    // and that is a fact about the market rather than about the
+                    // wallet.
+                    if !MarketState.has-series: Text {
+                        text: @tr("This market has published no price in the last 30 days.");
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;

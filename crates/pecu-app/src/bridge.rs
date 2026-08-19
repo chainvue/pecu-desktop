@@ -635,6 +635,7 @@ fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDeta
     let state = ui.global::<pecu_ui::MarketState>();
 
     let Some(detail) = detail else {
+        pecu_ui::spark::show(ui, &[]);
         state.set_selected(slint::SharedString::new());
         state.set_detail_name(slint::SharedString::new());
         state.set_detail_stats(slint::ModelRc::new(slint::VecModel::from(Vec::<
@@ -648,6 +649,7 @@ fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDeta
         return;
     };
 
+    pecu_ui::spark::show(ui, &detail.series);
     state.set_detail_name(detail.name.clone().into());
     state.set_detail_subtitle(detail.subtitle.clone().into());
     state.set_detail_price(detail.price.clone().into());

@@ -111,6 +111,7 @@ pub fn render(
     // resets the chart, which is what keeps one case's readings from turning up
     // in the next one's picture.
     crate::chart::install(&ui);
+    crate::spark::install(&ui);
     seed(&ui);
     ui.set_screen(screen.into());
     ui.global::<crate::Theme>().set_dark(dark);
@@ -190,6 +191,7 @@ pub const CASES: &[Case] = &[
     ("dashboard", "search", crate::fixtures::searching),
     ("markets", "markets", crate::fixtures::markets),
     ("markets", "market-detail", crate::fixtures::market_detail),
+    ("markets", "market-moving", crate::fixtures::market_moving),
     ("convert", "convert", crate::fixtures::converting),
     ("convert", "convert-thin", crate::fixtures::converting_thin),
     ("convert", "convert-refused", crate::fixtures::converting_refused),

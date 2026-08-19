@@ -65,6 +65,22 @@ pub struct Reserve {
     pub weight: f64,
 }
 
+/// One past reading of a pool, reduced to what a price needs.
+///
+/// The reserve prices and nothing else: the holdings and the supply are what a
+/// *depth* is computed from, and a depth thirty days ago is a fact nobody has
+/// asked for. Carrying them would triple the size of every history for a column
+/// that does not exist.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reading {
+    pub block_time: i64,
+    /// Reserve i-address to `priceinreserve` at that block.
+    pub prices: BTreeMap<String, f64>,
+    /// What one unit of the pool's own currency was worth — the same figure
+    /// `priceinreserve` gives for a reserve, for the basket itself.
+    pub supply: f64,
+}
+
 /// A fractional currency, and the state it last published.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pool {
@@ -80,6 +96,9 @@ pub struct Pool {
     pub height: u32,
     pub supply: f64,
     pub reserves: Vec<Reserve>,
+    /// What this pool published before now, oldest first. Empty until somebody
+    /// asks for a history — see `Book::with_history`.
+    pub history: Vec<Reading>,
 }
 
 impl Pool {
@@ -128,7 +147,64 @@ impl Pool {
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or_default(),
             reserves,
+            history: Vec::new(),
         })
+    }
+
+    /// Read a past reading out of one `getcurrencystate` sample.
+    ///
+    /// `None` when the sample carries no reserve list — a currency that had not
+    /// begun at that height publishes a state with nothing in it, and a point
+    /// on a chart derived from that would be a price of zero rather than an
+    /// absence.
+    fn reading_from(sample: &verus_sdk::network::CurrencyStateAt) -> Option<Reading> {
+        let reserves = sample.state.get("reservecurrencies")?.as_array()?;
+        if reserves.is_empty() {
+            return None;
+        }
+        Some(Reading {
+            block_time: sample.block_time,
+            prices: reserves
+                .iter()
+                .filter_map(|reserve| {
+                    Some((
+                        reserve.get("currencyid")?.as_str()?.to_string(),
+                        reserve.get("priceinreserve")?.as_f64()?,
+                    ))
+                })
+                .collect(),
+            supply: sample
+                .state
+                .get("supply")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Attach the history this pool published, oldest first.
+    pub fn remember(&mut self, samples: &[verus_sdk::network::CurrencyStateAt]) {
+        self.history = samples.iter().filter_map(Self::reading_from).collect();
+    }
+
+    /// What one `target` was worth in `quote` at one past reading.
+    ///
+    /// The same division [`Pool::price`] does at the tip, over the figures that
+    /// reading carried. Written twice rather than shared because the two read
+    /// different shapes — a `Reserve` and a `Reading` — and folding them into
+    /// one would mean a history carrying holdings it has no use for.
+    fn price_at(&self, reading: &Reading, target: &str, quote: &str) -> Option<f64> {
+        let quoted = *reading.prices.get(quote)?;
+        if !quoted.is_finite() || quoted <= 0.0 {
+            return None;
+        }
+        if target == self.id {
+            return Some(quoted);
+        }
+        let priced = *reading.prices.get(target)?;
+        if !priced.is_finite() || priced <= 0.0 {
+            return None;
+        }
+        Some(quoted / priced)
     }
 
     pub fn reserve(&self, id: &str) -> Option<&Reserve> {
@@ -394,17 +470,227 @@ impl Book {
     }
 }
 
-/// The markets table.
+/// How far back a chart looks, and how often it samples.
+///
+/// Thirty days at one reading a day. Not a choice between ranges: a wallet
+/// showing 1D/1W/1M has to be able to fill each of them, and a pool that
+/// notarizes twice a month fills none of the short ones. One honest window
+/// beats five buttons, four of which draw a straight line.
+pub const WINDOW_DAYS: u32 = 30;
+/// Blocks in a day on this chain, near enough — a minute a block.
+pub const BLOCKS_PER_DAY: u32 = 1440;
+
+/// A day, in seconds, for the change column's window.
+const ONE_DAY: i64 = 86_400;
+
+impl Book {
+    /// What `target` was worth in the quote currency, over time.
+    ///
+    /// Oldest first, in **satoshis of the quote currency per one unit** — an
+    /// integer, because that is what the chart crate plots and because a series
+    /// of floats is a series that renders differently on two machines.
+    ///
+    /// Empty when there is no history to derive one from, which is a real
+    /// answer and the one a flat, idle pool gives.
+    pub fn series(&self, target: &str) -> Vec<pecu_protocol::ChartPointVm> {
+        let Some(route) = self.route_for(target) else {
+            return Vec::new();
+        };
+
+        match route {
+            Route::Direct(pool) => pool
+                .history
+                .iter()
+                .filter_map(|reading| {
+                    Some(pecu_protocol::ChartPointVm {
+                        t: reading.block_time,
+                        sats: sats_of(pool.price_at(reading, target, &self.quote)?)?,
+                    })
+                })
+                .collect(),
+
+            // Two hops, multiplied at each moment — the same multiplication the
+            // price already does, done per reading instead of once. Refusing it
+            // here while doing it for the figure above the chart would leave the
+            // one pool on this chain that actually moves with nothing to draw.
+            //
+            // Matched on **block time**, not on index, and to the newest hop
+            // reading at or before each sample rather than to an exact one.
+            //
+            // Both, for the same reason: two pools do not notarize in the same
+            // block. Zipping by position plots one currency's price against
+            // another's clock the moment one of them comes back shorter, and an
+            // exact time match finds nothing at all — the reference pool has a
+            // price at every moment, it simply published it at a different one.
+            Route::Through(pool, reference) => {
+                let hops: BTreeMap<i64, f64> = reference
+                    .history
+                    .iter()
+                    .filter_map(|reading| {
+                        Some((
+                            reading.block_time,
+                            reference.price_at(reading, &self.chain, &self.quote)?,
+                        ))
+                    })
+                    .collect();
+
+                pool.history
+                    .iter()
+                    .filter_map(|reading| {
+                        let priced = pool.price_at(reading, target, &self.chain)?;
+                        let (_, hop) = hops.range(..=reading.block_time).next_back()?;
+                        Some(pecu_protocol::ChartPointVm {
+                            t: reading.block_time,
+                            sats: sats_of(priced * hop)?,
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// What the price did over the last day, as a fraction.
+    ///
+    /// `None` when nothing in the history is old enough to compare against —
+    /// which is not the same as "it did not move", and is why the column can
+    /// say `—` rather than `0.00%`.
+    ///
+    /// The **oldest reading still inside the window** is the baseline, not the
+    /// newest one outside it: a pool that last published a week ago would
+    /// otherwise report a week of movement as a day's.
+    pub fn change_since(&self, target: &str, now: i64, seconds: i64) -> Option<f64> {
+        let cutoff = now.checked_sub(seconds)?;
+        let series = self.series(target);
+
+        let latest = series.last()?;
+        let earliest = series.iter().find(|point| point.t >= cutoff)?;
+
+        // The same point on both ends means the window holds one reading, which
+        // says nothing happened that anybody recorded — not that the price held.
+        if earliest.t == latest.t {
+            return None;
+        }
+        if earliest.sats <= 0 {
+            return None;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let (then, now_price) = (earliest.sats as f64, latest.sats as f64);
+        Some((now_price - then) / then)
+    }
+
+    /// The change over the window the chart draws, which is what both the
+    /// table's column and the detail show.
+    ///
+    /// # Why there is no 24-hour figure
+    ///
+    /// Because this samples once a day, and a day's change measured from two
+    /// daily samples is measured from whatever two blocks the step happened to
+    /// land on — the newest sample can be most of a day old before the next one
+    /// exists. A column headed `24h` filled from that is a number that looks
+    /// precise and is not, which is worse than the same number honestly
+    /// labelled.
+    ///
+    /// Sampling hourly would fix the label and cost seven hundred readings per
+    /// pool per screen. One window, said plainly, is the better trade.
+    pub fn change_over_window(&self, target: &str, now: i64) -> Option<f64> {
+        self.change_since(target, now, i64::from(WINDOW_DAYS) * ONE_DAY)
+    }
+
+    /// How a price is reached, so a history can be read the same way.
+    ///
+    /// The same order [`Book::quote_for`] uses, and deliberately so: a chart
+    /// drawn through a different market from the figure above it would be two
+    /// answers to one question.
+    fn route_for(&self, target: &str) -> Option<Route<'_>> {
+        let candidates = self.pools_for(target);
+
+        if let Some(pool) = candidates
+            .iter()
+            .find(|pool| pool.trades(&self.quote))
+            .copied()
+        {
+            return Some(Route::Direct(pool));
+        }
+
+        let (reference, _) = self.reference()?;
+        let pool = candidates
+            .iter()
+            .find(|pool| pool.trades(&self.chain) && pool.id != reference.id)
+            .copied()?;
+        Some(Route::Through(pool, reference))
+    }
+}
+
+/// Which pools a price passes through.
+enum Route<'a> {
+    Direct(&'a Pool),
+    /// The pool that prices it in the chain currency, and the one that prices
+    /// the chain currency in the quote.
+    Through(&'a Pool, &'a Pool),
+}
+
+/// A fraction as a signed percentage, the way a market writes one.
+///
+/// No sign on nothing. A price that did not move is neither a gain nor a loss,
+/// and "+0.00%" reads as a small rise — which is what an idle pool would have
+/// claimed on every row of this screen.
+fn percent(fraction: f64) -> String {
+    let shown = (fraction * 100.0).abs();
+    if shown < 0.005 {
+        return "0.00%".to_string();
+    }
+    format!("{}{shown:.2}%", if fraction > 0.0 { "+" } else { "−" })
+}
+
+/// "positive" · "negative" · "unknown".
+///
+/// Carried rather than read off the sign in the interface, for the reason
+/// `MarketRowVm::tone` records: `—` has no sign, and a change of exactly zero
+/// is neither a gain nor a loss.
+fn tone_of(change: Option<f64>) -> &'static str {
+    match change {
+        Some(fraction) if fraction > 0.0 => "positive",
+        Some(fraction) if fraction < 0.0 => "negative",
+        _ => "unknown",
+    }
+}
+
+/// A price as satoshis of the quote currency, for the chart.
+///
+/// `None` for anything that will not fit, which is the honest answer for a
+/// price of `1e30`: a point the plot would place at infinity is worse than a
+/// gap in the line.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn sats_of(price: f64) -> Option<i64> {
+    // The largest price that fits, as a float. Written out rather than derived
+    // from `i64::MAX`, which is itself a lossy cast and would be comparing
+    // against a number slightly off the one it names.
+    const CEILING: f64 = 9_223_372_036_854_775_807.0;
+
+    if !price.is_finite() || price < 0.0 {
+        return None;
+    }
+    let sats = (price * 100_000_000.0).round();
+    (sats <= CEILING).then_some(sats as i64)
+}
+
+/// The markets table./// The markets table.
 ///
 /// `names` maps i-address to the name to show. A currency the catalog has never
 /// heard of keeps its i-address, which is ugly and true — the alternative is a
 /// row labelled with a guess.
-pub fn rows(book: &Book, names: &BTreeMap<String, String>) -> Vec<MarketRowVm> {
+pub fn rows(book: &Book, names: &BTreeMap<String, String>, now: i64) -> Vec<MarketRowVm> {
     let mut rows: Vec<MarketRowVm> = book
         .currencies()
         .into_iter()
         .map(|address| {
             let quote = book.quote_for(&address);
+            let change = book.change_over_window(&address, now);
             MarketRowVm {
                 name: names
                     .get(&address)
@@ -418,9 +704,8 @@ pub fn rows(book: &Book, names: &BTreeMap<String, String>) -> Vec<MarketRowVm> {
                     .as_ref()
                     .and_then(|quote| quote.depth)
                     .map_or_else(|| UNKNOWN.to_string(), pecu_protocol::format::approx),
-                // No series, so no change, so no colour. See the module docs.
-                change: UNKNOWN.to_string(),
-                tone: "unknown".to_string(),
+                change: change.map_or_else(|| UNKNOWN.to_string(), percent),
+                tone: tone_of(change).to_string(),
                 address,
             }
         })
@@ -443,12 +728,17 @@ pub fn detail(
     address: &str,
     names: &BTreeMap<String, String>,
     quote_name: &str,
+    now: i64,
 ) -> MarketDetailVm {
     let name = names
         .get(address)
         .cloned()
         .unwrap_or_else(|| address.to_string());
     let quote = book.quote_for(address);
+    // The **window's** change, not the day's. The card under it is labelled
+    // thirty days and draws thirty days; putting a day's figure on it would be
+    // a number that disagrees with the line beside it.
+    let over_window = book.change_over_window(address, now);
     let venues = book.venues(address);
     let started = venues.iter().filter(|(pool, _)| pool.started).count();
 
@@ -510,8 +800,9 @@ pub fn detail(
             || UNKNOWN.to_string(),
             |quote| pecu_protocol::format::price(quote.price),
         ),
-        change: UNKNOWN.to_string(),
-        tone: "unknown".to_string(),
+        change: over_window.map_or_else(|| UNKNOWN.to_string(), percent),
+        tone: tone_of(over_window).to_string(),
+        series: book.series(address),
         stats,
         venues: venues
             .into_iter()
@@ -549,6 +840,10 @@ mod tests {
     const VETH: &str = "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm";
     const MKR: &str = "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL";
     const BRIDGE: &str = "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2";
+
+    /// A fixed clock. Nothing in these fixtures carries a history, so the
+    /// change column is `—` throughout and the value only has to be stable.
+    const NOW: i64 = 1_787_000_000;
 
     /// Bridge.vETH as VRSCTEST reported it, figure for figure.
     ///
@@ -739,7 +1034,7 @@ mod tests {
         let stranger = "iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv";
         assert!(book.quote_for(stranger).is_none());
 
-        let detail = detail(&book, stranger, &names(), "DAI.vETH");
+        let detail = detail(&book, stranger, &names(), "DAI.vETH", NOW);
         assert_eq!(detail.price, UNKNOWN);
         assert_eq!(detail.route, "");
         assert_eq!(detail.route_note.code, "price-no-pool");
@@ -754,7 +1049,7 @@ mod tests {
     /// the other side.
     #[test]
     fn the_table_puts_what_it_knows_first() {
-        let rows = rows(&book(), &names());
+        let rows = rows(&book(), &names(), NOW);
         let priced = rows.iter().take_while(|row| row.price != UNKNOWN).count();
 
         assert_eq!(rows.len(), 6);
@@ -773,10 +1068,186 @@ mod tests {
     /// The route is the promise this screen makes: a price you can check.
     #[test]
     fn the_route_names_every_hop_and_the_block_it_was_read_at() {
-        let detail = detail(&book(), VRSCTEST, &names(), "DAI.vETH");
+        let detail = detail(&book(), VRSCTEST, &names(), "DAI.vETH", NOW);
         assert_eq!(detail.route, "VRSCTEST  →  Bridge.vETH  →  DAI.vETH");
         assert_eq!(detail.route_note.code, "price-from-notarization");
         assert_eq!(detail.route_note.args, vec!["1 156 331".to_string()]);
+    }
+
+    /// A pool with readings behind it draws a line; one without draws nothing.
+    ///
+    /// The figures are `vrealv1`'s from VRSCTEST — one reserve at weight one,
+    /// so its price is `held / supply` and the supply is the only thing that
+    /// moves. Six readings, six prices, rising because the supply falls.
+    fn moving() -> Pool {
+        let mut pool = Pool::from_converter(&converter(
+            "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3",
+            "vrealv1",
+            1_184_883,
+            false,
+            646_493.435_264,
+            &[(VRSCTEST, 0.005_441_48, 3_517.884_285, 1.0)],
+        ))
+        .expect("state");
+
+        let supplies = [
+            647_993.435_264_f64,
+            647_493.435_264,
+            647_293.435_264,
+            646_993.435_264,
+            646_693.435_264,
+            646_493.435_264,
+        ];
+        pool.history = supplies
+            .iter()
+            .enumerate()
+            .map(|(index, supply)| Reading {
+                block_time: NOW - (5 - i64::try_from(index).unwrap_or(0)) * 86_400,
+                prices: [(VRSCTEST.to_string(), 3_517.884_285 / supply)]
+                    .into_iter()
+                    .collect(),
+                supply: *supply,
+            })
+            .collect();
+        pool
+    }
+
+    fn moving_book() -> Book {
+        Book::new(vec![moving()], VRSCTEST.to_string(), VRSCTEST.to_string())
+    }
+
+    /// The series is what the chart draws, and it is integers.
+    #[test]
+    fn a_series_carries_one_point_per_reading_in_satoshis() {
+        let book = moving_book();
+        let series = book.series("iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3");
+
+        assert_eq!(series.len(), 6);
+        // Rising: the supply falls and the holding does not.
+        assert!(
+            series.windows(2).all(|w| w[1].sats >= w[0].sats),
+            "{series:?}"
+        );
+        assert!(series[0].sats < series[5].sats);
+        // Oldest first, a day apart.
+        assert_eq!(series[5].t - series[0].t, 5 * 86_400);
+    }
+
+    /// The day's change compares against the oldest reading **inside** the
+    /// window, not the newest one outside it.
+    ///
+    /// A pool that last published a week ago would otherwise report a week of
+    /// movement as a day's — the one way this column can be confidently wrong.
+    #[test]
+    fn the_day_change_measures_a_day_and_not_whatever_is_nearest() {
+        let book = moving_book();
+        let id = "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3";
+
+        let day = book
+            .change_since(id, NOW, 86_400)
+            .expect("two readings in a day");
+        let week = book
+            .change_since(id, NOW, 7 * 86_400)
+            .expect("six readings in a week");
+        assert!(day > 0.0 && week > day, "day {day}, week {week}");
+
+        // A window with only the newest reading in it has nothing to compare
+        // against, and says so rather than reporting no movement.
+        assert_eq!(book.change_since(id, NOW, 3_600), None);
+    }
+
+    /// A pool nobody has read a history for reports no change, which is not the
+    /// same as no movement — and the interface has to be able to tell them
+    /// apart, because one is a fact and the other is an absence.
+    #[test]
+    fn a_pool_with_no_history_has_no_change_rather_than_zero() {
+        let book = book();
+        assert_eq!(book.change_over_window(VRSCTEST, NOW), None);
+        assert!(book.series(VRSCTEST).is_empty());
+
+        let rows = rows(&book, &names(), NOW);
+        assert!(rows.iter().all(|row| row.change == UNKNOWN), "{rows:?}");
+        assert!(rows.iter().all(|row| row.tone == "unknown"));
+    }
+
+    /// A two-hop price gets a two-hop history.
+    ///
+    /// The bug this pins cost the one pool on the scripted chain that actually
+    /// moves its entire chart: `series` refused anything it could not price
+    /// through a single pool, while `quote_for` happily priced it through two.
+    /// The screen then showed a price, a change of `—` and an empty chart for
+    /// the same currency, which is three answers to one question.
+    ///
+    /// It also pins the join. The two pools' readings are **not** at the same
+    /// moments — two pools do not notarize in the same block — so each sample
+    /// takes the newest hop price at or before it. Matching exactly finds
+    /// nothing; matching by position plots one currency's price against
+    /// another's clock.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn a_price_reached_through_two_pools_has_a_history_through_both() {
+        let mut hop = Pool::from_converter(&bridge()).expect("state");
+        hop.history = (0..6)
+            .map(|index| Reading {
+                // Offset by an hour from the other pool's readings, which is
+                // the case an exact match would silently return nothing for.
+                block_time: NOW - (5 - index) * 86_400 + 3_600,
+                prices: [
+                    (VRSCTEST.to_string(), 13.197_904_09),
+                    (DAI.to_string(), 7.090_256_43),
+                ]
+                .into_iter()
+                .collect(),
+                supply: 14_147.660_833_07,
+            })
+            .collect();
+
+        let book = Book::new(vec![moving(), hop], DAI.to_string(), VRSCTEST.to_string());
+        let id = "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3";
+
+        // Priced through two pools…
+        let quote = book.quote_for(id).expect("a two-hop price");
+        assert_eq!(quote.via.len(), 2, "{:?}", quote.via);
+
+        // …and charted through the same two. **Five** points from six
+        // readings: the oldest one is from before the reference pool published
+        // anything, so there is no hop price to multiply it by — and a point
+        // invented there would be a price nobody could have traded at.
+        let series = book.series(id);
+        assert_eq!(series.len(), 5, "{series:?}");
+        assert!(series.windows(2).all(|w| w[1].sats >= w[0].sats));
+        assert!(series[0].sats < series[4].sats);
+
+        // The figure and the line agree: the last point is the price above it.
+        let last = series.last().expect("points").sats;
+        assert!(
+            (last as f64 / 100_000_000.0 - quote.price).abs() < 1e-8,
+            "{last} against {}",
+            quote.price,
+        );
+
+        assert!(book.change_over_window(id, NOW).expect("a change") > 0.0);
+    }
+
+    /// A change that happened gets a sign and a colour.
+    #[test]
+    fn a_change_is_signed_and_coloured_by_direction() {
+        let names: BTreeMap<String, String> = [(
+            "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".to_string(),
+            "vrealv1".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        let rows = rows(&moving_book(), &names, NOW);
+        let moved = rows
+            .iter()
+            .find(|row| row.name == "vrealv1")
+            .expect("the pool's own currency is a row");
+
+        assert!(moved.change.starts_with('+'), "{}", moved.change);
+        assert_eq!(moved.tone, "positive");
+        assert!(moved.change.ends_with('%'));
     }
 
     /// A converter that has never notarized has nothing to price with, and is

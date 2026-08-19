@@ -757,6 +757,10 @@ enum Work {
     /// The markets read: every currency the chain knows, and the pools that
     /// can price them.
     ///
+    /// The type is long because the read is one round of questions and its
+    /// answers belong together — see the variant's own note on why the chain id
+    /// travels with them rather than being read off the balance.
+    ///
     /// Both in one job because a book assembled from a catalog fetched at one
     /// moment and reserves fetched at another describes a chain that never
     /// existed. `Err` for the whole read: unlike the currency walk, there is no
@@ -768,6 +772,17 @@ enum Work {
                 (
                     Vec<verus_sdk::network::CurrencySummary>,
                     Vec<verus_sdk::network::CurrencyConverter>,
+                    // What each started pool published over the chart's window,
+                    // by converter i-address.
+                    Vec<(String, Vec<verus_sdk::network::CurrencyStateAt>)>,
+                    // The chain's own currency id, from the same read.
+                    //
+                    // Not `Core::cached.native`: that is filled by a balance
+                    // read, and the markets read can finish first. An empty
+                    // chain id costs every two-hop price on the screen — the
+                    // direct ones still work, so the failure looks like a few
+                    // currencies being unpriceable rather than like a bug.
+                    String,
                 ),
                 String,
             >,
@@ -3843,7 +3858,40 @@ impl Core {
                         );
                     }
 
-                    Ok((catalog, converters))
+                    // One history per pool that has started, because a pool
+                    // that has not is not a market and a chart of it is a
+                    // picture of nothing. Bounded by the number of converters
+                    // rather than by the number of currencies — a pool's series
+                    // gives the change for every currency priced through it, so
+                    // this is around twenty calls on VRSCTEST rather than fifty.
+                    //
+                    // Sequential and slow, deliberately: it happens when
+                    // somebody opens the markets screen, once, and asking a
+                    // public node twenty questions at once is worse manners
+                    // than making them wait two seconds.
+                    let tip = chain.block_count().unwrap_or_default();
+                    let from = tip.saturating_sub(market::WINDOW_DAYS * market::BLOCKS_PER_DAY);
+                    let histories = converters
+                        .iter()
+                        .filter(|entry| {
+                            !entry.last_notarization["prelaunch"]
+                                .as_bool()
+                                .unwrap_or(false)
+                        })
+                        .map(|entry| {
+                            let samples = chain
+                                .currency_state_range(
+                                    &entry.converter_id,
+                                    from,
+                                    tip,
+                                    market::BLOCKS_PER_DAY,
+                                )
+                                .unwrap_or_default();
+                            (entry.converter_id.clone(), samples)
+                        })
+                        .collect();
+
+                    Ok((catalog, converters, histories, native))
                 })();
 
                 Work::Markets(Box::new(read))
@@ -3852,12 +3900,15 @@ impl Core {
         );
     }
 
+    #[allow(clippy::type_complexity)]
     fn finish_markets(
         &mut self,
         read: Result<
             (
                 Vec<verus_sdk::network::CurrencySummary>,
                 Vec<verus_sdk::network::CurrencyConverter>,
+                Vec<(String, Vec<verus_sdk::network::CurrencyStateAt>)>,
+                String,
             ),
             String,
         >,
@@ -3865,7 +3916,7 @@ impl Core {
         self.markets = Markets::Asked;
         self.busy(TaskKind::RefreshingBalance, false);
 
-        let (catalog, converters) = match read {
+        let (catalog, converters, histories, native) = match read {
             Ok(read) => read,
             Err(error) => {
                 // The last book stays on screen. A market that could not be
@@ -3908,17 +3959,15 @@ impl Core {
             .find(|summary| summary.fully_qualified_name == Self::QUOTE)
             .map(|summary| summary.currency_id.clone())
             .unwrap_or_default();
-        let native = self
-            .cached
-            .native
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default();
-
-        let pools = converters
+        let mut pools: Vec<market::Pool> = converters
             .iter()
             .filter_map(market::Pool::from_converter)
             .collect();
+        for (id, samples) in &histories {
+            if let Some(pool) = pools.iter_mut().find(|pool| pool.id == *id) {
+                pool.remember(samples);
+            }
+        }
         self.market = market::Book::new(pools, quote, native);
 
         // A selection that no longer exists is not a selection. It survives a
@@ -3943,7 +3992,7 @@ impl Core {
 
     fn emit_markets(&mut self) {
         let _ = self.events.send(Event::Markets {
-            rows: market::rows(&self.market, &self.market_names),
+            rows: market::rows(&self.market, &self.market_names, now()),
             quote: Self::QUOTE.to_string(),
         });
         self.emit_market_detail();
@@ -3958,6 +4007,7 @@ impl Core {
                 &self.market_open,
                 &self.market_names,
                 Self::QUOTE,
+                now(),
             )))
         };
         let _ = self.events.send(Event::MarketDetail(detail));

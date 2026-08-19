@@ -390,53 +390,50 @@ branch in one function rather than a new pipeline.
 
 ---
 
-## 8. The price chart and the 24-hour change — needs one SDK argument
+## 8. ~~The price chart~~ — done, and what it cost
 
-**Status:** every price on the markets screen is derived and current. Every
-*change* on it reads `—`, there is no chart, and both are the same missing
-argument. Blocked on the SDK, not on the wallet.
+**Status:** done. Kept because what it took is worth knowing before the next
+thing needs a method the SDK does not have.
 
-**What works.** `market::Book` prices a currency by dividing two `priceinreserve`
-figures out of a converter's last notarization, and the result was checked
-against the daemon: one VRSCTEST derives to `0.53722594` DAI.vETH where
-`estimateconversion` answers `0.53694578` — a 0.052% gap that is the 0.05%
-conversion fee the estimate has already taken off. The arithmetic is right, and
-it is right at the tip.
+`getcurrencystate` always took an optional `"from, to, step"`. Nothing in the
+pinned SDK could send it: `currency_state` passes one parameter, `call` and
+`call_raw` are private, `RequestBody::new` is `pub(crate)` and `Method` is a
+closed enum. There was no way round it from this side — the transport is a
+public extension point and *composing a request* deliberately is not.
 
-**Why there is no history.** A price at a past block is that same division over
-reserve state at that block. `getcurrencystate` will answer for a whole range —
-`getcurrencystate "Bridge.vETH" "243000, 243201, 100"` returns one
-`currencystate` per sampled block, each with `blocktime` — which is exactly the
-series both the chart and the change column need. But
-`ChainReader::currency_state` is `fn currency_state(&self, name_or_id: &str)`,
-its implementation is `self.call(Method::GetCurrencyState, json!([name_or_id]))`,
-and there is no way to pass a second parameter: `RpcClient::call` and `call_raw`
-are private, `RequestBody::new` is `pub(crate)`, and `Method` is a closed enum.
-Nothing outside the SDK can construct that request.
+So the SDK gained `ChainReader::currency_state_range`, on the `price-history`
+branch of `chainvue/verus-rust-sdk`, and the pin moved from `8f01520` to
+`01f662d` — which also brings the eleven commits that had accumulated, including
+the `verus-keys` base58check fix §4b wanted. **The branch is not merged.**
 
-**The move.** One method on the trait —
+### What it turned up
 
-```rust
-fn currency_state_range(
-    &self, name_or_id: &str, from: u32, to: u32, step: u32,
-) -> Result<Vec<(u32, serde_json::Value)>, RpcError>;
-```
+- **VRSCTEST barely moves.** Bridge.vETH published one reserve state in thirty
+  days. Its chart is a flat line, and that is the honest picture. `vrealv1` is
+  the one pool with movement — six supply steps, 0.23% — and the scripted chain
+  now carries it for exactly that reason.
+- **There is no honest 24-hour column.** Sampling daily and then labelling the
+  difference `24h` is a figure that looks precise and is not: the newest sample
+  can be most of a day old. The column is `30d`, which is what the data
+  supports. Hourly sampling would fix the label at seven hundred readings per
+  pool per screen.
+- **A two-hop price needs a two-hop history.** `series` first refused anything
+  it could not price through one pool, while `quote_for` happily priced through
+  two — so the one currency on the chain that moves showed a price, a change of
+  `—` and an empty chart at once. The samples are joined on **block time**, to
+  the newest hop reading at or before each point: two pools do not notarize in
+  the same block, so an exact match finds nothing and matching by position plots
+  one currency's price against another's clock.
+- **The mock read the clock per call.** `clock_at` called `SystemTime::now()`
+  every time, so two reads of the same block disagreed by however long the calls
+  were apart — invisible until something joins two series on their timestamps.
+  The scripted chain now freezes its tip's time when it is built.
 
-— implemented as `json!([name_or_id, format!("{from}, {to}, {step}")])`, plus the
-delegation in `pecu-chain`'s `delegate!` macro and a scripted answer in
-`pecu-mock`. Then `market.rs` gains a `series()` and the screen gains back the
-range buttons it currently does not have, over a real chart.
+### What is still open here
 
-**Why the buttons are gone rather than disabled.** They shipped inert: `1D`,
-`1W`, `1M`, `1Y`, `Max`, wired to a property nothing read, above an empty half
-screen. A control that does nothing claims the wallet could show you a week of
-prices and has decided not to. The card in their place says what is true, which
-is that the number above it has no period attached to it yet.
-
-**Scope note.** This also unblocks the sparkline the design puts on the markets
-detail, and it is the only thing standing between the change column and a
-colour — `tone` is already carried per row rather than inferred from a sign, so
-nothing above the data layer has to change when the series arrives.
+The read is **one range call per started pool** — about twenty on VRSCTEST,
+sequential, when somebody opens the screen. That is a few seconds behind a
+spinner. Batching is not available: `getcurrencystate` takes one currency.
 
 ---
 

@@ -131,7 +131,9 @@ found out during implementation:
   rather than being rebuilt.
 
 - **24h volume is not available.** No node method reports it. It needs an
-  indexer, and the dashboard tile that shows it has no source.
+  indexer, and the dashboard tile that shows it has no source. (A price
+  *history* is available — see `LATER.md` §8 — but volume is not the same
+  question and no RPC answers it.)
 
 - **The asset list is fictional.** It shows BTC and ETH as held balances. There
   is no native BTC on Verus, bridged or otherwise.

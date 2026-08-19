@@ -730,6 +730,7 @@ fn a_wallet_with_no_addresses_still_has_a_chain_to_talk_to() {
 /// publishes divides out to, and what the daemon's own `estimateconversion`
 /// answered on that state to within its conversion fee.
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
 async fn opening_the_markets_screen_prices_the_chain_currency() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (dispatcher, mut events) = pecu_core::start(
@@ -782,7 +783,26 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
         .find(|row| row.name == "DAI.vETH")
         .expect("the currency everything is priced in");
     assert_eq!(dai.price, "1.00");
-    assert!(rows.iter().all(|row| row.change == "—"), "{rows:?}");
+    // Bridge.vETH published one state in thirty days, so everything priced
+    // through it did not move — which is a figure rather than an absence.
+    assert_eq!(vrsctest.change, "0.00%", "{rows:?}");
+    assert_eq!(vrsctest.tone, "unknown");
+
+    // And the one pool that did move says so, with a sign and a colour.
+    let moved = rows
+        .iter()
+        .find(|row| row.name == "vrealv1")
+        .expect("the pool with a history is a row");
+    assert!(moved.change.starts_with('+'), "{moved:?}");
+    assert_eq!(moved.tone, "positive");
+
+    // A currency nothing started can price has no change to report at all.
+    let unpriced = rows
+        .iter()
+        .find(|row| row.name == "Bridge.Betelgeuse")
+        .expect("listed");
+    assert_eq!(unpriced.change, "—");
+    assert_eq!(unpriced.price, "—");
 
     // And the detail, which must come out of the same book rather than a second
     // read that could quote a different block.
@@ -801,13 +821,71 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
     assert_eq!(detail.price, "0.5372");
     assert_eq!(detail.route, "VRSCTEST  →  Bridge.vETH  →  DAI.vETH");
 
-    // Both pools are listed; only the started one set the price.
+    // Every pool that trades it is listed; only the started ones set a price.
     let states: Vec<&str> = detail
         .venues
         .iter()
         .map(|venue| venue.state.as_str())
         .collect();
-    assert_eq!(states, vec!["active", "unstarted"], "{:?}", detail.venues);
+    assert_eq!(
+        states,
+        vec!["active", "active", "unstarted"],
+        "{:?}",
+        detail.venues
+    );
+
+    // And the history, which is the whole reason `getcurrencystate` gained a
+    // range. Bridge.vETH published one reading in thirty days on VRSCTEST, so
+    // the chain currency's line is flat — a real picture of an idle market
+    // rather than an empty one. The change column says `—` because nothing
+    // moved to measure, which is not the same as "it moved by zero".
+    assert!(detail.series.len() > 20, "{:?}", detail.series.len());
+    let flat = detail.series[0].sats;
+    assert!(detail.series.iter().all(|p| p.sats == flat));
+    // Spread across the window, not stacked at one instant.
+    assert!(
+        detail.series.last().expect("points").t - detail.series[0].t > 20 * 86_400,
+        "the samples are not spread over the window",
+    );
+    // Flat, and it says so as a figure rather than as an absence: the price is
+    // known at both ends of the window and it is the same price.
+    assert_eq!(detail.change, "0.00%");
+    assert_eq!(detail.tone, "unknown", "flat is neither a gain nor a loss");
+
+    dispatcher.send(pecu_protocol::Command::OpenMarket(
+        "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".to_string(),
+    ));
+    let moving = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(pecu_protocol::Event::MarketDetail(Some(detail))) = events.recv().await {
+                if detail.name == "vrealv1" {
+                    break detail;
+                }
+            }
+        }
+    })
+    .await
+    .expect("a market with a history");
+
+    assert!(moving.series.len() > 20, "{}", moving.series.len());
+    // Oldest first, rising, and a day apart — the supply falls and the holding
+    // does not.
+    assert!(
+        moving.series.windows(2).all(|w| w[1].sats >= w[0].sats),
+        "{:?}",
+        moving.series,
+    );
+    // Six supply steps reach the price, and no more: the readings between them
+    // repeat, which is what a chain does between notarizations.
+    let steps: std::collections::BTreeSet<i64> =
+        moving.series.iter().map(|p| p.sats).collect();
+    assert_eq!(steps.len(), 6, "{steps:?}");
+
+    // A change with a sign and a colour, over the window the chart draws —
+    // which is what nothing in this wallet could say before the SDK could ask
+    // for a past height.
+    assert!(moving.change.starts_with('+'), "{}", moving.change);
+    assert_eq!(moving.tone, "positive");
 }
 
 /// The dashboard gets prices without anybody opening the markets screen.

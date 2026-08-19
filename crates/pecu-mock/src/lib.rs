@@ -48,6 +48,23 @@ use verus_sdk::identity::{FLAG_LOCKED, FLAG_REVOKED};
 use verus_sdk::money::{Amount, Txid, Utxo};
 use verus_sdk::verus_keys::Address;
 
+/// What a pool looked like at one block.
+///
+/// Supply and holdings only: `priceinreserve` is `held / (supply · weight)` and
+/// is derived rather than stored, here and in the published state alike. Two
+/// copies of a price is two chances for the state this chain *publishes* and
+/// the conversions it *prices* to disagree — and the disagreement would be
+/// invisible, because both would still be plausible numbers.
+#[derive(Clone, Debug)]
+pub struct MockReading {
+    pub height: u32,
+    /// Unix seconds, as `getcurrencystate` reports them.
+    pub block_time: i64,
+    pub supply: f64,
+    /// Reserve i-address to how much of it the pool held.
+    pub held: BTreeMap<String, f64>,
+}
+
 /// One scripted fractional currency, in the terms its curve is defined in.
 #[derive(Clone, Debug)]
 pub struct MockPool {
@@ -57,6 +74,12 @@ pub struct MockPool {
     pub supply: f64,
     /// Reserve i-address to (holding, weight).
     pub reserves: BTreeMap<String, (f64, f64)>,
+    /// What it looked like before now, oldest first.
+    ///
+    /// Empty for a pool with no scripted history, which is a real answer: a
+    /// currency that has published no state in a window returns nothing, and
+    /// the wallet has to be able to draw that.
+    pub history: Vec<MockReading>,
 }
 
 /// What Verus takes off a conversion, as a fraction of what goes in.
@@ -66,6 +89,55 @@ pub struct MockPool {
 const CONVERSION_FEE: f64 = 0.000_5;
 
 impl MockPool {
+    /// What one unit of this pool's own currency is worth in `reserve`.
+    ///
+    /// `held / (supply · weight)` — the Bancor identity, and the same figure a
+    /// daemon publishes as `priceinreserve`. Checked against VRSCTEST:
+    /// Bridge.vETH's 46 679.8676944 VRSCTEST over a supply of 14 147.66083307
+    /// at a quarter weight gives 13.19790409, which is what it publishes to the
+    /// last digit.
+    fn price_in(&self, reserve: &str, supply: f64, held: f64) -> f64 {
+        let weight = self.reserves.get(reserve).map_or(0.0, |(_, w)| *w);
+        if supply <= 0.0 || weight <= 0.0 {
+            return 0.0;
+        }
+        held / (supply * weight)
+    }
+
+    /// The state at `height`, as JSON in the shape `getcurrencystate` answers.
+    ///
+    /// The **last reading at or before** the height, which is what a chain
+    /// reports: a block that changed nothing still has a state, and it is the
+    /// one the previous notarization left. Before the first reading there is
+    /// nothing to report and the caller gets no sample for that block.
+    fn state_at(&self, height: u32) -> Option<serde_json::Value> {
+        let reading = self
+            .history
+            .iter()
+            .rev()
+            .find(|reading| reading.height <= height)?;
+
+        let reserves: Vec<serde_json::Value> = self
+            .reserves
+            .iter()
+            .map(|(id, (_, weight))| {
+                let held = reading.held.get(id).copied().unwrap_or_default();
+                serde_json::json!({
+                    "currencyid": id,
+                    "priceinreserve": self.price_in(id, reading.supply, held),
+                    "reserves": held,
+                    "weight": weight,
+                })
+            })
+            .collect();
+
+        Some(serde_json::json!({
+            "currencyid": self.id,
+            "supply": reading.supply,
+            "reservecurrencies": reserves,
+        }))
+    }
+
     fn holds(&self, currency: &str) -> bool {
         self.id == currency || self.reserves.contains_key(currency)
     }
@@ -210,6 +282,13 @@ pub struct MockState {
     /// published — and a price that came out wrong here would come out wrong
     /// there.
     pub converters: BTreeMap<String, CurrencyConverter>,
+    /// When this chain thinks its tip was mined, in Unix seconds.
+    ///
+    /// Read once, when the script is built, and never again. `SystemTime::now()`
+    /// per call made two reads of the same block disagree by however long the
+    /// two calls were apart — which is invisible until something joins two
+    /// series on their timestamps, and then it is a chart with no points in it.
+    pub tip_time: i64,
     /// Latency to simulate on every call, so loading states are reachable.
     pub latency: std::time::Duration,
     /// When set, every read fails with this, so error states are reachable too.
@@ -250,6 +329,9 @@ impl Default for MockState {
             currencies: BTreeMap::new(),
             pools: BTreeMap::new(),
             converters: BTreeMap::new(),
+            tip_time: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0)),
             latency: std::time::Duration::from_millis(140),
             fail_reads: None,
         }
@@ -355,6 +437,7 @@ impl MockChain {
         };
 
         let tip = state.tip;
+        let tip_time = state.tip_time;
         let script = address
             .parse::<Address>()
             .and_then(|parsed| parsed.p2pkh_script_pubkey())
@@ -373,7 +456,7 @@ impl MockChain {
                 address: address.clone(),
                 txid,
                 height,
-                block_time: clock_at(tip, height),
+                block_time: clock_at(tip_time, tip, height),
                 block_index: 1,
                 index: 0,
                 satoshis: SignedAmount::from_sat(*satoshis),
@@ -410,7 +493,7 @@ impl MockChain {
             currency_values: BTreeMap::new(),
             spending: false,
             spends: None,
-            timestamp: clock_at(tip, tip),
+            timestamp: clock_at(tip_time, tip, tip),
         };
 
         seed_identities(&mut state, address);
@@ -726,8 +809,63 @@ impl ChainReader for MockChain {
         })
     }
 
-    fn currency_state(&self, _name_or_id: &str) -> Result<serde_json::Value, RpcError> {
-        Err(unsupported("getcurrencystate"))
+    fn currency_state(&self, name_or_id: &str) -> Result<serde_json::Value, RpcError> {
+        self.read(|state| {
+            let id = state.resolve_currency(name_or_id);
+            let pool = state.pools.get(&id).ok_or_else(|| RpcError::Node {
+                code: -8,
+                message: "Invalid currency specified".to_string(),
+            })?;
+            pool.state_at(state.tip).ok_or_else(|| RpcError::Node {
+                code: -8,
+                message: "Invalid currency specified".to_string(),
+            })
+        })
+    }
+
+    /// One reading per sampled block, the way `getcurrencystate` answers a
+    /// range.
+    ///
+    /// **Short rather than padded** where the pool has no state yet: a range
+    /// that starts before the first reading is answered from the first block
+    /// that has one. That is what a daemon does, and a wallet that assumed one
+    /// sample per step would put every later point at the wrong height.
+    fn currency_state_range(
+        &self,
+        name_or_id: &str,
+        from: u32,
+        to: u32,
+        step: u32,
+    ) -> Result<Vec<verus_rpc::CurrencyStateAt>, RpcError> {
+        self.read(|state| {
+            let id = state.resolve_currency(name_or_id);
+            let pool = state.pools.get(&id).ok_or_else(|| RpcError::Node {
+                code: -8,
+                message: "Invalid currency specified".to_string(),
+            })?;
+
+            let step = step.max(1);
+            let mut samples = Vec::new();
+            let mut height = from;
+            while height <= to.min(state.tip) {
+                if let Some(published) = pool.state_at(height) {
+                    samples.push(verus_rpc::CurrencyStateAt {
+                        height,
+                        // The **sampled block's** time, not the time of the
+                        // reading in force. Measured against VRSCTEST: a range
+                        // over an idle pool comes back with one `blocktime` per
+                        // entry and the same `currencystate` in every one of
+                        // them. Carrying the reading's time instead stacks
+                        // every sample at one instant, which draws a chart with
+                        // no width.
+                        block_time: clock_at(state.tip_time, state.tip, height),
+                        state: published,
+                    });
+                }
+                height = height.saturating_add(step);
+            }
+            Ok(samples)
+        })
     }
 
     fn list_currencies(&self) -> Result<Vec<CurrencySummary>, RpcError> {
@@ -1260,6 +1398,8 @@ fn seed_traded_currencies(state: &mut MockState) {
         ),
         ("MKR.vETH", "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL", 32, 0),
         ("vETH", "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm", 136, 0),
+        // The one pool on this chain whose price moves. See `seed_pools`.
+        ("vrealv1", "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3", 545, 1_184_883),
         (
             "Bridge.vETH",
             "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
@@ -1293,98 +1433,169 @@ fn seed_traded_currencies(state: &mut MockState) {
 
 /// The two pools, and the reserve state each last published.
 fn seed_pools(state: &mut MockState) {
+    for (id, name, notarized, prelaunch, weights, history) in scripted_pools(state) {
+        seed_one_pool(state, id, name, notarized, prelaunch, &weights, &history);
+    }
+}
+
+/// The three pools this chain has, and what each published.
+#[allow(clippy::type_complexity)]
+fn scripted_pools(
+    state: &MockState,
+) -> Vec<(
+    &'static str,
+    &'static str,
+    u32,
+    bool,
+    Vec<(String, f64)>,
+    Vec<(u32, f64, Vec<f64>)>,
+)> {
     let vrsctest = state.chain_id.clone();
-    for (id, name, height, prelaunch, supply, reserves) in [
+    let tip = state.tip;
+    // A month, one reading a day, at the minute-a-block this chain keeps.
+    let day = |ago: u32| tip.saturating_sub(ago * 1440);
+
+    vec![
         (
             "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2",
             "Bridge.vETH",
             1_156_331_u32,
             false,
-            14_147.660_833_07_f64,
             vec![
-                (vrsctest.as_str(), 13.197_904_09, 46_679.867_694_4, 0.25),
-                (
-                    "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh",
-                    7.090_256_43,
-                    25_077.635_817_84,
-                    0.25,
-                ),
-                (
-                    "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL",
-                    0.003_871_42,
-                    13.692_905_8,
-                    0.25,
-                ),
-                (
-                    "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm",
-                    0.003_468_14,
-                    12.266_537_19,
-                    0.25,
-                ),
+                (vrsctest.clone(), 0.25),
+                ("iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".to_string(), 0.25),
+                ("i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL".to_string(), 0.25),
+                ("iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm".to_string(), 0.25),
             ],
+            // One reading, because that is what VRSCTEST has: this pool's
+            // reserves did not move once in the thirty days these figures were
+            // taken from. A chart of it is a flat line, and that is the honest
+            // picture of an idle market — `vrealv1` below is the one that moves.
+            vec![(
+                day(30),
+                14_147.660_833_07_f64,
+                vec![
+                    46_679.867_694_4_f64,
+                    25_077.635_817_84,
+                    13.692_905_8,
+                    12.266_537_19,
+                ],
+            )],
         ),
         (
             "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB",
             "Bridge.Betelgeuse",
             243_201,
             true,
-            100_000.0,
             vec![
-                (vrsctest.as_str(), 0.02, 500.0, 0.25),
-                ("iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh", 0.1, 2_500.0, 0.25),
-                ("iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm", 0.000_04, 1.0, 0.25),
+                (vrsctest.clone(), 0.25),
+                ("iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".to_string(), 0.25),
+                ("iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm".to_string(), 0.25),
             ],
+            vec![(day(30), 100_000.0, vec![500.0, 2_500.0, 1.0])],
         ),
-    ] {
-        let entries: Vec<serde_json::Value> = reserves
+        (
+            // A pool that actually moves, and the reason this chain has three.
+            //
+            // One reserve at weight 1, so its price is `held / supply` and the
+            // supply is the only thing that changes — which is what makes a
+            // real thirty-day series six numbers rather than a table. The
+            // supplies and the holding are `vrealv1`'s own, read off VRSCTEST
+            // across blocks 1 166 173 to 1 196 173. The **heights** are this
+            // chain's, because this chain's tip is its own; what is transcribed
+            // is the curve, not the calendar.
+            "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3",
+            "vrealv1",
+            1_184_883,
+            false,
+            vec![(vrsctest.clone(), 1.0)],
+            vec![
+                (day(30), 647_993.435_264_f64, vec![3_517.884_285_f64]),
+                (day(25), 647_493.435_264, vec![3_517.884_285]),
+                (day(20), 647_293.435_264, vec![3_517.884_285]),
+                (day(14), 646_993.435_264, vec![3_517.884_285]),
+                (day(9), 646_693.435_264, vec![3_517.884_285]),
+                (day(4), 646_493.435_264, vec![3_517.884_285]),
+            ],
+        ),    ]
+}
+
+/// Write one pool down, and publish the state its newest reading implies.
+fn seed_one_pool(
+    state: &mut MockState,
+    id: &str,
+    name: &str,
+    notarized: u32,
+    prelaunch: bool,
+    weights: &[(String, f64)],
+    history: &[(u32, f64, Vec<f64>)],
+) {
+    let tip = state.tip;
+    let tip_time = state.tip_time;
+
+        let readings: Vec<MockReading> = history
             .iter()
-            .map(|(reserve, price, held, weight)| {
-                serde_json::json!({
-                    "currencyid": reserve,
-                    "priceinreserve": price,
-                    "reserves": held,
-                    "weight": weight,
-                })
+            .map(|(height, supply, held)| MockReading {
+                height: *height,
+                block_time: clock_at(tip_time, tip, *height),
+                supply: *supply,
+                held: weights
+                    .iter()
+                    .zip(held)
+                    .map(|((reserve, _), amount)| (reserve.clone(), *amount))
+                    .collect(),
             })
             .collect();
 
-        state.pools.insert(
-            id.to_string(),
-            MockPool {
-                id: id.to_string(),
-                name: name.to_string(),
-                started: !prelaunch,
-                supply,
-                reserves: reserves
-                    .iter()
-                    .map(|(reserve, _, held, weight)| ((*reserve).to_string(), (*held, *weight)))
-                    .collect(),
-            },
-        );
+        // Every pool here is scripted with at least one reading, and a pool
+        // with none would be a pool that publishes nothing — which the reader
+        // already answers as an empty history rather than as a panic.
+    let Some(latest) = readings.last() else {
+        return;
+    };
+        let pool = MockPool {
+            id: id.to_string(),
+            name: name.to_string(),
+            started: !prelaunch,
+            supply: latest.supply,
+            reserves: weights
+                .iter()
+                .map(|(reserve, weight)| {
+                    let held = latest.held.get(reserve).copied().unwrap_or_default();
+                    (reserve.clone(), (held, *weight))
+                })
+                .collect(),
+            history: readings,
+        };
+
+        // Published from the pool rather than beside it. `priceinreserve` is
+        // `held / (supply · weight)`, so writing it out again here would be a
+        // second copy of a number the curve already knows — and the day the two
+        // disagreed, both would still look like prices.
+    let Some(published) = pool.state_at(tip) else {
+        return;
+    };
 
         state.converters.insert(
             id.to_string(),
             CurrencyConverter {
                 converter_id: id.to_string(),
                 name: name.to_string(),
-                height,
-                reserves: reserves
+                height: notarized,
+                reserves: weights
                     .iter()
-                    .map(|(reserve, ..)| (*reserve).to_string())
+                    .map(|(reserve, _)| reserve.clone())
                     .collect(),
                 definition: serde_json::Value::Null,
                 last_notarization: serde_json::json!({
                     "prelaunch": prelaunch,
-                    "currencystate": {
-                        "currencyid": id,
-                        "supply": supply,
-                        "reservecurrencies": entries,
-                    },
+                    "currencystate": published,
                 }),
             },
         );
+        state.pools.insert(id.to_string(), pool);
     }
-}
+
 
 /// One string out of a scripted identity object, or empty.
 fn text_field(identity: &serde_json::Value, key: &str) -> String {
@@ -1460,11 +1671,8 @@ fn identity(name: &str, address: &str, primary: &str, flags: u32, timelock: u32)
 
 /// When a block at `height` was mined, assuming one minute a block and a tip
 /// mined just now. Seconds since the epoch, as a daemon reports it.
-fn clock_at(tip: u32, height: u32) -> i64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0));
-    now - i64::from(tip.saturating_sub(height)) * 60
+fn clock_at(tip_time: i64, tip: u32, height: u32) -> i64 {
+    tip_time - i64::from(tip.saturating_sub(height)) * 60
 }
 
 /// A method the scripted chain does not answer.
@@ -1597,5 +1805,103 @@ mod market_tests {
         let refusal =
             chain().estimate_conversion(VRSCTEST, "DAI.vETH", "1", Some("Bridge.Betelgeuse"));
         assert!(refusal.is_err(), "{refusal:?}");
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    const VRSCTEST: &str = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
+
+    fn chain() -> MockChain {
+        MockChain::demo(&[]).expect("an empty script is a script")
+    }
+
+    /// A price that moves, which is the whole reason a third pool is scripted.
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn a_range_shows_a_price_changing_rather_than_a_flat_line() {
+        let chain = chain();
+        let tip = chain.block_count().expect("a tip");
+        let history = chain
+            .currency_state_range("vrealv1", tip - 43_200, tip, 1_440)
+            .expect("a scripted history");
+
+        assert!(history.len() > 20, "{} samples", history.len());
+
+        let price = |at: &verus_rpc::CurrencyStateAt| {
+            at.state["reservecurrencies"][0]["priceinreserve"]
+                .as_f64()
+                .expect("a price")
+        };
+        let prices: Vec<f64> = history.iter().map(price).collect();
+        let distinct = prices
+            .iter()
+            .map(|p| (p * 1e8).round() as i64)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(distinct.len(), 6, "the supply steps did not reach the price");
+
+        // Rising, because the supply falls and the holding does not.
+        assert!(
+            prices.last() > prices.first(),
+            "{:?} → {:?}",
+            prices.first(),
+            prices.last()
+        );
+    }
+
+    /// The published state and the history agree at the tip, because one is
+    /// derived from the other.
+    #[test]
+    fn what_the_pool_publishes_is_what_its_history_ends_at() {
+        let chain = chain();
+        let tip = chain.block_count().expect("a tip");
+
+        let converters = chain.currency_converters(&["VRSCTEST"]).expect("converters");
+        let bridge = converters
+            .iter()
+            .find(|c| c.name == "Bridge.vETH")
+            .expect("Bridge.vETH is scripted");
+        let published = &bridge.last_notarization["currencystate"];
+
+        let at_tip = chain
+            .currency_state_range("Bridge.vETH", tip, tip, 1)
+            .expect("a reading")
+            .pop()
+            .expect("one sample");
+
+        assert_eq!(published, &at_tip.state);
+    }
+
+    /// The derivation this chain publishes prices with is the daemon's own.
+    ///
+    /// `held / (supply · weight)` against VRSCTEST's figures for Bridge.vETH:
+    /// 46 679.8676944 over 14 147.66083307 at a quarter weight is 13.19790409,
+    /// which is what the chain publishes to the last digit.
+    #[test]
+    fn a_price_is_derived_the_way_a_daemon_derives_it() {
+        let state = chain()
+            .currency_state("Bridge.vETH")
+            .expect("a fractional currency has a state");
+        let vrsc = state["reservecurrencies"]
+            .as_array()
+            .expect("reserves")
+            .iter()
+            .find(|r| r["currencyid"] == VRSCTEST)
+            .expect("VRSCTEST is a reserve");
+
+        let price = vrsc["priceinreserve"].as_f64().expect("a price");
+        assert!((price - 13.197_904_09).abs() < 1e-8, "{price}");
+    }
+
+    /// A currency with no pool is refused the way a daemon refuses it.
+    #[test]
+    fn a_currency_with_no_reserve_state_has_no_history() {
+        let refusal = chain().currency_state_range("demo.VRSCTEST", 0, 100, 1);
+        assert!(
+            matches!(refusal, Err(RpcError::Node { code: -8, .. })),
+            "{refusal:?}"
+        );
     }
 }

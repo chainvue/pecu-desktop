@@ -128,6 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_log_path(log_dir().display().to_string().into());
 
     pecu_ui::chart::install(&ui);
+    pecu_ui::spark::install(&ui);
     pecu_ui::toast::install(&ui);
     wire_actions(&ui, dispatcher.clone());
     bridge::pump(runtime.handle(), ui.as_weak(), events);

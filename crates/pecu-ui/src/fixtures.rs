@@ -232,7 +232,7 @@ fn market_rows(ui: &AppWindow) {
             name: "Bridge.vETH".into(),
             address: "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2".into(),
             price: "7.09".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "94.63".into(),
         },
@@ -240,7 +240,7 @@ fn market_rows(ui: &AppWindow) {
             name: "DAI.vETH".into(),
             address: "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".into(),
             price: "1.00".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "670.96".into(),
         },
@@ -248,7 +248,7 @@ fn market_rows(ui: &AppWindow) {
             name: "MKR.vETH".into(),
             address: "i3WBJ7xEjTna5345D7gPnK4nKfbEBujZqL".into(),
             price: "1 831".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "0.37".into(),
         },
@@ -256,7 +256,7 @@ fn market_rows(ui: &AppWindow) {
             name: "vETH".into(),
             address: "iCtawpxUiCc2sEupt7Z4u8SDAncGZpgSKm".into(),
             price: "2 044".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "0.33".into(),
         },
@@ -264,9 +264,19 @@ fn market_rows(ui: &AppWindow) {
             name: "VRSCTEST".into(),
             address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
             price: "0.5372".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "1 249".into(),
+        },
+        // The one market on this chain whose price moved. Two hops to a price
+        // and two hops to a chart — see `market::series`.
+        MarketRow {
+            name: "vrealv1".into(),
+            address: "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".into(),
+            price: "0.002923".into(),
+            change: "+0.23%".into(),
+            tone: "positive".into(),
+            depth: "—".into(),
         },
         // Last, because nothing started can price it — which is the same rule
         // that keeps its five-dollar quote off the row above.
@@ -291,9 +301,11 @@ pub fn market_detail(ui: &AppWindow) {
     let state = ui.global::<MarketState>();
     state.set_selected("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
     state.set_detail_name("VRSCTEST".into());
-    state.set_detail_subtitle("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq · 1 of 2 venues trading".into());
+    state.set_detail_subtitle("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq · 2 of 3 venues trading".into());
     state.set_detail_price("0.5372".into());
-    state.set_detail_change("—".into());
+    // Flat rather than unknown: the price is known at both ends of the window
+    // and it is the same price. Bridge.vETH published one state in thirty days.
+    state.set_detail_change("0.00%".into());
     state.set_detail_tone("unknown".into());
     state.set_detail_stats(ModelRc::from(Rc::new(VecModel::from(vec![
         Stat {
@@ -302,7 +314,7 @@ pub fn market_detail(ui: &AppWindow) {
         },
         Stat {
             label: note("stat-venues", &[]),
-            value: "1 of 2".into(),
+            value: "2 of 3".into(),
         },
         Stat {
             label: note("stat-quoted-in", &[]),
@@ -314,7 +326,7 @@ pub fn market_detail(ui: &AppWindow) {
             name: "Bridge.vETH".into(),
             state: "active".into(),
             price: "0.5372".into(),
-            change: "—".into(),
+            change: "0.00%".into(),
             tone: "unknown".into(),
             depth: "1 249".into(),
         },
@@ -330,8 +342,77 @@ pub fn market_detail(ui: &AppWindow) {
             depth: "13.38".into(),
         },
     ]))));
+    // Bridge.vETH published one reading in thirty days, so the detail for
+    // VRSCTEST draws the honest empty state rather than a line. `market_moving`
+    // below is the one with a chart.
+    crate::spark::show(ui, &[]);
     state.set_detail_route("VRSCTEST  →  Bridge.vETH  →  DAI.vETH".into());
     state.set_detail_route_note(note("price-from-notarization", &["1 156 331"]));
+}
+
+/// A market whose price actually moved, and therefore has a chart.
+///
+/// The six readings are `vrealv1`'s from VRSCTEST — one reserve at weight one,
+/// so its price is `held / supply` and the supply is the only thing that
+/// changes. The **same** figures the scripted chain publishes, which is why
+/// this picture and a demo build agree.
+pub fn market_moving(ui: &AppWindow) {
+    markets(ui);
+
+    let state = ui.global::<MarketState>();
+    state.set_selected("iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".into());
+    state.set_detail_name("vrealv1".into());
+    state.set_detail_subtitle("iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3 · 1 of 1 venue trading".into());
+    state.set_detail_price("0.005441".into());
+    state.set_detail_change("+0.23%".into());
+    state.set_detail_tone("positive".into());
+    state.set_detail_stats(ModelRc::from(Rc::new(VecModel::from(vec![
+        Stat {
+            label: note("stat-exit-depth", &["vrealv1"]),
+            value: "—".into(),
+        },
+        Stat {
+            label: note("stat-supply", &[]),
+            value: "646 493".into(),
+        },
+        Stat {
+            label: note("stat-reserves", &[]),
+            value: "1".into(),
+        },
+    ]))));
+    state.set_detail_venues(ModelRc::from(Rc::new(VecModel::from(vec![Venue {
+        name: "vrealv1".into(),
+        state: "active".into(),
+        price: "0.005441".into(),
+        change: "+0.23%".into(),
+        tone: "positive".into(),
+        depth: "—".into(),
+    }]))));
+    state.set_detail_route("vrealv1  →  DAI.vETH".into());
+    state.set_detail_route_note(note("price-from-notarization", &["1 184 883"]));
+
+    // The prices these supplies give, as satoshis, oldest first. A day apart,
+    // which is what the core sends and what the sparkline's window is.
+    let day = 86_400;
+    let now = 1_787_000_000_i64;
+    let supplies = [
+        647_993.435_264_f64,
+        647_493.435_264,
+        647_293.435_264,
+        646_993.435_264,
+        646_693.435_264,
+        646_493.435_264,
+    ];
+    let points: Vec<pecu_protocol::ChartPointVm> = supplies
+        .iter()
+        .enumerate()
+        .map(|(index, supply)| pecu_protocol::ChartPointVm {
+            t: now - (5 - i64::try_from(index).unwrap_or(0)) * day,
+            #[allow(clippy::cast_possible_truncation)]
+            sats: (3_517.884_285_f64 / supply * 100_000_000.0).round() as i64,
+        })
+        .collect();
+    crate::spark::show(ui, &points);
 }
 
 /// The command palette, open over the dashboard with results.

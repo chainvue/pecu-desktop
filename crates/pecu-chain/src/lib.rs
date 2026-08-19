@@ -32,7 +32,8 @@ pub use permit::{SpendPermit, SpendRefused};
 use verus_sdk::money::Amount;
 use verus_sdk::network::{
     AddressBalance, AddressDelta, AddressUtxo, Broadcaster, ChainInfo, ChainReader,
-    ConversionEstimate, CurrencyConverter, CurrencyPolicy, CurrencySummary, IdentityAtAddress,
+    ConversionEstimate, CurrencyConverter, CurrencyPolicy, CurrencyStateAt, CurrencySummary,
+    IdentityAtAddress,
     IdentityContent, IdentityRecord, MempoolDelta, OfferListing, RpcError,
 };
 
@@ -153,6 +154,7 @@ delegate! {
     currency_definition(name_or_id: &str) -> CurrencySummary;
     estimate_conversion(from: &str, to: &str, amount: &str, via: Option<&str>) -> ConversionEstimate;
     currency_state(name_or_id: &str) -> serde_json::Value;
+    currency_state_range(name_or_id: &str, from: u32, to: u32, step: u32) -> Vec<CurrencyStateAt>;
     list_currencies() -> Vec<CurrencySummary>;
     currency_converters(currencies: &[&str]) -> Vec<CurrencyConverter>;
     estimate_fee(blocks: u32) -> Option<Amount>;

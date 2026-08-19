@@ -708,6 +708,15 @@ export global MarketState {
     // that derives prices from conversion routes rather than reading a feed,
     // this is the difference between a number somebody can check and one they
     // have to trust.
+    // The price over the last thirty days, as one path for an element of that
+    // size. A `pure callback` used in a binding, for the reason `ChartState`
+    // records: it re-evaluates when its arguments change, so the geometry
+    // follows the element through every layout including the first.
+    pure callback spark-at(length, length) -> string;
+    // Whether there is a line to draw at all. Two readings, not one — see
+    // `spark::show`.
+    in property <bool> has-series: false;
+
     in property <string> detail-route;
     // Which hop is the constraint. Empty when there is no route.
     in property <Note> detail-route-note;

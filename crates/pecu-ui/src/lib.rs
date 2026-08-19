@@ -38,6 +38,7 @@ pub mod fixtures;
 pub mod qr;
 pub mod seed;
 pub mod snapshot;
+pub mod spark;
 pub mod toast;
 
 /// Everything the binary needs from this crate.
