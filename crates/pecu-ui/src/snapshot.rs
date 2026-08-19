@@ -194,9 +194,21 @@ pub const CASES: &[Case] = &[
     ("markets", "market-moving", crate::fixtures::market_moving),
     ("convert", "convert", crate::fixtures::converting),
     ("convert", "convert-thin", crate::fixtures::converting_thin),
-    ("convert", "convert-refused", crate::fixtures::converting_refused),
-    ("convert", "convert-picking", crate::fixtures::converting_picking),
-    ("convert", "convert-review", crate::fixtures::converting_review),
+    (
+        "convert",
+        "convert-refused",
+        crate::fixtures::converting_refused,
+    ),
+    (
+        "convert",
+        "convert-picking",
+        crate::fixtures::converting_picking,
+    ),
+    (
+        "convert",
+        "convert-review",
+        crate::fixtures::converting_review,
+    ),
     (
         "convert",
         "convert-rejected",

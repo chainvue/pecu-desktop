@@ -349,7 +349,6 @@ fn name_of(names: &BTreeMap<String, String>, address: &str) -> String {
         .unwrap_or_else(|| address.to_string())
 }
 
-
 // ── Signing ─────────────────────────────────────────────────────────────────
 
 /// The fee written into the reserve transfer, in the chain's own currency.
@@ -678,9 +677,7 @@ pub fn review(
         conversion_fee_display: format::coins_u64(written_fee),
         network_fee_display: format::coins_u64(sent.fee.to_sat()),
         total_display: format::coins_u64(native_out),
-        balance_after_display: format::coins_u64(
-            spendable.to_sat().saturating_sub(native_out),
-        ),
+        balance_after_display: format::coins_u64(spendable.to_sat().saturating_sub(native_out)),
         from_address: from_address.to_string(),
         recipient: transfer
             .as_ref()
@@ -942,14 +939,7 @@ mod tests {
     #[test]
     fn the_floor_on_the_quote_is_the_floor_that_is_checked() {
         let estimated = Amount::from_sat(13_352_458_143);
-        let quote = quote(
-            &ready(250),
-            &names(),
-            &holdings(415),
-            estimated,
-            None,
-            None,
-        );
+        let quote = quote(&ready(250), &names(), &holdings(415), estimated, None, None);
 
         assert_eq!(
             quote.minimum,

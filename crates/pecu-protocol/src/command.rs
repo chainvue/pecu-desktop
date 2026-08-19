@@ -353,9 +353,13 @@ pub enum Command {
     PrepareConversion,
     /// Send the conversion behind `ticket`. **The other place this application
     /// writes to the chain.**
-    ConfirmConversion { ticket: u64 },
+    ConfirmConversion {
+        ticket: u64,
+    },
     /// Forget it. The bytes were signed and never left this process.
-    CancelConversion { ticket: u64 },
+    CancelConversion {
+        ticket: u64,
+    },
 
     // ── Markets ─────────────────────────────────────────────────────────
     /// Work out what everything is worth, and where.

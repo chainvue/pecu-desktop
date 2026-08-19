@@ -4327,21 +4327,21 @@ impl Core {
                 // From the SIGNED bytes — see `convert::review`.
                 let review = convert::review(ticket, &prepared, &from, self.spendable);
                 self.conversions.insert(ticket, prepared);
-                let _ = self
-                    .events
-                    .send(Event::ConvertPrepared(Box::new(review)));
+                let _ = self.events.send(Event::ConvertPrepared(Box::new(review)));
             }
             Err(error) => {
                 let refusal = convert_note(&error);
                 self.notice("prepare_conversion", refusal.clone(), &error);
-                let _ = self.events.send(Event::ConvertResult(
-                    pecu_protocol::SendOutcomeVm::Failed(pecu_protocol::UiError::simple(
-                        "prepare_conversion",
-                        refusal,
-                        error.to_string(),
-                        pecu_protocol::Severity::Danger,
-                    )),
-                ));
+                let _ =
+                    self.events
+                        .send(Event::ConvertResult(pecu_protocol::SendOutcomeVm::Failed(
+                            pecu_protocol::UiError::simple(
+                                "prepare_conversion",
+                                refusal,
+                                error.to_string(),
+                                pecu_protocol::Severity::Danger,
+                            ),
+                        )));
             }
         }
     }
