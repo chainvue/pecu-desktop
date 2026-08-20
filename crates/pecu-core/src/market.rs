@@ -335,6 +335,25 @@ impl Book {
         }
     }
 
+    /// Every currency a **started** basket trades, and therefore every currency
+    /// a single conversion can reach.
+    ///
+    /// The list the markets table and the convert picker are both built from,
+    /// which is why the predicate is convertibility rather than priceability:
+    /// the two differ, and offering a row that cannot be acted on is worse than
+    /// leaving it out.
+    ///
+    /// [`Book::currencies`] is the wider set and stays, because it is what the
+    /// book is *about* — a currency held only by a basket that has not launched
+    /// is a real thing on the chain. It simply has no market yet, and a row of
+    /// four dashes says nothing anybody can do something with.
+    pub fn convertible(&self) -> Vec<String> {
+        self.currencies()
+            .into_iter()
+            .filter(|id| !self.pools_for(id).is_empty())
+            .collect()
+    }
+
     /// Every currency any pool can price, quote included.
     pub fn currencies(&self) -> Vec<String> {
         let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -705,7 +724,7 @@ fn sats_of(price: f64) -> Option<i64> {
 /// row labelled with a guess.
 pub fn rows(book: &Book, names: &BTreeMap<String, String>, now: i64) -> Vec<MarketRowVm> {
     let mut rows: Vec<MarketRowVm> = book
-        .currencies()
+        .convertible()
         .into_iter()
         .map(|address| {
             let quote = book.quote_for(&address);
@@ -730,8 +749,12 @@ pub fn rows(book: &Book, names: &BTreeMap<String, String>, now: i64) -> Vec<Mark
         })
         .collect();
 
-    // Priced first, then alphabetically. A table whose first screenful is
-    // currencies nothing will quote is a table nobody scrolls.
+    // Priced first, then alphabetically.
+    //
+    // Both halves still happen: a currency a started basket trades can still be
+    // unpriceable, when no route reaches the quote currency. What is gone from
+    // the table entirely is the currency **no** started basket trades — nothing
+    // can convert it, so a row for it offers something that cannot be done.
     rows.sort_by(|a, b| {
         let unpriced = |row: &MarketRowVm| row.price == UNKNOWN;
         unpriced(a)
@@ -1059,29 +1082,68 @@ mod tests {
         assert_eq!(detail.route_note.code, "price-no-pool");
     }
 
-    /// Priced rows come first. A table whose first screenful is dashes is a
-    /// table nobody scrolls.
+    /// The table lists what a conversion can reach, and nothing else.
     ///
-    /// The one row that lands at the bottom here is Betelgeuse's own basket
-    /// currency: no *started* pool trades it, so nothing can price it — which
-    /// is the same rule that kept it from setting VRSCTEST's price, seen from
-    /// the other side.
+    /// Betelgeuse's own basket currency is in the book — it is a real currency
+    /// on the chain — and no *started* pool trades it, so no single conversion
+    /// can reach it and nothing can price it. It used to sit at the bottom of
+    /// the table as a row of four dashes, offering something nobody can do.
+    ///
+    /// This list is also where the convert picker gets its rows, which is what
+    /// makes the difference matter rather than merely tidy.
     #[test]
-    fn the_table_puts_what_it_knows_first() {
-        let rows = rows(&book(), &names(), NOW);
-        let priced = rows.iter().take_while(|row| row.price != UNKNOWN).count();
+    fn the_table_lists_only_what_a_basket_can_convert() {
+        let book = book();
+        let rows = rows(&book, &names(), NOW);
 
-        assert_eq!(rows.len(), 6);
-        assert_eq!(priced, 5);
-        assert_eq!(rows[5].address, "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB");
+        let betelgeuse = "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB";
+        assert!(
+            book.currencies().iter().any(|id| id == betelgeuse),
+            "the book still knows about it — it is a currency, it just has no market",
+        );
+        assert!(
+            !rows.iter().any(|row| row.address == betelgeuse),
+            "a currency no started basket trades has no row: {rows:#?}",
+        );
 
-        // Unknown to the catalog, so it keeps its i-address rather than being
-        // given a name nobody checked.
-        assert_eq!(rows[5].name, rows[5].address);
+        assert_eq!(rows.len(), 5);
+        assert!(
+            rows.iter().all(|row| row.price != UNKNOWN),
+            "every row left is one a route can price: {rows:#?}",
+        );
 
         assert!(rows.iter().any(|row| row.name == "MKR.vETH"));
         assert!(rows.iter().all(|row| row.change == UNKNOWN));
         assert!(rows.iter().all(|row| row.tone == "unknown"));
+    }
+
+    /// Priced rows still come first among the ones that are left.
+    ///
+    /// Convertible and priceable are not the same question: a currency a
+    /// started basket trades can still have no route to the quote currency, and
+    /// on a chain with no stablecoin that is *every* row. The ordering has to
+    /// survive that.
+    #[test]
+    fn the_table_puts_what_it_knows_first() {
+        let mut book = book();
+        // Strand the quote currency: no pool holds it, so nothing is priceable
+        // while every currency stays convertible.
+        book.quote = "iNoSuchQuoteCurrencyAnywhereAtAll".to_string();
+
+        let rows = rows(&book, &names(), NOW);
+        assert!(
+            !rows.is_empty(),
+            "convertibility does not depend on a quote"
+        );
+        assert!(
+            rows.iter().all(|row| row.price == UNKNOWN),
+            "nothing can be priced without a quote currency: {rows:#?}",
+        );
+
+        let sorted: Vec<String> = rows.iter().map(|row| row.name.to_lowercase()).collect();
+        let mut expected = sorted.clone();
+        expected.sort();
+        assert_eq!(sorted, expected, "unpriced rows fall back to alphabetical");
     }
 
     /// The route is the promise this screen makes: a price you can check.

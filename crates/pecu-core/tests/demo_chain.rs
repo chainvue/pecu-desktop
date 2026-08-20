@@ -796,13 +796,21 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
     assert!(moved.change.starts_with('+'), "{moved:?}");
     assert_eq!(moved.tone, "positive");
 
-    // A currency nothing started can price has no change to report at all.
-    let unpriced = rows
-        .iter()
-        .find(|row| row.name == "Bridge.Betelgeuse")
-        .expect("listed");
-    assert_eq!(unpriced.change, "—");
-    assert_eq!(unpriced.price, "—");
+    // A currency no started basket trades is not on the table at all.
+    //
+    // `Bridge.Betelgeuse` is on the scripted chain and in the book — it is a
+    // real currency — and nothing started holds it, so no single conversion can
+    // reach it. It used to sit at the bottom as a row of four dashes, which is
+    // an offer to convert something that cannot be converted. This list is also
+    // where the convert picker gets its rows.
+    assert!(
+        !rows.iter().any(|row| row.name == "Bridge.Betelgeuse"),
+        "a currency nothing can convert has no row: {rows:?}",
+    );
+    assert!(
+        rows.iter().all(|row| row.price != "—"),
+        "every row left is one a route can price: {rows:?}",
+    );
 
     // And the detail, which must come out of the same book rather than a second
     // read that could quote a different block.

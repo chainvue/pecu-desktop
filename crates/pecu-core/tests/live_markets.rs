@@ -270,3 +270,80 @@ fn the_quote_currency_is_not_in_listcurrencies_and_has_to_be_asked_for() {
         "the quote currency cannot price itself, which means the book is unusable"
     );
 }
+
+/// What the filter takes off the table, on a real chain.
+///
+/// Printed rather than asserted by count: which currencies have a started
+/// basket is a fact about VRSCTEST today and will not hold still. What is
+/// asserted is the property — everything the table shows can be converted, and
+/// everything it drops cannot.
+#[ignore = "talks to api.verustest.net"]
+#[test]
+fn the_table_drops_only_what_no_basket_can_convert() {
+    let chain = Chain::live(TESTNET).expect("a client");
+    let (book, names) = read_book(&chain);
+    let name_of = |id: &str| {
+        names
+            .iter()
+            .find(|(known, _)| known == id)
+            .map_or_else(|| id.to_string(), |(_, name)| name.clone())
+    };
+
+    let all = book.currencies();
+    let shown = book.convertible();
+    let dropped: Vec<&String> = all.iter().filter(|id| !shown.contains(id)).collect();
+
+    println!("in the book {}   on the table {}", all.len(), shown.len());
+    println!("dropped:");
+    for id in &dropped {
+        println!(
+            "  {:<22} price={}",
+            name_of(id),
+            book.quote_for(id)
+                .map_or_else(|| "—".to_string(), |q| format!("{:.8}", q.price)),
+        );
+    }
+
+    for id in &dropped {
+        assert!(
+            book.quote_for(id).is_none(),
+            "{} was dropped and yet has a price, which means a route exists to it",
+            name_of(id),
+        );
+    }
+    assert!(
+        !shown.is_empty(),
+        "the filter took everything, which cannot be right on a chain with markets"
+    );
+}
+
+#[ignore = "talks to api.verustest.net"]
+#[test]
+fn what_the_detail_panel_would_get() {
+    let chain = Chain::live(TESTNET).expect("a client");
+    let (book, names) = read_book(&chain);
+    let map: std::collections::BTreeMap<String, String> = names.iter().cloned().collect();
+    let now = 1_787_200_000_i64;
+
+    for want in [
+        "AMERICA",
+        "Bridge.vETH",
+        "VRSCTEST",
+        "CHIPS",
+        "Bridge.Betelgeuse",
+    ] {
+        let Some((id, _)) = names.iter().find(|(_, n)| n == want) else {
+            println!("{want:<20} not in the catalog");
+            continue;
+        };
+        let d = pecu_core::market::detail(&book, id, &map, "DAI.vETH", now);
+        println!(
+            "{want:<20} price={:<14} change={:<9} series={:<4} venues={} route={}",
+            d.price,
+            d.change,
+            d.series.len(),
+            d.venues.len(),
+            d.route,
+        );
+    }
+}
