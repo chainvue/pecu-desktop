@@ -93,13 +93,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // The same 1024 render on its own, for anything that wants one file — a
-    // README, a web page, a Linux `.desktop` entry when there is one.
+    // README, a web page, a store listing.
     let largest = draw(&window, 1024)?;
     let path = assets.join("icon-1024.png");
     largest.save(&path)?;
     println!("{}", path.display());
 
+    // ── Linux ───────────────────────────────────────────────────────────────
+    //
+    // The hicolor theme, which is where every desktop environment looks. One
+    // directory per size, each holding a file named after the `Icon=` key in
+    // the `.desktop` entry — the name is the link between the two, not a path.
+    //
+    // Drawn per size for the same reason the macOS set is: a launcher shows
+    // this at 48, a window list at 24, and both of those are sizes a 512px
+    // render blurs.
+    let hicolor = assets.join("hicolor");
+    for side in LINUX_SIZES {
+        let dir = hicolor.join(format!("{side}x{side}")).join("apps");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("pecu.png");
+        draw(&window, *side)?.save(&path)?;
+        println!("{}", path.display());
+    }
+
+    // ── Windows ─────────────────────────────────────────────────────────────
+    let path = assets.join("pecu.ico");
+    std::fs::write(&path, ico(&window)?)?;
+    println!("{}", path.display());
+
     Ok(())
+}
+
+/// The sizes the hicolor theme is normally installed at.
+///
+/// 24 and 48 are here and are in neither of the other two sets: 48 is the
+/// launcher size on GNOME and KDE both, and 24 is the window list. Leaving them
+/// out means the desktop picks the nearest and scales it, which is the blur
+/// this whole file exists to avoid.
+const LINUX_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128, 256, 512];
+
+/// The sizes inside the Windows `.ico`.
+///
+/// 256 is the one Explorer's largest view uses and the one that has to be
+/// there; the rest are the shell's fixed sizes. 24 is the small-toolbar size.
+const ICO_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128, 256];
+
+/// A Windows icon file, assembled by hand.
+///
+/// # Why this is written out rather than pulled in
+///
+/// Because an `.ico` is a header, one sixteen-byte record per image, and the
+/// images — and every crate that writes one would come with its own PNG encoder
+/// beside the one already here. Forty lines against a dependency tree.
+///
+/// The images are stored as **PNG**, which the shell has understood since
+/// Vista. That is the same choice `iconutil` makes for the `.icns`, and it
+/// keeps the alpha exact rather than going through a BMP with an AND mask.
+///
+/// **Untested on Windows.** Nothing here has been opened by Explorer — this
+/// machine is a Mac — so what is verified is that the container parses back to
+/// the sizes that went in. See `docs/LATER.md` §7.
+fn ico(window: &Rc<MinimalSoftwareWindow>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut images: Vec<(u32, Vec<u8>)> = Vec::new();
+    for side in ICO_SIZES {
+        let mut png = std::io::Cursor::new(Vec::new());
+        draw(window, *side)?.write_to(&mut png, image::ImageFormat::Png)?;
+        images.push((*side, png.into_inner()));
+    }
+
+    let count = u16::try_from(images.len())?;
+    let mut out = Vec::new();
+    // ICONDIR: reserved, type 1 (icon, as opposed to 2 for a cursor), count.
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+
+    // Every entry is sixteen bytes and they all precede the first image.
+    let mut offset = 6 + 16 * u32::from(count);
+    for (side, png) in &images {
+        // 256 is written as 0: the field is one byte and 256 does not fit, and
+        // zero is the format's way of saying "the largest".
+        let dimension = u8::try_from(*side).unwrap_or(0);
+        out.push(dimension);
+        out.push(dimension);
+        out.push(0); // palette size — none, this is truecolour
+        out.push(0); // reserved
+        out.extend_from_slice(&1u16.to_le_bytes()); // colour planes
+        out.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+        out.extend_from_slice(&u32::try_from(png.len())?.to_le_bytes());
+        out.extend_from_slice(&offset.to_le_bytes());
+        offset += u32::try_from(png.len())?;
+    }
+    for (_, png) in &images {
+        out.extend_from_slice(png);
+    }
+    Ok(out)
 }
 
 /// One size, drawn at exactly that size.

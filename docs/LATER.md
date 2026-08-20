@@ -394,6 +394,36 @@ have `render_icon.rs` use them for those two sizes instead of rasterising the
 component. The loop that draws every size is already per-size, so this is a
 branch in one function rather than a new pipeline.
 
+### What the icon reaches today, per platform
+
+`render_icon.rs` writes all three sets from `ui/icon.slint`, and
+`crates/pecu-app/tests/packaging.rs` checks the files without needing the
+platform they are for.
+
+* **macOS — done, end to end.** `scripts/bundle.sh` runs `iconutil` over the
+  checked-in iconset and `target/Pecu.app` carries `AppIcon.icns`. Built and the
+  icon inspected. Note this only reaches the **bundle**: `cargo run` produces a
+  bare binary, and macOS gives one of those a generic Dock icon whatever it
+  contains.
+
+* **Linux — the files exist, installing them does not.** `assets/hicolor/` holds
+  eight sizes and `assets/pecu.desktop` names them. Nothing installs either:
+  that is `install -Dm644` into `/usr/share/icons/hicolor/...` and
+  `/usr/share/applications/`, plus `gtk-update-icon-cache`, and it belongs in
+  whatever packaging comes first — a `.deb`, an AppImage, a Flatpak manifest.
+  **`StartupWMClass=pecu` is the documented default and is unverified**; it is
+  what attaches the icon to the *window* rather than only to the launcher, and
+  it has to match the WM class winit sets.
+
+* **Windows — the file exists, the executable does not carry it.** `assets/
+  pecu.ico` holds seven sizes as PNG-in-ICO, written by hand rather than by a
+  crate, and the container is checked. For Explorer and the taskbar to show it,
+  the icon has to be linked into the `.exe` as a resource — which needs a build
+  script and a resource compiler (`embed-resource`, `winres`), and that is a
+  dependency decision rather than a line of code. **Nothing here has been opened
+  on Windows.** PNG-in-ICO is understood from Vista onward; a shell older than
+  that wants BMP entries for the small sizes.
+
 ---
 
 ## 8. ~~The price chart~~ — done, and what it cost

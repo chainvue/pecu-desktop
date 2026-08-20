@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Pecu
+GenericName=Verus Wallet
+Comment=Hold, send and convert Verus currencies
+# Resolved through PATH rather than an absolute path, so the same file works
+# whether the binary lands in /usr/bin, /usr/local/bin or ~/.local/bin.
+Exec=pecu
+# A NAME, not a path. The desktop looks it up in the icon theme — which is what
+# the `hicolor/<size>x<size>/apps/pecu.png` files beside this file are, and why
+# they are named after this line rather than after the product.
+Icon=pecu
+Terminal=false
+Categories=Office;Finance;
+Keywords=verus;wallet;crypto;vrsc;
+# What ties a window to this entry, and therefore what puts the icon on the
+# window rather than only in the launcher. It has to match the WM class winit
+# sets, which is the binary's name.
+#
+# **Unverified.** Nothing here has been run on a Linux desktop — see
+# `docs/LATER.md` §7 — so this is the documented default and not a measurement.
+StartupWMClass=pecu
+StartupNotify=true
