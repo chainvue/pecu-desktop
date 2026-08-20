@@ -1,5 +1,7 @@
 // What things are worth, and where they trade.
 
+import { ListView } from "std-widgets.slint";
+
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Card, EmptyState, Eyebrow, StatusPill } from "../components/base.slint";
 import { MarketRow } from "../vm/structs.slint";
@@ -90,6 +92,11 @@ export component MarketRowItem inherits Rectangle {
 // past height, and a price chart, for the same reason. Both show `—`, which is
 // what the convention line at the bottom of the table is there to explain.
 export component MarketsScreen inherits HorizontalLayout {
+    // Its own page padding and width cap, because this screen has left the
+    // shared scroller — the same move `ActivityScreen` made and for the same
+    // reason. See the `for` below.
+    padding: Sp.screen-pad;
+    max-width: Sp.content-max;
     spacing: Sp.s7;
 
     // ── The table ───────────────────────────────────────────────────────
@@ -143,14 +150,30 @@ export component MarketsScreen inherits HorizontalLayout {
             }
         }
 
+        // A `ListView`, and the whole screen changes shape because of it.
+        //
+        // The heading above says "so a long list scrolls under them", and until
+        // now nothing scrolled: the rows were a plain layout inside the shared
+        // page scroller, so forty-nine currencies made the *page* two thousand
+        // pixels tall. Everything beside the list went with it — the detail's
+        // figures, its venues, its route, all below the fold — and the chart
+        // card, which stretches, swallowed the slack and drew nothing.
+        //
+        // Seven currencies fitted. VRSCTEST has three hundred, and no reference
+        // image had more than seven until `markets_crowded`.
         Card {
+            // Takes what the footnote leaves. A `ListView` cannot size to its
+            // content — laying out what nobody can see is the thing it exists
+            // to avoid — so it is given a pane instead of asked for a height.
+            vertical-stretch: 1;
             VerticalLayout {
                 padding: Sp.s3;
-                spacing: Sp.s1;
-                for row in MarketState.rows: MarketRowItem {
-                    entry: row;
-                    selected: MarketState.selected == row.address;
-                    picked => { MarketState.select(row.address); }
+                ListView {
+                    for row in MarketState.rows: MarketRowItem {
+                        entry: row;
+                        selected: MarketState.selected == row.address;
+                        picked => { MarketState.select(row.address); }
+                    }
                 }
             }
         }
@@ -163,7 +186,9 @@ export component MarketsScreen inherits HorizontalLayout {
             wrap: word-wrap;
         }
 
-        Rectangle { vertical-stretch: 1; }
+        // No stretch absorber here any more. The list is what should grow —
+        // with one, the two of them split the column and the list showed seven
+        // rows above an equal expanse of nothing.
     }
 
     // ── The detail ──────────────────────────────────────────────────────
@@ -228,6 +253,11 @@ export component MarketsScreen inherits HorizontalLayout {
             // and the figure above it is the number somebody came for. The
             // balance chart on the dashboard is the one built to be read.
             Card {
+                // Its content's height and not a share of whatever is left. A
+                // `Card` is a `Rectangle` and stretches by default, so beside a
+                // long list this grew to six hundred pixels and pushed the
+                // figures under it off the window.
+                vertical-stretch: 0;
                 VerticalLayout {
                     padding: Sp.s5;
                     spacing: Sp.s3;

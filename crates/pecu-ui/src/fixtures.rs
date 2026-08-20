@@ -17,7 +17,7 @@
 
 use std::rc::Rc;
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
@@ -429,6 +429,40 @@ pub fn market_detail(ui: &AppWindow) {
     state.set_detail_route_note(note("price-from-notarization", &["1 156 331"]));
 }
 
+/// The markets screen as a real chain fills it: forty-nine currencies, not
+/// seven.
+///
+/// **This is what the live wallet looks like and no reference image had it.**
+/// The list is what a chain with three hundred currencies on it produces, and
+/// the detail beside a list that long is laid out completely differently from
+/// the detail beside a list of seven — which is how a chart that draws nothing
+/// and a panel that has to be scrolled both got past every picture here.
+///
+/// The rows past the first few are generated: what matters is the *count*, and
+/// forty-nine rows of hand-written fixture would be forty-nine chances to
+/// mistype a number that nothing checks.
+pub fn markets_crowded(ui: &AppWindow) {
+    market_moving(ui);
+
+    let state = ui.global::<MarketState>();
+    let existing = state.get_rows();
+    let mut rows: Vec<MarketRow> = (0..existing.row_count())
+        .filter_map(|i| existing.row_data(i))
+        .collect();
+    for i in 0..42 {
+        rows.push(MarketRow {
+            address: format!("iFill{i:0>29}").into(),
+            name: format!("filler-{i:02}").into(),
+            price: format!("{:.6}", 0.004 + f64::from(i) / 1000.0).into(),
+            change: "-0.30%".into(),
+            tone: "negative".into(),
+            depth: "1 761 472".into(),
+        });
+    }
+    rows.sort_by_key(|row| row.name.to_lowercase());
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
 /// A market whose price actually moved, and therefore has a chart.
 ///
 /// The six readings are `vrealv1`'s from VRSCTEST — one reserve at weight one,
@@ -608,14 +642,25 @@ pub fn addresses(ui: &AppWindow) {
 
     ui.global::<SendState>()
         .set_known(ModelRc::from(Rc::new(VecModel::from(vec![
+            // A VerusID paid by name. The row this whole column exists for:
+            // the payment recorded the i-address, and without the name it is
+            // twenty bytes nobody recognises.
+            KnownAddressRow {
+                address: "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP".into(),
+                label: SharedString::new(),
+                name: "dude.VRSCTEST@".into(),
+                summary: "1 payment · last in the last hour".into(),
+            },
             KnownAddressRow {
                 address: SECOND_ADDRESS.into(),
                 label: "the exchange".into(),
+                name: SharedString::new(),
                 summary: "3 payments · last 2 days ago".into(),
             },
             KnownAddressRow {
                 address: THIRD_ADDRESS.into(),
                 label: SharedString::new(),
+                name: SharedString::new(),
                 summary: "1 payment · last in the last hour".into(),
             },
         ]))));
@@ -817,14 +862,25 @@ pub fn sending(ui: &AppWindow) {
     // with the first.
     ui.global::<SendState>()
         .set_known(ModelRc::from(Rc::new(VecModel::from(vec![
+            // A VerusID paid by name. The row this whole column exists for:
+            // the payment recorded the i-address, and without the name it is
+            // twenty bytes nobody recognises.
+            KnownAddressRow {
+                address: "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP".into(),
+                label: SharedString::new(),
+                name: "dude.VRSCTEST@".into(),
+                summary: "1 payment · last in the last hour".into(),
+            },
             KnownAddressRow {
                 address: SECOND_ADDRESS.into(),
                 label: "the exchange".into(),
+                name: SharedString::new(),
                 summary: "3 payments · last 2 days ago".into(),
             },
             KnownAddressRow {
                 address: THIRD_ADDRESS.into(),
                 label: SharedString::new(),
+                name: SharedString::new(),
                 summary: "1 payment · last in the last hour".into(),
             },
         ]))));

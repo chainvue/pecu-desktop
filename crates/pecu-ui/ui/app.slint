@@ -491,13 +491,20 @@ export component AppWindow inherits Window {
                     background: Theme.bg-base;
                     clip: true;
 
-                    // Activity brings its own scroller — see `ActivityScreen`.
-                    // Beside the shared one rather than inside it, because two
-                    // scrollers stacked over the same area fight over the wheel
-                    // and the outer one wins.
+                    // Activity and Markets bring their own scroller — see
+                    // `ActivityScreen` and `MarketsScreen`. Beside the shared
+                    // one rather than inside it, because two scrollers stacked
+                    // over the same area fight over the wheel and the outer one
+                    // wins.
+                    //
+                    // Both are screens with a list that a real chain makes long,
+                    // beside content that must stay where it is. Inside the
+                    // shared scroller the list grows the whole page, and the
+                    // thing next to it goes over the horizon.
                     if root.screen == "activity": ActivityScreen {}
+                    if root.screen == "markets": MarketsScreen {}
 
-                    if root.screen != "activity": Flickable {
+                    if root.screen != "activity" && root.screen != "markets": Flickable {
                         viewport-height: content.preferred-height;
 
                         content := VerticalLayout {
@@ -512,7 +519,6 @@ export component AppWindow inherits Window {
                             if root.screen == "send": SendScreen {}
                             if root.screen == "identities": IdentitiesScreen {}
                             if root.screen == "currencies": CurrenciesScreen {}
-                            if root.screen == "markets": MarketsScreen {}
                             if root.screen == "convert": ConvertScreen {}
                             if root.screen == "receive": ReceiveScreen {}
                             if root.screen == "settings": SettingsScreen {
