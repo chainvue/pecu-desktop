@@ -1,0 +1,78 @@
+# Clippy and the test suite, on every push.
+#
+# It calls `scripts/check.sh` rather than listing the commands here, so that
+# what CI runs and what you can run on your own machine are the same thing by
+# construction rather than by somebody remembering to update both.
+#
+# On `push` for every branch, and deliberately not on `pull_request` as well: a
+# pull request from a branch of this repository would then run everything
+# twice. Add a `pull_request:` trigger the day an outside fork opens one, which
+# is the case a push trigger does not cover.
+name: checks
+
+on: push
+
+# A second push supersedes the first. There is no reason to keep a run alive
+# for a commit nobody is looking at any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # What the build asks pkg-config for, and the compiler SQLite is built
+      # with — `rusqlite` compiles it from source rather than linking, which is
+      # why there is no libsqlite3-dev here. The X11, Wayland and GL libraries
+      # are not named because nothing links them: the interface tests render
+      # offscreen and never open a window.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libfontconfig-dev
+
+      # The runner image ships a toolchain, but which one is not this
+      # repository's decision to inherit. `rustup` is already there, so this
+      # needs no third-party action.
+      - name: Toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      # Keyed on Cargo.lock, which pins the SDK by revision — so the key moves
+      # exactly when the dependency graph does. `target` is included because
+      # the Slint compiler and the SDK dominate a cold build.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Checks
+        run: scripts/check.sh
+
+      # A failed visual test writes a diff image beside every reference it did
+      # not match. Without these the log says which screens changed but not
+      # what they now look like, which is the half that decides whether the
+      # change was wanted.
+      - name: Snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs
+          path: crates/pecu-ui/tests/snapshots/*.diff.png
+          if-no-files-found: ignore

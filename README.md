@@ -36,9 +36,18 @@ The interface is English, on every system. See `crates/pecu-ui/translations/`.
 ## Checks
 
 ```sh
+scripts/check.sh                          # both of the below, as CI runs them
 cargo clippy --workspace --all-targets    # warnings are not acceptable output
 cargo test --workspace
 ```
+
+`scripts/check.sh` is the one definition of "the checks": the workflow in
+`.github/workflows/checks.yml` calls that same script, so what runs on a push
+and what runs on your machine cannot drift into disagreeing. It needs no
+display — the interface tests render offscreen — which is what lets a headless
+runner run them at all. A failed visual test uploads its diff images as a
+build artefact, because the log names the screens that changed and only the
+images say what they now look like.
 
 Some of the tests are unusual and are the point of the project rather than a
 formality:
