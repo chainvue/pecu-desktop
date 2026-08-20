@@ -186,6 +186,7 @@ fn apply(ui: &AppWindow, event: Event) {
                     price: row.price.clone().into(),
                     change: row.change.clone().into(),
                     tone: row.tone.clone().into(),
+                    pooled: row.pooled.clone().into(),
                     depth: row.depth.clone().into(),
                 })
                 .collect();

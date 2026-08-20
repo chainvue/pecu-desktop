@@ -170,6 +170,10 @@ export struct MarketRow {
     tone: string,
     // What could be taken out before the price moves 2%.
     depth: string,
+    // What the started baskets hold of it, in the quote currency. The column
+    // the table is ordered by, and the only figure here that is comparable
+    // between rows — `depth` is in each row's own currency.
+    pooled: string,
 }
 
 // One pool a currency trades in. Mirrors `VenueVm`.

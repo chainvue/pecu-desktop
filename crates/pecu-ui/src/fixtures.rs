@@ -307,20 +307,37 @@ fn market_rows(ui: &AppWindow) {
     let state = ui.global::<MarketState>();
     state.set_quote("DAI.vETH".into());
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
+        // Ordered by what the started baskets hold, which is what the table
+        // sorts on. Every figure below is what `market::rows` produces from the
+        // scripted chain — read out of it rather than composed here.
         MarketRow {
             name: "Bridge.vETH".into(),
             address: "iSojYsotVzXz4wh2eJriASGo6UidJDDhL2".into(),
             price: "7.09".into(),
             change: "0.00%".into(),
             tone: "unknown".into(),
+            pooled: "100 311".into(),
             depth: "94.63".into(),
         },
+        MarketRow {
+            name: "VRSCTEST".into(),
+            address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
+            price: "0.5372".into(),
+            change: "0.00%".into(),
+            tone: "unknown".into(),
+            pooled: "26 968".into(),
+            depth: "1 249".into(),
+        },
+        // Three currencies of one basket, so they are pooled to the same value
+        // and fall back to their names. A tie is a real state and this is what
+        // it looks like.
         MarketRow {
             name: "DAI.vETH".into(),
             address: "iN9vbHXexEh6GTZ45fRoJGKTQThfbgUwMh".into(),
             price: "1.00".into(),
             change: "0.00%".into(),
             tone: "unknown".into(),
+            pooled: "25 078".into(),
             depth: "670.96".into(),
         },
         MarketRow {
@@ -329,6 +346,7 @@ fn market_rows(ui: &AppWindow) {
             price: "1 831".into(),
             change: "0.00%".into(),
             tone: "unknown".into(),
+            pooled: "25 078".into(),
             depth: "0.37".into(),
         },
         MarketRow {
@@ -337,36 +355,25 @@ fn market_rows(ui: &AppWindow) {
             price: "2 044".into(),
             change: "0.00%".into(),
             tone: "unknown".into(),
+            pooled: "25 078".into(),
             depth: "0.33".into(),
         },
-        MarketRow {
-            name: "VRSCTEST".into(),
-            address: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into(),
-            price: "0.5372".into(),
-            change: "0.00%".into(),
-            tone: "unknown".into(),
-            depth: "1 249".into(),
-        },
         // The one market on this chain whose price moved. Two hops to a price
-        // and two hops to a chart — see `market::series`.
+        // and two hops to a chart — see `market::series`. It is last because it
+        // is the smallest, and it has no `Exit @2%` because nothing measures
+        // room in a pool with one reserve at weight one.
         MarketRow {
             name: "vrealv1".into(),
             address: "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".into(),
             price: "0.002923".into(),
             change: "+0.23%".into(),
             tone: "positive".into(),
+            pooled: "1 890".into(),
             depth: "—".into(),
         },
-        // Last, because nothing started can price it — which is the same rule
-        // that keeps its five-dollar quote off the row above.
-        MarketRow {
-            name: "Bridge.Betelgeuse".into(),
-            address: "iPxbKpFzNbaSF2jshZEkk14vFG3tWzvsFB".into(),
-            price: "—".into(),
-            change: "—".into(),
-            tone: "unknown".into(),
-            depth: "—".into(),
-        },
+        // `Bridge.Betelgeuse` used to be here, at the bottom, with four dashes.
+        // No started basket trades it, so no conversion can reach it and it is
+        // off the table entirely — see `Book::convertible`.
     ]))));
 }
 
@@ -456,10 +463,15 @@ pub fn markets_crowded(ui: &AppWindow) {
             price: format!("{:.6}", 0.004 + f64::from(i) / 1000.0).into(),
             change: "-0.30%".into(),
             tone: "negative".into(),
+            // Descending, so the generated rows sit below the real ones and the
+            // ordering the table applies is visible in the picture.
+            pooled: format!("{}", 900 - i * 10).into(),
             depth: "1 761 472".into(),
         });
     }
-    rows.sort_by_key(|row| row.name.to_lowercase());
+    // No re-sort: the rows arrive from the core in the order the table shows,
+    // and a fixture that imposed its own would be photographing an arrangement
+    // the wallet never produces.
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
 }
 

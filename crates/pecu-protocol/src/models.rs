@@ -1262,6 +1262,13 @@ pub struct MarketRowVm {
     /// What could be taken out before the price moves 2%. The one number on
     /// this screen that says whether the others can be acted on.
     pub depth: String,
+    /// What the started baskets hold of it, in the quote currency, or `"—"`.
+    ///
+    /// The size of the market, and the column the table is **ordered** by. The
+    /// only figure here that is comparable between rows: `depth` is in each
+    /// row's own currency, and a table sorted by that would be sorting on a
+    /// mixture of units.
+    pub pooled: String,
 }
 
 /// One pool a currency trades in.

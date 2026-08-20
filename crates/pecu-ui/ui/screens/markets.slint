@@ -58,15 +58,27 @@ export component MarketRowItem inherits Rectangle {
             horizontal-alignment: right;
             width: 62px;
         }
+        // The size of the market, and what the rows are ordered by. Drawn a
+        // shade brighter than `Exit @2%` beside it: one of the two decides
+        // where the row sits, and the eye should land on that one first.
         Text {
-            text: root.entry.depth;
+            text: root.entry.pooled;
             font-family: Typo.mono;
             font-size: Typo.num-sm;
-            color: Theme.text-tertiary;
+            color: Theme.text-secondary;
             vertical-alignment: center;
             horizontal-alignment: right;
-            width: 70px;
+            width: 72px;
         }
+        // `Exit @2%` is **not** a column here, and that is a decision rather
+        // than a shortage of room.
+        //
+        // It is in each row's own currency — the footnote used to have to say
+        // so — which means it cannot be read down a column or compared between
+        // two rows, and beside `Pooled` it put two size-shaped numbers in
+        // different units next to each other. It is on the detail instead,
+        // where the currency is named right beside the figure and where it
+        // appears per venue, which is the form it is actually useful in.
     }
 
     touch := TouchArea {
@@ -142,12 +154,16 @@ export component MarketsScreen inherits HorizontalLayout {
                 width: 62px;
             }
             Text {
-                text: @tr("Exit @2%");
+                // What the table is ordered by, so the order is legible rather
+                // than arbitrary. Comparable between rows, which `Exit @2%`
+                // beside it is not.
+                text: @tr("Pooled");
                 font-size: Typo.micro;
                 color: Theme.text-tertiary;
                 horizontal-alignment: right;
-                width: 70px;
+                width: 72px;
             }
+
         }
 
         // A `ListView`, and the whole screen changes shape because of it.
@@ -180,7 +196,10 @@ export component MarketsScreen inherits HorizontalLayout {
 
         // The convention, said once, where the dashes are.
         Text {
-            text: @tr("— means unknown, not zero. Exit @2% is in each row's own currency.");
+            text: MarketState.quote == ""
+                ? @tr("Ordered by what the baskets hold. — means unknown, not zero.")
+                : @tr("Ordered by what the baskets hold, in {}. — means unknown, not zero.",
+                      MarketState.quote);
             font-size: Typo.micro;
             color: Theme.text-tertiary;
             wrap: word-wrap;

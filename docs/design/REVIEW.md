@@ -221,11 +221,22 @@ has are in whatever currency the markets book is quoted in — and the drawing's
 own asset list is fictional (it shows native BTC and ETH balances, which do not
 exist on Verus).
 
-**D3 · Markets + detail — matches.** Name / Price / change / `Exit @2%`, the
-detail beside it with its stats, its venues and its route, and the drawing's own
-sentence — "— means unknown, not zero" — as the footnote. The change column is
-`30d` rather than `24h` because sampling daily and labelling it 24h is a number
-that looks precise and is not; see `LATER.md` §8.
+**D3 · Markets + detail — matches, with two columns changed on purpose.** The
+detail beside the table is the drawing's: its stats, its venues, its route, and
+the drawing's own sentence — "— means unknown, not zero" — as the footnote.
+
+Two of the four columns are not the drawing's, and both changes are about the
+same thing — a column has to be readable *down*, not just across:
+
+* **`30d`, not `24h`.** The series is sampled daily, so a figure labelled 24h
+  built from two daily samples looks precise and is not. See `LATER.md` §8.
+* **`Pooled`, not `Exit @2%`.** The table is ordered by the size of each market,
+  and `Exit @2%` cannot order anything: it is in each row's own currency, so a
+  column of it compares nothing and two rows of it mean different units. `Pooled`
+  is what the started baskets hold, valued in the quote currency, and it is the
+  only figure on that screen that is comparable between rows. `Exit @2%` is not
+  lost — it is on the detail, per venue and as a stat, where the currency it is
+  denominated in is named right beside it.
 
 **D5 · History + audit log — matches.** The four period tiles, the filter chips
 (All · Payments · Converts · Logins · Identity), day headings, per-row icons and

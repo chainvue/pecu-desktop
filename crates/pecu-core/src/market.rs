@@ -335,6 +335,48 @@ impl Book {
         }
     }
 
+    /// What the started baskets hold of `target`, valued in the quote currency.
+    ///
+    /// The size of the market for one currency, and the one figure on this
+    /// screen that is **comparable between rows**. `Exit @2%` is not: it is in
+    /// each row's own currency, which is what its footnote says and why it can
+    /// order nothing.
+    ///
+    /// Two cases, because a basket does not hold itself:
+    ///
+    ///   * a **reserve** is what the pools are holding of it, summed across
+    ///     every started pool that holds it, priced in the quote;
+    ///   * a **basket** is its own supply at its own price, which for a
+    ///     fractional is the same number as the value of everything backing it.
+    ///
+    /// `None` when the currency has no price, because a quantity with no price
+    /// is not a value. That is a different answer from zero and the table keeps
+    /// it apart.
+    pub fn pooled(&self, target: &str) -> Option<f64> {
+        let price = self.quote_for(target)?.price;
+        if !price.is_finite() || price < 0.0 {
+            return None;
+        }
+
+        let held: f64 = self
+            .pools
+            .iter()
+            .filter(|pool| pool.started)
+            .filter_map(|pool| {
+                if pool.id == target {
+                    // The basket itself. Counted once — it is one pool by
+                    // definition, and its supply is not held by anybody else.
+                    Some(pool.supply)
+                } else {
+                    pool.reserve(target).map(|reserve| reserve.held)
+                }
+            })
+            .filter(|amount| amount.is_finite() && *amount > 0.0)
+            .sum();
+
+        (held > 0.0).then_some(held * price)
+    }
+
     /// Every currency a **started** basket trades, and therefore every currency
     /// a single conversion can reach.
     ///
@@ -729,6 +771,7 @@ pub fn rows(book: &Book, names: &BTreeMap<String, String>, now: i64) -> Vec<Mark
         .map(|address| {
             let quote = book.quote_for(&address);
             let change = book.change_over_window(&address, now);
+            let pooled = book.pooled(&address);
             MarketRowVm {
                 name: names
                     .get(&address)
@@ -744,22 +787,42 @@ pub fn rows(book: &Book, names: &BTreeMap<String, String>, now: i64) -> Vec<Mark
                     .map_or_else(|| UNKNOWN.to_string(), pecu_protocol::format::approx),
                 change: change.map_or_else(|| UNKNOWN.to_string(), percent),
                 tone: tone_of(change).to_string(),
+                pooled: pooled.map_or_else(|| UNKNOWN.to_string(), pecu_protocol::format::approx),
                 address,
             }
         })
         .collect();
 
-    // Priced first, then alphabetically.
+    // Biggest market first.
     //
-    // Both halves still happen: a currency a started basket trades can still be
-    // unpriceable, when no route reaches the quote currency. What is gone from
-    // the table entirely is the currency **no** started basket trades — nothing
-    // can convert it, so a row for it offers something that cannot be done.
+    // Alphabetical is an order about spelling, and on a chain with three
+    // hundred currencies the first screenful of it is whatever happens to
+    // begin with a digit. What somebody scanning this table wants first is the
+    // markets deep enough to trade in, and that is what `pooled` measures —
+    // the one figure here that is comparable between rows.
+    //
+    // A currency with no pooled value sinks rather than disappearing: it can
+    // still be converted, which is why it is on the table at all, and its row
+    // says `—` rather than a number. Those keep their alphabetical order among
+    // themselves, because between two unknowns there is nothing to rank.
+    //
+    // Sorted on the `f64`, not on the formatted string: `approx` rounds to
+    // something readable, and `1.2M` against `950K` compares as text in the
+    // wrong direction.
+    let value = |row: &MarketRowVm| {
+        book.pooled(&row.address)
+            .filter(|amount| amount.is_finite())
+    };
     rows.sort_by(|a, b| {
-        let unpriced = |row: &MarketRowVm| row.price == UNKNOWN;
-        unpriced(a)
-            .cmp(&unpriced(b))
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        match (value(a), value(b)) {
+            (Some(left), Some(right)) => right
+                .partial_cmp(&left)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     rows
 }
@@ -1115,6 +1178,79 @@ mod tests {
         assert!(rows.iter().any(|row| row.name == "MKR.vETH"));
         assert!(rows.iter().all(|row| row.change == UNKNOWN));
         assert!(rows.iter().all(|row| row.tone == "unknown"));
+    }
+
+    /// The biggest market is first, and the figure it is ordered by is on the
+    /// row.
+    ///
+    /// Alphabetical is an order about spelling. On a chain with three hundred
+    /// currencies the first screenful of that is whatever happens to start with
+    /// a digit, and what somebody scanning this table wants first is the
+    /// markets deep enough to trade in.
+    #[test]
+    fn the_table_leads_with_the_biggest_market() {
+        let book = book();
+        let rows = rows(&book, &names(), NOW);
+
+        let ordered: Vec<f64> = rows
+            .iter()
+            .filter_map(|row| book.pooled(&row.address))
+            .collect();
+        assert!(ordered.len() >= 2, "not enough priced rows to order");
+        assert!(
+            ordered.windows(2).all(|pair| pair[0] >= pair[1]),
+            "the table is not ordered by pooled value: {ordered:?}",
+        );
+
+        // And the figure is on screen, or the order reads as arbitrary.
+        assert!(
+            rows.iter().all(|row| !row.pooled.is_empty()),
+            "a row is sorted by a figure it does not show: {rows:#?}",
+        );
+    }
+
+    /// A basket and a reserve are pooled differently, because a basket does not
+    /// hold itself.
+    ///
+    /// The reserve is what the pools are holding of it; the basket is its own
+    /// supply at its own price, which for a fractional is the same number as
+    /// the value of everything backing it. Getting the basket wrong is the easy
+    /// mistake — it has no reserve entry of its own to read.
+    #[test]
+    fn a_basket_and_a_reserve_are_both_valued_in_the_quote() {
+        let book = book();
+
+        let basket = book
+            .pooled("iSojYsotVzXz4wh2eJriASGo6UidJDDhL2")
+            .expect("Bridge.vETH is a started basket with a price");
+        let reserve = book
+            .pooled(VRSCTEST)
+            .expect("VRSCTEST is one of its reserves");
+
+        // Both are values in the quote currency, so both are comparable — which
+        // is the whole reason this figure exists rather than `Exit @2%`.
+        assert!(basket > 0.0 && reserve > 0.0);
+        assert!(
+            basket > reserve,
+            "the basket holds more than any one of its reserves: {basket} vs {reserve}",
+        );
+    }
+
+    /// A quantity with no price is not a value.
+    ///
+    /// `None`, and the table shows `—` rather than a zero that would sort it
+    /// among the real numbers.
+    #[test]
+    fn a_currency_with_no_price_has_no_pooled_value() {
+        let mut book = book();
+        book.quote = "iNoSuchQuoteCurrencyAnywhereAtAll".to_string();
+        assert_eq!(book.pooled(VRSCTEST), None);
+
+        let rows = rows(&book, &names(), NOW);
+        assert!(
+            rows.iter().all(|row| row.pooled == UNKNOWN),
+            "an unpriceable currency was given a pooled figure: {rows:#?}",
+        );
     }
 
     /// Priced rows still come first among the ones that are left.
