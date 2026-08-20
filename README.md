@@ -63,8 +63,17 @@ changes all of them, so source and images travel together or the tip is red.
 
 ## Packaging
 
+`render_icon` writes all three platforms' icons from `ui/icon.slint` — the macOS
+iconset, the Linux hicolor theme and the Windows `.ico` — so run it after
+changing the palette or the mark. The results are checked in.
+
 ```sh
-cargo run -p pecu-ui --example render_icon   # crates/pecu-app/assets/Pecu.iconset
+cargo run -p pecu-ui --example render_icon
+```
+
+### macOS
+
+```sh
 scripts/bundle.sh                            # target/Pecu.app
 ```
 
@@ -73,7 +82,51 @@ everywhere else — correct behaviour, not a bug. Signing needs a Developer ID;
 notarisation needs a round trip to Apple, and `bundle.sh` prints those commands
 rather than running them.
 
-Nothing here has been built or run on Windows or Linux.
+The Dock icon comes from the **bundle**. `cargo run` produces a bare binary and
+macOS gives one of those a generic icon whatever it contains.
+
+### Linux
+
+A different shape, on purpose: macOS wants one directory that is the
+application, and Linux wants files where the desktop already looks.
+
+```sh
+sudo apt install build-essential pkg-config libfontconfig-dev
+scripts/install-linux.sh                     # into ~/.local
+scripts/install-linux.sh --prefix /usr/local # system-wide
+scripts/install-linux.sh --uninstall
+```
+
+`build-essential` is for SQLite, which `rusqlite` compiles from source rather
+than linking — so there is no `libsqlite3-dev` in that list and no version of
+SQLite to disagree with. `libfontconfig-dev` is the only other thing the build
+asks pkg-config for.
+
+The X11, Wayland, xkbcommon and GL libraries are **dlopened** by winit and
+glutin rather than linked, so a desktop already has them and this does not name
+them. A container does not, and there the runtime list is:
+
+```
+libx11-6 libxcursor1 libxrandr2 libxi6 libxkbcommon0 libwayland-client0 libgl1 libegl1
+```
+
+Not a package. There is no `.deb`, no AppImage and no Flatpak, so there is
+nothing to hand somebody else — this installs onto the machine that ran it.
+
+### Windows
+
+The icon exists — `crates/pecu-app/assets/pecu.ico`, seven sizes — and nothing
+links it into the executable. That needs a build script and a resource
+compiler, which is a dependency decision rather than a line of code.
+
+### What has actually been run
+
+macOS only. `scripts/install-linux.sh` was written against the freedesktop
+specifications and the files this repository generates, and **has never been run
+on Linux**; nothing has been built on Windows at all. `crates/pecu-app/tests/
+packaging.rs` checks what can be checked from anywhere — that the files exist,
+that the `.ico` container parses back to the sizes that went in, and that
+`Icon=pecu` matches the filenames in the icon theme.
 
 ## Layout
 
