@@ -9,7 +9,7 @@
 // Slint code generator became the slowest part of every build. Nothing moved
 // but the text.
 
-import { ActivityRow, AssetRow, ContentEntry, CurrencyField, CurrencyPick, CurrencyProblem, CurrencyRow, CurrencySlice, EligibleIdentity, FlowStep, IdentityRow, KeyRow, KnownAddressRow, MarketRow, NodeRow, PendingRow, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SeedWord, Stat, ToastRow, Venue, Note } from "structs.slint";
+import { ActivityRow, AssetRow, ChainChoice, ContentEntry, CurrencyField, CurrencyPick, CurrencyProblem, CurrencyRow, CurrencySlice, EligibleIdentity, FlowStep, IdentityRow, KeyRow, KnownAddressRow, MarketRow, NodeRow, PendingRow, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SeedWord, Stat, ToastRow, Venue, Note } from "structs.slint";
 
 export global WalletState {
     in property <bool> exists: false;
@@ -476,6 +476,10 @@ export global TxState {
 
 export global NetworkState {
     in property <[NodeRow]> nodes: [];
+    // Every chain this build offers, from the core. The interface used to carry
+    // `"VRSC"` and `"VRSCTEST"` as literals in a ternary, which could only ever
+    // have described two.
+    in property <[ChainChoice]> chains: [];
     in property <string> requested: "Testnet";
     // The same answer as `requested`, as the index of the chain chooser.
     //

@@ -140,6 +140,68 @@ impl Network {
     }
 }
 
+impl Network {
+    /// The chains this build ships, in the order they are offered.
+    ///
+    /// Testnet first, deliberately: it is the default for a wallet that has
+    /// never been launched, and the one where a mistake costs nothing.
+    ///
+    /// The three after mainnet are PBaaS chains, each its own chain with its
+    /// own coins, its own history and its own node — not endpoints for VRSC.
+    /// They are `Other`, which is the variant that has always carried a chain
+    /// this enum does not name, and every guard that matters keys on
+    /// [`Network::is_mainnet`] rather than on the variant.
+    pub fn shipped() -> Vec<Self> {
+        vec![
+            Self::Testnet,
+            Self::Mainnet,
+            Self::Other("VARRR".to_string()),
+            Self::Other("CHIPS".to_string()),
+            Self::Other("VDEX".to_string()),
+        ]
+    }
+
+    /// What this chain is called on a button.
+    ///
+    /// [`Network::label`] answers with the chain's own name — `VRSCTEST`,
+    /// `VARRR` — which is what a node reports and what has to be compared
+    /// against. This is what a person recognises.
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Mainnet => "Verus",
+            Self::Testnet => "Testnet",
+            Self::Other(name) => match name.as_str() {
+                "VARRR" | "vARRR" => "Pirate Chain",
+                "CHIPS" => "CHIPS",
+                "VDEX" | "vDEX" => "vDEX",
+                other => other,
+            },
+        }
+    }
+
+    /// The endpoints this build ships for this chain.
+    ///
+    /// **A function of the chain**, which is the whole point. It used to be one
+    /// list in `pecu-app`, so a wallet on VRSC was offered `api.verustest.net`
+    /// and marked it `WrongNetwork` the moment it answered — correct, and
+    /// untidy, and it put an endpoint on screen that could never be used.
+    ///
+    /// A chain this build has no endpoint for gets an empty list, which the
+    /// node screen already has an honest empty state for.
+    pub fn builtin_nodes(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Mainnet => &[("VRSC (public)", "https://api.verus.services")],
+            Self::Testnet => &[("VRSCTEST (public)", "https://api.verustest.net")],
+            Self::Other(name) => match name.as_str() {
+                "VARRR" | "vARRR" => &[("vARRR (public)", "https://vapi.piratechain.com/")],
+                "CHIPS" => &[("CHIPS (public)", "https://api.chips.cash/")],
+                "VDEX" | "vDEX" => &[("vDEX (public)", "https://api.vdex.to/")],
+                _ => &[],
+            },
+        }
+    }
+}
+
 /// Where a chain publishes whether the protocol has switched anything off.
 ///
 /// A [notification oracle], which for every chain here is the chain's own root
@@ -204,6 +266,54 @@ mod tests {
         assert_eq!(Network::from_chain_name("VRSCTEST"), Network::Testnet);
         assert!(Network::from_chain_name("VRSC").is_mainnet());
         assert!(!Network::from_chain_name("VRSCTEST").is_mainnet());
+    }
+
+    /// Every shipped chain has an endpoint, an oracle and a name of its own.
+    ///
+    /// The three have to agree: a chain offered on a button with no node behind
+    /// it is a dead choice, and one with no oracle cannot say whether it is
+    /// taking conversions.
+    #[test]
+    fn every_shipped_chain_is_complete_and_distinct() {
+        let mut urls = std::collections::BTreeSet::new();
+        let mut titles = std::collections::BTreeSet::new();
+
+        for chain in Network::shipped() {
+            let nodes = chain.builtin_nodes();
+            assert_eq!(nodes.len(), 1, "{chain} does not have exactly one endpoint");
+            assert!(
+                nodes[0].1.starts_with("https://"),
+                "{chain} is offered over something other than https",
+            );
+            assert!(urls.insert(nodes[0].1), "{chain} reuses an endpoint");
+            assert!(
+                titles.insert(chain.title().to_string()),
+                "{chain} reuses a title"
+            );
+            assert!(chain.oracle().is_some(), "{chain} has no oracle");
+        }
+    }
+
+    /// Only Verus is mainnet. The PBaaS chains carry real coins and are not
+    /// behind the mainnet spending guard, which is a decision worth seeing in a
+    /// test rather than discovering.
+    #[test]
+    fn only_verus_itself_is_mainnet() {
+        for chain in Network::shipped() {
+            assert_eq!(
+                chain.is_mainnet(),
+                chain == Network::Mainnet,
+                "{chain} disagrees about being mainnet",
+            );
+        }
+    }
+
+    /// A chain nobody ships has no endpoint, rather than somebody else's.
+    #[test]
+    fn an_unknown_chain_is_offered_nothing() {
+        assert!(Network::Other("SOMEPBAAS".to_string())
+            .builtin_nodes()
+            .is_empty());
     }
 
     /// Every chain this build can ask about its own halts, and none of them

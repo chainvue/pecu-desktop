@@ -3,6 +3,7 @@
 import { Motion, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Eyebrow, ListRow, Segmented, StatusPill } from "../components/base.slint";
 import { KeyRow, KnownAddressRow } from "../vm/structs.slint";
+import { NodesScreen } from "network.slint";
 import { Actions, AppInfo, NetworkState, SendState, WalletState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
 import { NoticeTitle } from "../components/note.slint";
@@ -467,7 +468,7 @@ export component KnownAddressItem inherits VerticalLayout {
 // because a fixture cannot scroll a flickable, and a screen no reference image
 // covers is a screen that changes without anybody seeing it.
 export component SettingsScreen inherits VerticalLayout {
-    // 0 security · 1 keys · 2 addresses · 3 general
+    // 0 security · 1 keys · 2 addresses · 3 general · 4 network
     in-out property <int> tab: 0;
 
     spacing: Sp.section-gap;
@@ -476,9 +477,16 @@ export component SettingsScreen inherits VerticalLayout {
     HorizontalLayout {
         alignment: start;
         Segmented {
-            width: 460px;
-            options: [@tr("Security"), @tr("Keys"), @tr("Addresses"), @tr("General")];
+            width: 580px;
+            options: [@tr("Security"), @tr("Keys"), @tr("Addresses"), @tr("General"), @tr("Network")];
             index <=> root.tab;
+            // Telling the core which screen is open, from a tab.
+            //
+            // The node list is the one panel here whose being open justifies
+            // asking every configured endpoint a question — see
+            // `ScreenId::Nodes`. It used to be a screen of its own and the rail
+            // said so; now the tab has to.
+            changed(i) => { Actions.navigate(i == 4 ? "nodes" : "settings"); }
         }
     }
 
@@ -490,6 +498,11 @@ export component SettingsScreen inherits VerticalLayout {
         Motion.enabled = !reduce;
         Actions.set-appearance(dark, reduce);
     }
+
+    // Moved here from the rail. The chain chooser and the endpoint it reads
+    // through are settings — a person visits them when something is wrong or
+    // when they are switching chains, not on the way to sending money.
+    if root.tab == 4: NodesScreen {}
 
     if root.tab == 0: Section {
         title: @tr("SECURITY");

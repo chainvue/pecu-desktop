@@ -86,6 +86,29 @@ pub struct Config {
     pub home: std::path::PathBuf,
 }
 
+/// The endpoints this build ships for one chain.
+///
+/// One function, called at startup and again on every chain switch, so the two
+/// cannot drift into offering different lists for the same chain.
+///
+/// The demo build gets its one scripted entry whatever the chain is. Every
+/// probe there is answered by `pecu-mock` rather than by a node, so shipping
+/// the real list would put `api.verus.services` on screen reporting a tip it
+/// never mined — and a URL scheme nothing in this application knows how to
+/// dial is the honest way to say that.
+#[must_use]
+pub fn shipped_nodes(network: &Network, mock: bool) -> Vec<Node> {
+    if mock {
+        return vec![Node::builtin(0, "Scripted chain", "mock://scripted")];
+    }
+    network
+        .builtin_nodes()
+        .iter()
+        .enumerate()
+        .map(|(index, (label, url))| Node::builtin(u32::try_from(index).unwrap_or(0), label, url))
+        .collect()
+}
+
 /// Start the core on `runtime`, returning the handle to talk to it and the
 /// stream of events it produces.
 pub fn start(
@@ -162,7 +185,6 @@ pub fn start(
         vdxf: None,
         store,
         paths,
-        builtin: config.nodes,
     };
 
     runtime.spawn(core.run(command_rx, work_rx));
@@ -452,13 +474,6 @@ struct Core {
     /// Where this chain's files are. Replaced wholesale by a switch, which is
     /// what makes the switch one decision rather than five path edits.
     paths: paths::Paths,
-    /// The endpoints this build ships with, kept so a switch can put the list
-    /// back to them before the saved ones for the new chain are added.
-    ///
-    /// Without this the node list would accumulate: switch to mainnet and the
-    /// testnet user's saved endpoints stay, offering a wallet on VRSC a list of
-    /// nodes it will then refuse to read from.
-    builtin: Vec<Node>,
 }
 
 /// `None` for an empty field, so a blank box means "leave it at the default"
@@ -2533,7 +2548,7 @@ impl Core {
         // Back to the shipped endpoints. `restore` adds this chain's saved ones
         // below; without the reset the previous chain's would stay, and a wallet
         // on VRSC would be offered a list of nodes it then refuses to read from.
-        self.nodes = NodeManager::new(self.builtin.clone(), network);
+        self.nodes = NodeManager::new(shipped_nodes(&network, self.mock), network);
 
         // Everything the old chain answered. A figure kept here is a figure
         // about somebody else's money.
@@ -6190,6 +6205,13 @@ impl Core {
         let active = self.nodes.active();
 
         let vm = NetworkVm {
+            chains: pecu_chain::Network::shipped()
+                .into_iter()
+                .map(|chain| pecu_protocol::ChainChoiceVm {
+                    name: chain.label().to_string(),
+                    title: chain.title().to_string(),
+                })
+                .collect(),
             requested: self
                 .nodes
                 .requested()

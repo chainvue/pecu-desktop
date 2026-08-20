@@ -97,11 +97,16 @@ fn the_interface_can_be_switched_to_another_language() {
     slint::select_bundled_translation("de").expect("the bundled German catalogue");
 
     let german = labels(&ui);
+    // Four rail entries, chosen because they are on screen in the state this
+    // test builds. `Network` used to be the fourth and is not a rail entry any
+    // more — it is a tab inside Settings — so asserting it here asserted
+    // against a string nothing renders, which is a test that fails for a reason
+    // that has nothing to do with translation.
     for (from, to) in [
         ("Dashboard", "Übersicht"),
         ("Send", "Senden"),
         ("Receive", "Empfangen"),
-        ("Network", "Netzwerk"),
+        ("Settings", "Einstellungen"),
     ] {
         assert!(
             german.iter().any(|l| l == to),

@@ -165,7 +165,14 @@ export component AppWindow inherits Window {
         { id: "send",      label: @tr("Send"),       icon: "send",     enabled: true, badge: "" },
         { id: "receive",   label: @tr("Receive"),    icon: "receive",  enabled: true, badge: "" },
         { id: "activity",  label: @tr("Activity"),   icon: "history",  enabled: true, badge: "" },
-        { id: "nodes",     label: @tr("Network"),    icon: "network",  enabled: true, badge: "" },
+        // Out of the rail and into Settings, where it is a fifth tab.
+        //
+        // `hidden` rather than deleted, for the reason the two below it give:
+        // `nav` is also what says a screen exists, and an id missing from it
+        // falls through to the "Not built yet" card. The Settings tab renders
+        // `NodesScreen` directly, and this entry is what keeps `ScreenId::Nodes`
+        // resolving so the tab can still ask the core to probe.
+        { id: "nodes",     label: @tr("Network"),    icon: "network",  enabled: true, badge: "", hidden: true },
         // "Profile", not "Identities", and the screen behind it is unchanged:
         // it is where you are, and where the other names you hold are listed.
         //
@@ -348,7 +355,9 @@ export component AppWindow inherits Window {
                 if (event.text == "4") { root.go("send"); return EventResult.accept; }
                 if (event.text == "5") { root.go("receive"); return EventResult.accept; }
                 if (event.text == "6") { root.go("activity"); return EventResult.accept; }
-                if (event.text == "7") { root.go("nodes"); return EventResult.accept; }
+                // 7 is unbound: Network is a Settings tab now, and a shortcut
+                // that jumped to a screen with no way back is a place somebody
+                // gets stranded. `⌘,` reaches Settings, which is where it went.
                 // 8 and 9 are unbound while Profile and Currencies are out of
                 // the rail — a shortcut to a screen with no visible way back is
                 // a place a person gets stranded.

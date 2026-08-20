@@ -18,7 +18,7 @@
 mod bridge;
 mod instance;
 
-use pecu_chain::{Network, Node};
+use pecu_chain::Network;
 use pecu_core::paths::Paths;
 use pecu_core::{Config, Dispatcher};
 use pecu_protocol::{
@@ -32,25 +32,6 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-
-/// The endpoints Pecu ships with.
-///
-/// Testnet first and active by default: pointing a half-finished wallet at
-/// mainnet would be a choice made for the user rather than by them.
-#[cfg(not(feature = "mock"))]
-const BUILTIN_NODES: &[(&str, &str)] = &[
-    ("VRSCTEST (public)", "https://api.verustest.net"),
-    ("VRSC (public)", "https://api.verus.services"),
-];
-
-/// The demo build's one endpoint, which is not an endpoint.
-///
-/// Every probe in this build is answered by the scripted chain rather than by a
-/// node, so shipping the real list would put `api.verus.services` on screen
-/// reporting VRSCTEST and a tip it never mined. One entry, named for what it is,
-/// and a URL scheme nothing in this application knows how to dial.
-#[cfg(feature = "mock")]
-const BUILTIN_NODES: &[(&str, &str)] = &[("Scripted chain", "mock://scripted")];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = home_dir();
@@ -93,17 +74,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "starting"
     );
 
-    let nodes = BUILTIN_NODES
-        .iter()
-        .enumerate()
-        .map(|(index, (label, url))| Node::builtin(u32::try_from(index).unwrap_or(0), label, url))
-        .collect();
-
     // The chain this home was last used for. Testnet when there is no answer —
     // never launched, or a file this build does not recognise — because putting
     // a half-finished wallet on mainnet would be a choice made for the user
     // rather than by them.
+    //
+    // Read **before** the nodes, because the endpoints are a function of it:
+    // the shipped list is per chain now, so a wallet on VRSC is no longer
+    // offered a testnet endpoint it would mark `WrongNetwork` the moment it
+    // answered.
     let network = Paths::remembered(&home).unwrap_or(Network::Testnet);
+    let nodes = pecu_core::shipped_nodes(&network, cfg!(feature = "mock"));
     let paths = Paths::new(home.clone(), &network, cfg!(feature = "mock"));
 
     let (dispatcher, events) = pecu_core::start(

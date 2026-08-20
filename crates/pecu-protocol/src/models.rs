@@ -151,10 +151,30 @@ pub struct NodeVm {
     pub builtin: bool,
 }
 
+/// One chain this build offers, as a button.
+///
+/// Two strings and not one, because they answer different questions: `name` is
+/// what the chain calls itself and what every guard compares against, and
+/// `title` is what a person recognises. `VARRR` is the first; "Pirate Chain" is
+/// the second.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainChoiceVm {
+    /// The chain's own name — `VRSCTEST`, `VRSC`, `VARRR`. What goes back in
+    /// `SetRequestedNetwork`, and never the title.
+    pub name: String,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkVm {
     /// What the user asked for.
     pub requested: String,
+    /// Every chain this build ships, in the order they are offered.
+    ///
+    /// Sent rather than hardcoded in the interface: which chains exist is chain
+    /// knowledge, and the interface used to carry `"VRSC"` and `"VRSCTEST"` as
+    /// literals in a ternary that could only ever have described two.
+    pub chains: Vec<ChainChoiceVm>,
     /// What the active node reports. Only this decides anything.
     pub effective: Option<String>,
     pub nodes: Vec<NodeVm>,
