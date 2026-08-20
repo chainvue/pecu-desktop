@@ -483,8 +483,10 @@ chain, with `ScriptedReader::broadcasts()` asserting nothing was sent.
 
 What is left is not code. It is evidence.
 
-**Nothing has been converted on a real chain.** VRSCTEST has conversions
-paused, so every one is rejected — which is why this was built anyway, and also
+**Nothing has been converted on a real chain.** VRSCTEST has `disabledefi` in
+force since block 1 187 000 — the wallet now reads that from the chain's own
+oracle rather than finding out by being refused, see `pecu_core::upgrade` — so
+every conversion is rejected — which is why this was built anyway, and also
 why the one thing a conversion flow most needs cannot be had yet. The moment
 DeFi is re-enabled, the first move is a real conversion of a small amount of
 VRSCTEST into a fractional and back, and reading what the daemon says at each
