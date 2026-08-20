@@ -1067,6 +1067,13 @@ fn apply_wallet(ui: &AppWindow, vm: pecu_protocol::WalletVm) {
     // For speech only — see `pecu_ui::spoken`.
     state.set_address_spoken(pecu_ui::spoken(&state.get_address()).into());
 
+    // The shielded address comes from the wallet rather than from a key row:
+    // it is not stored anywhere, it is derived from the active key's phrase,
+    // and only the core has the vault open to do that.
+    state.set_shielded_address(vm.shielded_address.clone().into());
+    state.set_shielded_address_spoken(pecu_ui::spoken(&vm.shielded_address).into());
+    state.set_shielded_note(vm.shielded_note.as_ref().map(note).unwrap_or_default());
+
     let keys: Vec<KeyRow> = vm
         .keys
         .iter()

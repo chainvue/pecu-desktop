@@ -35,6 +35,14 @@ const FORBIDDEN: &[&str] = &[
     "verus-rpc",
     "verus-flows",
     "verus-wire",
+    // The shielded half, added when the wallet gained one. `verus-sapling`
+    // carries the extended spending key and the diversifiable full viewing
+    // key; `verus-light` carries the client that would fetch what they decrypt.
+    // A viewing key cannot spend, and it discloses every amount and memo the
+    // account will ever receive — which is exactly the kind of thing the UI
+    // layer must not be able to name.
+    "verus-sapling",
+    "verus-light",
     "pecu-keystore",
     "pecu-core",
     "pecu-chain",

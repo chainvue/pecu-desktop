@@ -89,6 +89,27 @@ pub struct WalletVm {
     /// otherwise have no route back to its own phrase — the words are still in
     /// there, sealed, with nothing on screen offering to show them.
     pub needs_backup: Option<String>,
+
+    /// The active key's shielded receiving address, or empty.
+    ///
+    /// Empty is the answer in three different situations and the interface must
+    /// not conflate them: the wallet is locked (nothing has been derived and
+    /// nothing should be), the key cannot have one (see `shielded_note`), or
+    /// there is no active key at all. `shielded_note` carries the reason when
+    /// there is one to give.
+    ///
+    /// Public, like the transparent address — a receiving address is meant to
+    /// be handed out. What is *not* here is the viewing key it was derived
+    /// from, which stays in `pecu-keystore` and never reaches this layer.
+    pub shielded_address: String,
+
+    /// Why this key has no shielded address, when it cannot have one.
+    ///
+    /// `None` while locked or when there is an address: an explanation offered
+    /// before anyone asked would be noise on the common path. Set only for the
+    /// permanent reasons — a WIF import has no words and never will, and a
+    /// phrase that is not a valid BIP-39 mnemonic cannot walk ZIP-32.
+    pub shielded_note: Option<NoteVm>,
 }
 
 /// One word of a recovery phrase, on its way to a screen that shows it once.

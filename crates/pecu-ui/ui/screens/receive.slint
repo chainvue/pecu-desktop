@@ -2,6 +2,7 @@
 
 import { R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Eyebrow, StatusPill } from "../components/base.slint";
+import { NoticeBody, NoticeTitle } from "../components/note.slint";
 import { IdentityState, NetworkState, WalletState } from "../vm/state.slint";
 import { KeyPicker } from "../components/form.slint";
 
@@ -155,55 +156,212 @@ export component ReceiveScreen inherits VerticalLayout {
             }
         }
 
-        // The other way to be paid.
+        // The other ways to be paid, in one column.
         //
-        // A VerusID receives, and a name is the one identifier on this screen
-        // that a person can check by reading it. Thirty-four base58 characters
-        // are compared by eye and got wrong; `robert.VRSCTEST@` is not.
+        // Shielded and by-name are alternatives to the address on the
+        // left, so they stack rather than each claiming a column of their
+        // own. Three 320px columns beside the address card overflowed the
+        // window at the width this screen is rendered at, and the names
+        // panel was clipped off the right edge — visible in the reference
+        // image, which is what it is for.
         //
-        // Only shown when this wallet actually controls a name — an empty
-        // panel explaining a feature nobody has is an advertisement, and this
-        // screen is not the place for one.
-        if IdentityState.rows.length > 0: VerticalLayout {
-            spacing: Sp.s4;
+        // The wrapper carries the width so that neither child has to know
+        // whether the other is present: either, both or neither can be
+        // absent and the column is simply as tall as what is in it.
+        VerticalLayout {
             width: 320px;
+            spacing: Sp.s7;
             alignment: start;
 
-            Eyebrow { text: @tr("OR BY NAME"); }
+            // The shielded address, when this key has one.
+            //
+            // Beside the transparent address rather than under it, because they
+            // are not two spellings of one thing: coins sent to each are visible
+            // to different people. Labelling both is the only presentation that
+            // does not invite copying the wrong one.
+            //
+            // # Two cards rather than one card with an `if` in it
+            //
+            // The first version put both states inside a single `Card` and
+            // branched within it. The paragraphs then rendered *below the
+            // card's own bottom edge*, overlapping the eyebrow underneath, and
+            // the last line was clipped — visible in the reference image, which
+            // is what it is for. Binding the card's height to its inner
+            // layout's `preferred-height` did not fix it: wrapping text cannot
+            // report a height before it knows its width, and behind an `if`
+            // that measurement came back short.
+            //
+            // The names card below has never had the problem, and the
+            // difference is that its children are plain elements. So this
+            // follows the shape that works — the branch is outside, and each
+            // card holds nothing but ordinary children.
+            if WalletState.shielded-address != "": VerticalLayout {
+                spacing: Sp.s4;
+                alignment: start;
 
-            Card {
-                VerticalLayout {
-                    padding: Sp.s5;
-                    spacing: Sp.s4;
+                Eyebrow { text: @tr("OR PRIVATELY"); }
 
-                    Text {
-                        text: @tr("These names reach this wallet too. A name can be read back and checked; an address is thirty-four characters somebody compares by eye.");
-                        font-size: Typo.caption;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                    }
+                Card {
+                    // Its own content's height, stated rather than inferred.
+                    //
+                    // `Card` is a `Rectangle` with `@children`, and a
+                    // `Rectangle` does not take its height from a
+                    // `VerticalLayout` inside it — the same trap the chain
+                    // warning on the left documents and `Notice` exists to
+                    // solve. Without this the card came out about fifty pixels
+                    // short: exactly the two extra lines the closing paragraph
+                    // wraps onto. It rendered outside the card's bottom edge
+                    // and over the section below.
+                    //
+                    // The names card gets away without it because its content
+                    // happens to fit the guess, which is luck rather than a
+                    // difference worth relying on.
+                    height: shieldedbody.preferred-height;
+                    shieldedbody := VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s4;
 
-                    for row in IdentityState.rows: VerticalLayout {
-                        spacing: 2px;
                         Text {
-                            text: row.name;
+                            text: @tr("Paid here, the amount and the sender stay off the public chain. Only this wallet can see what arrives.");
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+
+                        // Same treatment as the transparent address, and for the
+                        // same reason: read character by character, so monospace
+                        // and wrapping mid-string. At body size rather than the
+                        // larger one because it is more than twice as long and
+                        // would otherwise take four lines.
+                        shielded := TextInput {
+                            text: WalletState.shielded-address;
+                            read-only: true;
                             font-family: Typo.mono;
                             font-size: Typo.body;
-                            font-weight: Typo.w-bold;
                             color: Theme.text-primary;
-                            overflow: elide;
+                            wrap: char-wrap;
+                            accessible-role: AccessibleRole.text;
+                            accessible-label: @tr("Shielded receive address");
+                            accessible-value: WalletState.shielded-address-spoken;
                         }
-                        // The status matters here in a way it does not on the
-                        // profile screen: a revoked or locked name is one that
-                        // should not be handed to somebody as a way to pay.
-                        StatusPill {
-                            state: row.tone;
-                            text: row.status;
+
+                        Btn {
+                            text: @tr("Copy shielded address");
+                            variant: "ghost";
+                            clicked => {
+                                // Through the element that holds it, exactly as
+                                // the transparent address does — Slint gives an
+                                // application no clipboard of its own.
+                                shielded.select-all();
+                                shielded.copy();
+                            }
+                        }
+
+                        // Said plainly rather than discovered by trying: this
+                        // wallet can see this money and cannot move it, because
+                        // the code that builds a shielded spend is not compiled
+                        // into this build at all.
+                        Text {
+                            text: @tr("Receiving only, for now");
+                            font-size: Typo.body;
+                            font-weight: Typo.w-medium;
+                            color: Theme.accent;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: @tr("This wallet can show what arrives here and cannot yet send it on. Spending from a shielded address needs a part that is not built yet.");
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // Why this key has none, when it can never have one.
+            //
+            // Its own card for the reason above, and shown only for the
+            // permanent refusals: a locked wallet has not been refused
+            // anything, so it gets no panel at all.
+            if WalletState.shielded-address == "" && WalletState.shielded-note.code != "": VerticalLayout {
+                spacing: Sp.s4;
+                alignment: start;
+
+                Eyebrow { text: @tr("OR PRIVATELY"); }
+
+                Card {
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s2;
+
+                        // Not tinted. This is a fact about how the key arrived,
+                        // not a warning, and the card is already a surface.
+                        NoticeTitle {
+                            note: WalletState.shielded-note;
+                            font-size: Typo.body;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                        }
+                        NoticeBody {
+                            note: WalletState.shielded-note;
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // The other way to be paid.
+            //
+            // A VerusID receives, and a name is the one identifier on this screen
+            // that a person can check by reading it. Thirty-four base58 characters
+            // are compared by eye and got wrong; `robert.VRSCTEST@` is not.
+            //
+            // Only shown when this wallet actually controls a name — an empty
+            // panel explaining a feature nobody has is an advertisement, and this
+            // screen is not the place for one.
+            if IdentityState.rows.length > 0: VerticalLayout {
+                spacing: Sp.s4;
+                alignment: start;
+
+                Eyebrow { text: @tr("OR BY NAME"); }
+
+                Card {
+                    VerticalLayout {
+                        padding: Sp.s5;
+                        spacing: Sp.s4;
+
+                        Text {
+                            text: @tr("These names reach this wallet too. A name can be read back and checked; an address is thirty-four characters somebody compares by eye.");
+                            font-size: Typo.caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+
+                        for row in IdentityState.rows: VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: row.name;
+                                font-family: Typo.mono;
+                                font-size: Typo.body;
+                                font-weight: Typo.w-bold;
+                                color: Theme.text-primary;
+                                overflow: elide;
+                            }
+                            // The status matters here in a way it does not on the
+                            // profile screen: a revoked or locked name is one that
+                            // should not be handed to somebody as a way to pay.
+                            StatusPill {
+                                state: row.tone;
+                                text: row.status;
+                            }
                         }
                     }
                 }
             }
         }
+
     }
 
     Rectangle { vertical-stretch: 1; }

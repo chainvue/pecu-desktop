@@ -735,6 +735,13 @@ pub fn renaming_key(ui: &AppWindow) {
 /// invented (a hand-typed one failed its checksum twice, which nobody notices in
 /// a picture and somebody might copy out of it) nor real.
 const ADDRESS: &str = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+/// A real Sapling payment address, from the SDK's own `zaddr` test vector.
+///
+/// Not invented. A made-up `zs1…` of the wrong length would make every picture
+/// of this screen a picture of a layout that does not exist — the address wraps,
+/// so its length decides how tall the card is.
+const SHIELDED_ADDRESS: &str =
+    "zs18pytujp8qu73a3fu6g9chl7mfumrr0htyqsh60r3ed4capagqwm8tx2l8f9c5g7w87q4566uph3";
 const SECOND_ADDRESS: &str = "RVGTY4w2GrdBFrzGaAASBvT6prBr4MxDfJ";
 const THIRD_ADDRESS: &str = "RGZbQcWU9LNSa9rat45UMKaeP1q32NBduM";
 
@@ -1040,6 +1047,32 @@ pub fn reviewing_identity(ui: &AppWindow) {
 /// that this project has never held a key for. Rendering an invented one would
 /// prove nothing about the encoder, and rendering a live one would put someone's
 /// address in a committed image.
+/// Receiving on a key that arrived as a WIF.
+///
+/// Worth its own picture because the shielded column is *present* and says
+/// something rather than being absent: a person looking for a z-address has to
+/// find out why there is none, and "the panel is missing" is not an answer.
+/// This is also the state a wallet lands in after importing a private key,
+/// which is a normal thing to have done.
+pub fn receiving_without_a_phrase(ui: &AppWindow) {
+    receiving(ui);
+
+    let wallet = ui.global::<WalletState>();
+    wallet.set_shielded_address(slint::SharedString::new());
+    wallet.set_shielded_address_spoken(slint::SharedString::new());
+    wallet.set_shielded_note(Note {
+        code: "shielded-needs-a-phrase".into(),
+        ..Default::default()
+    });
+    wallet.set_keys(ModelRc::from(Rc::new(VecModel::from(vec![key(
+        "imported",
+        ADDRESS,
+        "imported-wif",
+        true,
+        true,
+    )]))));
+}
+
 pub fn receiving(ui: &AppWindow) {
     unlocked(ui);
 
@@ -1067,6 +1100,8 @@ pub fn receiving(ui: &AppWindow) {
     ]))));
     wallet.set_address(ADDRESS.into());
     wallet.set_address_spoken(crate::spoken(ADDRESS).into());
+    wallet.set_shielded_address(SHIELDED_ADDRESS.into());
+    wallet.set_shielded_address_spoken(crate::spoken(SHIELDED_ADDRESS).into());
     ui.global::<NetworkState>().set_effective("Testnet".into());
 
     // Scale factor 1: the offscreen renderer draws at exactly the size it is

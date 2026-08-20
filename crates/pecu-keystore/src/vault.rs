@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::entropy;
 use crate::envelope::{Kdf, KeyEntry, Origin, Sealed, VaultDoc, VAULT_VERSION};
+use crate::shielded::ShieldedView;
 
 /// Argon2id cost for a new vault.
 ///
@@ -64,6 +65,20 @@ pub enum VaultError {
 
     #[error("the operating system would not supply randomness")]
     NoEntropy,
+
+    /// The key has no recovery phrase, so it can have no shielded account.
+    ///
+    /// Its own variant rather than a `NoSuchKey` with a sentence in it: the key
+    /// exists, nothing is wrong, and this is a permanent property of how it
+    /// arrived. A WIF import can never gain a shielded side, and the interface
+    /// has to say that at the point somebody asks for a z-address rather than
+    /// reporting a missing key they can see in the list.
+    #[error("`{0}` was imported as a private key and has no recovery phrase")]
+    NoPhrase(String),
+
+    /// The phrase decrypted but did not derive a shielded account.
+    #[error(transparent)]
+    Shielded(#[from] crate::shielded::ShieldedError),
 }
 
 /// A key as the outside world may see it: public facts only.
@@ -287,6 +302,62 @@ impl Vault {
         }
 
         Ok(f(&key))
+    }
+
+    /// The shielded account this key's recovery phrase produces.
+    ///
+    /// # Why this needs no passphrase, unlike `reveal_phrase`
+    ///
+    /// Both open the same sealed phrase. [`Vault::reveal_phrase`] re-derives
+    /// the key-encryption key from the passphrase anyway, because showing
+    /// twenty-four words to a human is a moment worth re-authenticating: the
+    /// wallet may have been left unlocked and unattended.
+    ///
+    /// Nothing is shown here. This runs on a timer, in the background, for as
+    /// long as the wallet is open, and what it returns cannot spend. Requiring
+    /// a passphrase would mean either prompting every few minutes or holding
+    /// one in memory — and holding a passphrase is strictly worse than holding
+    /// the data key the vault already keeps while unlocked.
+    ///
+    /// So the rule is the same one [`Vault::with_key`] follows: unlocked is
+    /// enough, and unlocked is exactly what it takes to reach the spending key
+    /// too. This grants no access the caller did not already have.
+    ///
+    /// # What comes back
+    ///
+    /// Viewing material only — see [`ShieldedView`]. The spending key is
+    /// derived, used and dropped inside [`crate::shielded::view_from_phrase`].
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError::NoPhrase`] for a WIF import, which never had words;
+    /// [`VaultError::Shielded`] if the words are not a valid BIP-39 mnemonic,
+    /// which a phrase from a transparent-only wallet legitimately may not be.
+    pub fn shielded_view(&self, label: &str) -> Result<ShieldedView, VaultError> {
+        let dek_guard = self.dek.read().map_err(|_| VaultError::Locked)?;
+        let dek = dek_guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let doc = self.doc.read().map_err(|_| VaultError::Locked)?;
+        let entry = doc
+            .keys
+            .iter()
+            .find(|k| k.label == label)
+            .ok_or_else(|| VaultError::NoSuchKey(label.to_string()))?;
+
+        let sealed = entry
+            .phrase
+            .as_ref()
+            .ok_or_else(|| VaultError::NoPhrase(label.to_string()))?;
+
+        let opened = open_sealed(dek, sealed, entry.aad(&doc.wallet_id, "phrase").as_bytes())
+            .map_err(|_| VaultError::Corrupt("the phrase does not decrypt".into()))?;
+
+        let phrase = Zeroizing::new(
+            String::from_utf8(opened.to_vec())
+                .map_err(|_| VaultError::Corrupt("the phrase is not text".into()))?,
+        );
+
+        Ok(crate::shielded::view_from_phrase(&phrase)?)
     }
 
     /// Add a key. Needs the vault unlocked, but **not** the passphrase — adding

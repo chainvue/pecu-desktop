@@ -21,6 +21,15 @@ export global WalletState {
     // Never rendered: a space somebody copies is an address that fails its
     // checksum. See `pecu_ui::spoken`.
     in property <string> address-spoken: "";
+    // The ACTIVE key's shielded address, or empty. Empty means three different
+    // things — locked, no such key, or a key that cannot have one — and
+    // `shielded-note` carries the reason when there is one worth giving.
+    in property <string> shielded-address: "";
+    // Grouped, for `accessible-value` only, exactly like `address-spoken`.
+    in property <string> shielded-address-spoken: "";
+    // Why there is no shielded address. Empty code means "no reason to give",
+    // which is the locked case — not a refusal.
+    in property <Note> shielded-note;
     // Every key in the vault. Readable while locked, because an address is
     // public: that is what lets someone be paid without unlocking anything.
     in property <[KeyRow]> keys: [];

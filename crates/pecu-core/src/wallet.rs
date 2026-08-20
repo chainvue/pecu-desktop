@@ -11,8 +11,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pecu_keystore::{entropy, NewKey, Origin, Vault, VaultError};
-use pecu_protocol::{KeyOrigin, KeyVm, Secret, SeedWordVm, WalletVm};
+use pecu_keystore::{entropy, NewKey, Origin, ShieldedView, Vault, VaultError};
+use pecu_protocol::{KeyOrigin, KeyVm, NoteVm, Secret, SeedWordVm, WalletVm};
 use verus_sdk::verus_keys::{
     bip39, bip39::MnemonicError, private_key_from_seed_phrase, KeyError, PrivateKey,
 };
@@ -50,6 +50,30 @@ pub struct Wallet {
     /// the flag on the key entry survives instead, and the screen can be
     /// reached again with the passphrase.
     backup: Option<Backup>,
+
+    /// The active key's shielded account, derived once rather than per frame.
+    ///
+    /// # Why this is cached and the transparent address is not
+    ///
+    /// A transparent address is stored in the vault in clear — it is public —
+    /// so listing keys costs a read. A shielded address is not stored at all:
+    /// reaching it means decrypting the recovery phrase and running BIP-39's
+    /// 2048 rounds of PBKDF2 followed by ZIP-32. Doing that inside
+    /// [`Wallet::view`], which runs on every publish, would open the sealed
+    /// phrase several times a second for a string that cannot change while the
+    /// same key is active.
+    ///
+    /// So it is derived at the four moments it can change — create, unlock,
+    /// switch key — and dropped at the one where it must: [`Wallet::lock`].
+    /// The viewing key it holds cannot spend, and it is gone the moment the
+    /// data key is.
+    shielded: Option<ShieldedView>,
+
+    /// Why the active key has no shielded account, when it cannot have one.
+    ///
+    /// Only ever set for the permanent reasons. "Locked" is not one of them:
+    /// a locked wallet has not been refused anything, it has not been asked.
+    shielded_note: Option<NoteVm>,
 }
 
 /// The state of a backup in progress.
@@ -93,6 +117,11 @@ impl Wallet {
             last_activity: std::time::Instant::now(),
             active_key,
             backup: None,
+            // Nothing yet, and correctly so: a vault opened from disk is
+            // locked, so there is no data key to reach a phrase with. These
+            // fill in on the first unlock.
+            shielded: None,
+            shielded_note: None,
         }
     }
 
@@ -137,6 +166,10 @@ impl Wallet {
 
         self.active_key = Some("main".to_string());
         self.vault = Some(Arc::new(vault));
+        // The vault is open from creation, so the shielded account is reachable
+        // now. Deriving it here means the receive screen has a z-address on the
+        // first visit rather than only after the first lock and unlock.
+        self.refresh_shielded();
         self.touch();
         // The phrase stays in memory from here until the backup screen is
         // finished with it. Nothing else in the process has a copy.
@@ -214,6 +247,7 @@ impl Wallet {
 
         if known {
             self.active_key = Some(label.to_string());
+            self.refresh_shielded();
             self.touch();
         }
         known
@@ -387,8 +421,42 @@ impl Wallet {
     pub fn unlock(&mut self, passphrase: &Secret) -> Result<(), VaultError> {
         let vault = self.vault.as_ref().ok_or(VaultError::Locked)?;
         vault.unlock(passphrase)?;
+        self.refresh_shielded();
         self.touch();
         Ok(())
+    }
+
+    /// Derive the active key's shielded account, or record why there is none.
+    ///
+    /// Silent about a locked wallet and about having no active key: neither is
+    /// a refusal, and an interface that explained them would be answering a
+    /// question nobody asked.
+    fn refresh_shielded(&mut self) {
+        self.shielded = None;
+        self.shielded_note = None;
+
+        let (Some(vault), Some(label)) = (self.vault.as_ref(), self.active_key.as_ref()) else {
+            return;
+        };
+
+        match vault.shielded_view(label) {
+            Ok(view) => self.shielded = Some(view),
+            // Permanent, and worth saying at the point somebody looks for a
+            // z-address: a WIF is a key, and the words that would have produced
+            // it never existed.
+            Err(VaultError::NoPhrase(_)) => {
+                self.shielded_note = Some(NoteVm::plain("shielded-needs-a-phrase"));
+            }
+            // Also permanent. The transparent path hashes free text and checks
+            // no wordlist, so a phrase can be perfectly good there and not a
+            // mnemonic at all.
+            Err(VaultError::Shielded(_)) => {
+                self.shielded_note = Some(NoteVm::plain("shielded-not-bip39"));
+            }
+            // Locked, or a key that vanished between the two reads. Neither is
+            // something to explain on the receive screen.
+            Err(_) => {}
+        }
     }
 
     /// Drop the data key — and any phrase currently on screen.
@@ -399,6 +467,11 @@ impl Wallet {
     /// after the next unlock.
     pub fn lock(&mut self) {
         self.backup = None;
+        // The viewing key goes with the data key. It cannot spend, and it
+        // discloses every amount this account will ever receive — so a locked
+        // wallet holding one would be a locked wallet that still leaks.
+        self.shielded = None;
+        self.shielded_note = None;
         if let Some(vault) = &self.vault {
             vault.lock();
         }
@@ -471,6 +544,12 @@ impl Wallet {
                 .auto_lock
                 .map(|d| u32::try_from(d.as_secs() / 60).unwrap_or(u32::MAX)),
             needs_backup,
+            shielded_address: self
+                .shielded
+                .as_ref()
+                .map(|view| view.address.clone())
+                .unwrap_or_default(),
+            shielded_note: self.shielded_note.clone(),
         }
     }
 }
@@ -601,6 +680,65 @@ mod tests {
         assert_eq!(view.keys[0].origin, KeyOrigin::Generated);
         assert!(view.keys[0].address.starts_with('R'), "{:?}", view.keys[0]);
         assert!(!view.locked);
+    }
+
+    /// A new wallet has a shielded address from the moment it is created.
+    ///
+    /// Not after the first lock and unlock, which is what deriving only in
+    /// `unlock` would have meant: the vault is already open at the end of
+    /// `create`, so somebody who goes straight to Receive must find one there.
+    #[test]
+    fn a_created_wallet_can_be_paid_privately_straight_away() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
+        wallet
+            .create("test", &Secret::from("a passphrase"))
+            .expect("create");
+
+        let view = wallet.view();
+        assert!(
+            view.shielded_address.starts_with("zs1"),
+            "no shielded address on a fresh wallet: {:?}",
+            view.shielded_address,
+        );
+        assert!(
+            view.shielded_note.is_none(),
+            "an address and an excuse for not having one at the same time",
+        );
+    }
+
+    /// **Locking drops the viewing key.**
+    ///
+    /// It cannot spend, and it discloses every amount and memo this account
+    /// will ever receive — permanently, to anyone who reads it. A locked wallet
+    /// that still held one would be a locked wallet that still leaks, which is
+    /// not what locking means.
+    #[test]
+    fn locking_takes_the_shielded_address_away_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
+        wallet
+            .create("test", &Secret::from("a passphrase"))
+            .expect("create");
+        assert!(!wallet.view().shielded_address.is_empty());
+
+        wallet.lock();
+
+        let view = wallet.view();
+        assert!(
+            view.shielded_address.is_empty(),
+            "the shielded address survived locking",
+        );
+        // And no reason is offered, because none was asked for: a locked wallet
+        // has not been refused anything.
+        assert!(view.shielded_note.is_none());
+
+        // It comes back on unlock, without a second passphrase prompt beyond
+        // the one that unlocked the wallet.
+        wallet
+            .unlock(&Secret::from("a passphrase"))
+            .expect("unlock");
+        assert!(wallet.view().shielded_address.starts_with("zs1"));
     }
 
     /// Two wallets created with the same passphrase must not share a key —
