@@ -61,10 +61,16 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
                       /usr/local/share/boost /usr/local/.ghcup
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # The image already has /swapfile, in use — so this is a second one
+          # beside it rather than an attempt to replace it, which is what
+          # "fallocate failed: Text file busy" was.
+          if ! swapon --show=NAME --noheadings | grep -qx /swapfile2; then
+            sudo fallocate -l 8G /swapfile2
+            sudo chmod 600 /swapfile2
+            sudo mkswap /swapfile2
+            sudo swapon /swapfile2
+          fi
+          swapon --show
           df -h /
           free -h
 
