@@ -226,6 +226,39 @@ impl Network {
     /// `None` is **not** "nothing is switched off". It is "there is nowhere to
     /// ask", which is a third state the caller has to keep apart from a clear
     /// answer and from a failed one — see `pecu_core::upgrade`.
+    /// The lightwalletd server this chain's shielded notes are read from.
+    ///
+    /// A **different server from the RPC node**, speaking a different protocol
+    /// for a different purpose: the node answers about transparent addresses,
+    /// and lightwalletd streams compact blocks so a wallet can trial-decrypt
+    /// them without telling anyone which notes are its own.
+    ///
+    /// `None` is the honest answer for every chain but testnet. Verus runs one
+    /// public lightwalletd, on VRSCTEST, and this wallet will not guess a
+    /// hostname for the others — a shielded balance read from the wrong server
+    /// is not a smaller version of a right one, it is a number with no meaning.
+    /// Where this is `None` the interface says the chain has no shielded
+    /// support here yet, which is true, rather than failing to connect to
+    /// something that was never there.
+    ///
+    /// `https` is not a preference. `GrpcWebTransport` refuses plaintext to any
+    /// non-loopback host, because a light client leaks which blocks it asks
+    /// for.
+    pub fn light_server(&self) -> Option<&'static str> {
+        match self {
+            // Verus's public testnet lightwalletd, and at the time of writing
+            // the only one that exists.
+            Self::Testnet => Some("https://lightwalletd.verustest.net:8125"),
+            // Deliberately absent, for mainnet and for every PBaaS chain
+            // alike. There is a mainnet server somewhere or there is not; this
+            // wallet has not measured one, and inventing the name would
+            // produce a wallet that looks shielded-capable on VRSC and cannot
+            // be. One arm rather than two because the answer and the reason
+            // are the same for both.
+            Self::Mainnet | Self::Other(_) => None,
+        }
+    }
+
     pub fn oracle(&self) -> Option<Oracle> {
         let oracle = |identity, content_key| {
             Some(Oracle {
@@ -259,6 +292,38 @@ impl core::fmt::Display for Network {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only testnet ships a lightwalletd, and mainnet must not pretend to.
+    ///
+    /// A guessed hostname here would produce a wallet that offers a shielded
+    /// balance on VRSC and cannot deliver one — and a shielded balance read
+    /// from the wrong server is not a smaller version of a right one, it is a
+    /// number with no meaning.
+    #[test]
+    fn only_testnet_has_a_light_server() {
+        assert_eq!(
+            Network::Testnet.light_server(),
+            Some("https://lightwalletd.verustest.net:8125"),
+        );
+        assert_eq!(Network::Mainnet.light_server(), None);
+        assert_eq!(Network::Other("VARRR".into()).light_server(), None);
+    }
+
+    /// Plaintext would leak which blocks are being fetched, and the SDK's
+    /// transport refuses it for any non-loopback host. An `http://` server
+    /// named here would fail at connect time instead of at review time.
+    #[test]
+    fn every_shipped_light_server_is_https() {
+        for network in Network::shipped() {
+            if let Some(url) = network.light_server() {
+                assert!(
+                    url.starts_with("https://"),
+                    "{} ships a plaintext light server: {url}",
+                    network.chain_name(),
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_two_known_chains_are_recognised() {

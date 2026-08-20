@@ -21,10 +21,12 @@
 //! then takes `&chain` unchanged, and mock mode costs zero duplicated flow
 //! code.
 
+pub mod light;
 pub mod network;
 pub mod node;
 pub mod permit;
 
+pub use light::{LightRefused, LightServer};
 pub use network::Network;
 pub use node::{backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus};
 pub use permit::{SpendPermit, SpendRefused};

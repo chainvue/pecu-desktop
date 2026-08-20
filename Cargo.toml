@@ -23,7 +23,12 @@ publish = false
 # the SDK sets rust-version = 1.95 against a machine that has exactly 1.95.0, so
 # an upstream MSRV bump must be a deliberate act here rather than a build that
 # breaks on a Tuesday. `SDK_REV` in pecu-protocol surfaces this in About.
-verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network"] }
+# `light` is `network` + `shielded` + the lightwalletd client. It is what lets
+# the wallet SEE shielded funds; it deliberately does NOT include `prover`,
+# which is what would let it SPEND them. That half costs bellman and ~50 MB of
+# Sapling parameters at runtime, and a wallet that only shows a balance has no
+# use for either — so the split the SDK offers is taken exactly as offered.
+verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light"] }
 # Taken directly (not through the facade) by pecu-mock, which needs
 # `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
 # dependency graph at all. See pecu-mock/Cargo.toml.

@@ -44,6 +44,7 @@ pub mod portfolio;
 pub mod registration;
 pub mod runtime;
 pub mod send;
+pub mod shielded;
 pub mod upgrade;
 pub mod wallet;
 

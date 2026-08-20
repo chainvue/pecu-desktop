@@ -470,6 +470,15 @@ export component NoticeTitle inherits Text {
         : root.note.code == "key-not-here" ? @tr("That key is not in this wallet")
         : root.note.code == "key-change-failed" ? @tr("Could not change that key")
 
+        // ── Shielded ────────────────────────────────────────────────────
+        // Both are permanent facts about how the key arrived rather than
+        // failures to retry, so the headline states what is true and the body
+        // says why, instead of either one reading as an error.
+        : root.note.code == "shielded-needs-a-phrase"
+            ? @tr("This key has no shielded address")
+        : root.note.code == "shielded-not-bip39"
+            ? @tr("No shielded address from this phrase")
+
         // ── Nodes and chains ────────────────────────────────────────────
         : root.note.code == "node-unreachable" ? @tr("Could not reach that node")
         : root.note.code == "mock-chain-failed" ? @tr("The scripted chain could not be built")
@@ -591,7 +600,11 @@ export component NoticeTitle inherits Text {
 export component NoticeBody inherits Text {
     in property <Note> note;
 
-    text: root.note.code == "backup-in-progress"
+    text: root.note.code == "shielded-needs-a-phrase"
+            ? @tr("It was imported as a private key, and a shielded address is derived from a recovery phrase. Those words never existed for this key, so there is nothing to derive from — a key that arrived as a phrase has both addresses.")
+        : root.note.code == "shielded-not-bip39"
+            ? @tr("A shielded address comes from a BIP-39 phrase, and this key's phrase is not one. That is not a fault: the transparent address accepts any text, so a phrase can be perfectly good for it and still not be a mnemonic.")
+        : root.note.code == "backup-in-progress"
             ? @tr("A key is only as safe as its phrase, and showing two at once is how the wrong one gets written down.")
         : root.note.code == "import-not-a-verus-key"
             ? @tr("Verus keys start with a U; a key from another chain is refused rather than silently reinterpreted.")

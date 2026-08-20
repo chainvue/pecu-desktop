@@ -82,6 +82,104 @@ long before any of this, so the safety half was never the missing part.
 
 ## 2. Shielded — receiving, then sending
 
+**Status:** the reading half is built and tested offline. The half that needs a
+live server is blocked on somebody else's certificate.
+
+### What is built
+
+* `pecu_keystore::shielded` — the account a recovery phrase produces, derived
+  under the data key with no passphrase prompt, so a scan can run on a timer.
+  What leaves the keystore is `ShieldedView`: the diversifiable full viewing key
+  and the `zs…` address, never the spending key. `coin_type` is **133 on both
+  networks**, which is the Verus Mobile path; a wallet that used ZIP-32's
+  testnet 1 would derive an account no other Verus wallet reaches from the same
+  words. Eight tests, including one that walks BIP-39 → `m/32'/133'/0'` → bech32
+  separately and compares, so it cannot pass by agreeing with itself.
+* `pecu_chain::light` — `LightServer`, which cannot be constructed without
+  having asked the server which chain it serves and having been told the right
+  one. Same `Network::from_chain_name` the node health check uses. The guard
+  matters more here than there: a transparent balance from the wrong chain is
+  visibly wrong because the addresses do not match, and a shielded balance is
+  one number with nothing on screen to contradict it.
+* `pecu_core::shielded` — holds the viewing key and the `ScanResult`, folds in
+  each tail with `absorb`, tells a lagging server apart from a reorg, and rolls
+  back to the oldest *verifiable* checkpoint when the chain really did move.
+  Six tests against the SDK's captured VRSCTEST blocks — a real note of 5
+  VRSCTEST at position 3176, found, valued, and then worth nothing once its
+  nullifier appears.
+
+### What is blocked, and by what
+
+**Verus's public testnet lightwalletd is serving an expired certificate.**
+`lightwalletd.verustest.net:8125` presents a Let's Encrypt certificate for
+`*.verustest.net` — so the hostname and port are right — that expired
+**2026-08-11 17:01:37 UTC**, measured on 2026-08-20. Their auto-renewal has
+stopped. `tests/live_light.rs` in `pecu-chain` fails on exactly this and says so
+in its message.
+
+There is no way around it that a wallet should take. Disabling certificate
+verification to reach a shielded balance would hand every block this wallet
+asks for to anyone on the path — which is the correlation a shielded address
+exists to prevent — and `GrpcWebTransport` refuses plaintext to a non-loopback
+host for the same reason. So this waits for the operator, and the offline tests
+carry the weight until then.
+
+### Nothing is written to disk, deliberately
+
+A `ScanResult` is the shielded history: every note, with amounts and heights.
+The wallet's databases are plain SQLite and only the vault is encrypted, so
+persisting it would put a shielded balance and its history in a file any other
+process can read — the exact property somebody chose a shielded address to
+avoid. So the scan lives in memory and starts again next launch. `birthday` for
+a new wallet is the tip, so the common case costs nothing; a restored wallet
+pays a wait. Persisting it properly needs somewhere as protected as the keys
+are, and that is its own decision rather than a line of code.
+
+### One upstream defect found
+
+`dfvk_from_bytes` **panics** on 128 bytes that are not a viewing key — the
+panic is in `sapling-crypto` (`keys.rs:207`), below the SDK, so the `Result` it
+returns can never carry that case. The SDK argues the opposite principle in
+`derive_account`'s own documentation: it errors rather than panics on a bad
+seed, "which is not acceptable at a library boundary that takes caller input".
+Not a live hazard here — the only bytes that reach it were derived a moment
+earlier from a phrase, with no path from a file, a socket or a text field — so
+it is recorded by a `should_panic` test rather than papered over with
+validation that would be dead code. The fix belongs upstream.
+
+### The receive screen shows it
+
+`Receive` has a shielded column beside the transparent address — the `zs…`
+address, a copy button, and a plain statement that this wallet can be paid there
+and cannot yet pay out of it. A key that arrived as a WIF gets the same column
+saying why it has none, rather than the column being absent: somebody looking
+for a z-address has to find out why there is not one, and a missing panel is not
+an answer. Two reference images, both themes.
+
+None of that touches the light server, so it works today.
+
+**Two layout defects were found by looking at the rendered image, not by
+reading the markup.** Three 320px columns beside the address card overflowed the
+window and clipped the names panel off the right edge; and the shielded card
+came out about fifty pixels short — exactly the two lines its closing paragraph
+wraps onto — so the text rendered below the card's own bottom edge and over the
+section beneath it. The second is the `Rectangle`-does-not-take-its-height-from-
+a-`VerticalLayout` trap that `Notice` exists for, and the fix is the same:
+`height: <inner>.preferred-height`, with the layout as the card's direct child.
+Binding it while the layout sat behind an `if` did **not** work.
+
+### What is left
+
+* **Persistence**, on the terms above.
+* **A balance on screen.** `pecu_core::shielded` computes one; nothing calls it
+  from the actor yet, because the only server that could answer is the one with
+  the expired certificate. The wiring is a scan on the same timer the portfolio
+  uses, and it is deliberately not written blind.
+* **Sending**, which is the `prover` feature: ~30 s of Groth16 on a background
+  thread, and the ~50 MB parameter download below.
+
+### The original research, still current
+
 **Status:** researched against the SDK, nothing written.
 
 The user's stated goal. Testnet lightwalletd is `lightwalletd.verustest.net:8125`

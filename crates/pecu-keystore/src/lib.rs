@@ -37,9 +37,11 @@
 //! session.
 
 mod envelope;
+mod shielded;
 mod vault;
 
 pub use envelope::{Kdf, KeyEntry, Origin, Sealed, VaultDoc, VAULT_VERSION};
+pub use shielded::{ShieldedError, ShieldedView};
 pub use vault::{KeyRef, NewKey, Vault, VaultError};
 
 use zeroize::Zeroizing;

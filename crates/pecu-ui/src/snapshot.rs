@@ -245,6 +245,11 @@ pub const CASES: &[Case] = &[
     ("send", "send-sent", crate::fixtures::sent),
     ("send", "send-uncertain", crate::fixtures::send_uncertain),
     ("receive", "receive", crate::fixtures::receiving),
+    (
+        "receive",
+        "receive-no-phrase",
+        crate::fixtures::receiving_without_a_phrase,
+    ),
     ("settings", "settings", crate::fixtures::settings),
     ("settings", "keys", crate::fixtures::keys),
     ("settings", "addresses", crate::fixtures::addresses),
