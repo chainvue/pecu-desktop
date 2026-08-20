@@ -1,6 +1,6 @@
 # Clippy and the test suite, on every push.
 #
-# It calls `scripts/check.sh` rather than listing the commands here, so that
+# Both call `scripts/check.sh` rather than listing the commands here, so that
 # what CI runs and what you can run on your own machine are the same thing by
 # construction rather than by somebody remembering to update both.
 #
@@ -18,34 +18,55 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  # The first run filled the disk while linking pecu-ui. `target` holds two
-  # full sets of artefacts — clippy and rustc key their metadata differently,
-  # so nothing is shared between the two commands — and debug information is
-  # the bulk of both. `line-tables-only` keeps file and line in a backtrace,
-  # which is the part worth having when a test fails, and drops the rest.
-  # Incremental artefacts are pure waste on a machine that compiles once.
-  CARGO_INCREMENTAL: 0
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
-
 jobs:
+  # One job per half, on its own machine.
+  #
+  # The first two attempts both died compiling pecu-ui, which is the large
+  # generated Slint crate: once with "No space left on device", once four
+  # minutes into a silent compile with SIGTERM and an `if: always()` step
+  # skipped, which is a runner going down rather than a command failing.
+  # Clippy and rustc share no artefacts, so doing both on one four-core,
+  # sixteen-gigabyte runner asks it to hold two complete sets — forty
+  # gigabytes on the machine this was developed on. Split, each machine holds
+  # one.
   checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        half: [clippy, test]
+
     runs-on: ubuntu-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      # Debug information is the bulk of `target`, and `line-tables-only`
+      # keeps the file and line in a backtrace, which is the part worth having
+      # when a test fails. Incremental artefacts are waste on a machine that
+      # compiles each crate exactly once — eighteen of those forty gigabytes.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # Four parallel rustc processes against sixteen gigabytes is what the
+      # silent four-minute compile looked like. Two is slower and finishes.
+      CARGO_BUILD_JOBS: 2
 
     steps:
       - uses: actions/checkout@v4
 
       # The image ships toolchains this repository has no use for, and they
-      # cost more disk than the whole build needs. Removing them is cheaper
-      # than being clever about what to keep in `target`.
-      - name: Disk
+      # cost more disk than the whole build needs. Swap is headroom for the
+      # one crate that spikes: slower than memory, and far better than a
+      # runner that disappears mid-compile.
+      - name: Headroom
         run: |
-          df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
                       /usr/local/share/boost /usr/local/.ghcup
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
           df -h /
+          free -h
 
       # What the build asks pkg-config for, and the compiler SQLite is built
       # with — `rusqlite` compiles it from source rather than linking, which is
@@ -69,8 +90,8 @@ jobs:
           cargo --version
 
       # Keyed on Cargo.lock, which pins the SDK by revision — so the key moves
-      # exactly when the dependency graph does. `target` is included because
-      # the Slint compiler and the SDK dominate a cold build.
+      # exactly when the dependency graph does. Separate per half, because the
+      # two hold different artefacts and would otherwise overwrite each other.
       - uses: actions/cache@v4
         with:
           path: |
@@ -78,17 +99,33 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ matrix.half }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ matrix.half }}-
 
+      # The sampler prints memory and disk every thirty seconds *into this
+      # step*, because a runner that goes down takes every `if: always()` step
+      # with it — as the second attempt showed. If this dies again, the last
+      # line before the silence says which of the two ran out.
       - name: Checks
-        run: scripts/check.sh
+        run: |
+          ( while sleep 30; do
+              printf '· %s  mem %sG used, %sG avail (+%sG swap used)  disk %s free  target %s\n' \
+                "$(date -u +%H:%M:%S)" \
+                "$(free -g | awk '/^Mem:/{print $3}')" \
+                "$(free -g | awk '/^Mem:/{print $7}')" \
+                "$(free -g | awk '/^Swap:/{print $3}')" \
+                "$(df -h --output=avail / | tail -1 | tr -d ' ')" \
+                "$(du -sh target 2>/dev/null | cut -f1)"
+            done ) &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          scripts/check.sh ${{ matrix.half }}
 
-      # So that the next disk failure is one number away rather than a guess.
-      - name: Disk after
+      - name: Headroom left
         if: always()
         run: |
           df -h /
+          free -h
           du -sh target 2>/dev/null || true
 
       # A failed visual test writes a diff image beside every reference it did
@@ -99,6 +136,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: snapshot-diffs
+          name: snapshot-diffs-${{ matrix.half }}
           path: crates/pecu-ui/tests/snapshots/*.diff.png
           if-no-files-found: ignore
