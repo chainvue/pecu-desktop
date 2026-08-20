@@ -34,6 +34,11 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 # between "5 days ago" and a date somebody can match against a bank statement.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hex = { workspace = true }
+# Fetching the Sapling proving parameters, and nothing else. Already in the
+# tree — `verus-rpc` and `verus-light` both speak through it — so this adds no
+# download and no new supply-chain surface, which is the same argument `chrono`
+# is here on. Blocking, which suits it: the fetch already runs off the actor.
+ureq = "2.12"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

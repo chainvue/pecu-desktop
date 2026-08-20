@@ -168,15 +168,70 @@ a-`VerticalLayout` trap that `Notice` exists for, and the fix is the same:
 `height: <inner>.preferred-height`, with the layout as the card's direct child.
 Binding it while the layout sat behind an `if` did **not** work.
 
+### Sending is built too — all three directions
+
+`prover` and `multicore` are on, and the send form routes on the pair
+(source pool, destination kind):
+
+| Route | Where it lives | Proven live? |
+|---|---|---|
+| `t→z` | `pecu_core::shield` | **Yes** — a real Groth16 proof, 12.5 s in a debug build, 2171 bytes, valid txid |
+| `z→z` | `shielded::{plan_spend, prove_spend}` | Planning tested; **the proof has never run** |
+| `z→t` | the same, different recipient | as above |
+
+**The Sapling parameters are found, not downloaded, wherever a node already has
+them.** They are the stock Zcash ceremony files byte for byte, so
+`~/Library/Application Support/ZcashParams`, `~/.zcash-params`,
+`%APPDATA%\ZcashParams` and `/usr/share/zcash-params` are searched **before**
+the wallet's own directory — a machine running a node must not accumulate a
+second fifty-megabyte copy. Verified on this machine: both files present, both
+hashes equal to the SDK's pinned constants, loaded in 7.4 s.
+
+Two things worth knowing before touching this again:
+
+* **`t→z` needs no light server.** A shield spends no notes, so there is nothing
+  to witness and the anchor is the empty tree. That is why it is the one
+  direction provable while the certificate below is expired.
+* **The route decides what becomes public, and it is never inferred.** The
+  source pool is a control, not a default — picking whichever balance covers the
+  amount would decide somebody's privacy silently.
+
+All four routes share one `send::Signed` enum and therefore one review, one
+`SpendPermit` and one pending-ledger commit. `finish_broadcast` did not change.
+Four parallel paths would have been four chances to forget the ledger.
+
+### Why `z→z` and `z→t` are still unproven, measured rather than assumed
+
+Two doors, both shut, both somebody else's:
+
+* `lightwalletd.verustest.net:8125` still serves a certificate that expired
+  **2026-08-11 17:01:37 UTC**. Witnessing a note needs it.
+* `z_gettreestate` — the daemon route that would supply the same frontier — is
+  **`Method not found`** on `api.verustest.net`. Checked on 2026-08-20.
+
+So there is no way to obtain a note this wallet owns *and* a Merkle path to a
+consensus anchor. Offline is no better: the SDK's captured fixtures deliberately
+carry only the viewing key, so its notes cannot be spent by anyone.
+
+The moment either door opens, the first move is a small `z→z` and a `z→t` on
+VRSCTEST, reading what the daemon says at each step.
+
 ### What is left
 
 * **Persistence**, on the terms above.
-* **A balance on screen.** `pecu_core::shielded` computes one; nothing calls it
-  from the actor yet, because the only server that could answer is the one with
-  the expired certificate. The wiring is a scan on the same timer the portfolio
-  uses, and it is deliberately not written blind.
-* **Sending**, which is the `prover` feature: ~30 s of Groth16 on a background
-  thread, and the ~50 MB parameter download below.
+* **A shielded balance that updates itself.** `Shielded::sync` exists and
+  nothing calls it on a timer — for the same reason: the server it would ask is
+  the one with the expired certificate.
+* **The parameter download has no progress.** `params::fetch` reports it and no
+  screen shows it. Instead the send is refused *before* dispatch when the files
+  are absent, so nothing hangs — but somebody without a node has to fetch them
+  by hand today.
+* **Memos.** `ShieldedRecipient::with_memo` is right there and no field offers
+  one.
+* **Change goes to the note's own address, not a fresh diversified one.** Better
+  for privacy would be a new address per spend; doing that silently would move
+  where somebody's change lives without telling them, so it wants its own
+  screen.
 
 ### The original research, still current
 

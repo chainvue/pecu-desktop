@@ -23,12 +23,19 @@ publish = false
 # the SDK sets rust-version = 1.95 against a machine that has exactly 1.95.0, so
 # an upstream MSRV bump must be a deliberate act here rather than a build that
 # breaks on a Tuesday. `SDK_REV` in pecu-protocol surfaces this in About.
-# `light` is `network` + `shielded` + the lightwalletd client. It is what lets
-# the wallet SEE shielded funds; it deliberately does NOT include `prover`,
-# which is what would let it SPEND them. That half costs bellman and ~50 MB of
-# Sapling parameters at runtime, and a wallet that only shows a balance has no
-# use for either — so the split the SDK offers is taken exactly as offered.
-verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light"] }
+# `light` is `network` + `shielded` + the lightwalletd client: seeing shielded
+# funds. `prover` is what builds a shielded transaction — t→z, z→z and z→t
+# alike, because a Sapling *output* needs a Groth16 proof just as a spend does,
+# so having a transparent balance does not avoid it.
+#
+# `prover` costs bellman at compile time and ~50 MB of Sapling parameters at
+# run time. Those parameters are the stock Zcash ceremony files, byte for byte —
+# the same ones a `verusd` install already has — which is why `pecu_core::params`
+# looks where the node put them before it offers to download anything.
+#
+# `multicore` is bellman's rayon backend. It is a large speedup on a desktop and
+# is unavailable only on wasm32, which this does not target.
+verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light", "prover", "multicore"] }
 # Taken directly (not through the facade) by pecu-mock, which needs
 # `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
 # dependency graph at all. See pecu-mock/Cargo.toml.

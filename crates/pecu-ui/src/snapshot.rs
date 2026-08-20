@@ -235,6 +235,8 @@ pub const CASES: &[Case] = &[
     ("activity", "activity", crate::fixtures::funded),
     ("activity", "tx-detail", crate::fixtures::tx_detail),
     ("send", "send-form", crate::fixtures::sending),
+    ("send", "send-shielding", crate::fixtures::shielding),
+    ("send", "send-unshielding", crate::fixtures::unshielding),
     ("send", "send-too-much", crate::fixtures::sending_too_much),
     ("send", "send-review", crate::fixtures::reviewing),
     (

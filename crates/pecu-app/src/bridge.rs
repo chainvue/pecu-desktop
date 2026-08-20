@@ -150,6 +150,7 @@ fn apply(ui: &AppWindow, event: Event) {
             send.set_amount_valid(vm.amount_valid);
             send.set_amount_note(note(&vm.amount_note));
             send.set_ready(vm.ready);
+            send.set_route(route_name(vm.route).into());
         }
 
         Event::SendPrepared(vm) => apply_review(ui, &vm),
@@ -1074,6 +1075,14 @@ fn apply_wallet(ui: &AppWindow, vm: pecu_protocol::WalletVm) {
     state.set_shielded_address_spoken(pecu_ui::spoken(&vm.shielded_address).into());
     state.set_shielded_note(vm.shielded_note.as_ref().map(note).unwrap_or_default());
 
+    // The send form needs to know whether there is a second balance to offer.
+    // An address is enough to answer that: a key with no shielded address has
+    // no shielded balance and never will, so the selector is absent rather than
+    // present-and-disabled.
+    let send = ui.global::<SendState>();
+    send.set_shielded_available(!vm.shielded_address.is_empty());
+    send.set_shielded_balance(vm.shielded_balance.clone().into());
+
     let keys: Vec<KeyRow> = vm
         .keys
         .iter()
@@ -1265,6 +1274,19 @@ fn is_zero(sats: &str) -> bool {
 /// The core decides which sentence applies and supplies its values; the text
 /// lives in `components/note.slint`. See `NoteVm` for why it stopped writing
 /// prose.
+/// The route, as the interface names it.
+///
+/// A string rather than an int, because it is read in `.slint` comparisons
+/// where a number would be a magic constant on both sides.
+const fn route_name(route: pecu_protocol::Route) -> &'static str {
+    match route {
+        pecu_protocol::Route::Transparent => "transparent",
+        pecu_protocol::Route::Shield => "shield",
+        pecu_protocol::Route::Private => "private",
+        pecu_protocol::Route::Unshield => "unshield",
+    }
+}
+
 fn note(vm: &pecu_protocol::NoteVm) -> pecu_ui::Note {
     pecu_ui::Note {
         code: vm.code.clone().into(),

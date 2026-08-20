@@ -360,6 +360,53 @@ impl Vault {
         Ok(crate::shielded::view_from_phrase(&phrase)?)
     }
 
+    /// Run `f` with this key's shielded **spending** key, then drop it.
+    ///
+    /// The shielded counterpart of [`Vault::with_key`], and it follows the same
+    /// rule: unlocked is enough, the key is derived for one operation, and it is
+    /// gone when that operation returns.
+    ///
+    /// Everything else on the shielded path takes [`Vault::shielded_view`]
+    /// instead, which cannot spend. This is reached only when a spend is
+    /// actually being built — see [`crate::shielded::with_spending_key`] for
+    /// what that costs, because the proof runs inside the closure.
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError::NoPhrase`] for a WIF import; [`VaultError::Shielded`] if
+    /// the words are not a valid BIP-39 mnemonic; [`VaultError::Locked`] if the
+    /// wallet is not open.
+    pub fn with_shielded_key<R>(
+        &self,
+        label: &str,
+        f: impl FnOnce(&[u8; 169]) -> R,
+    ) -> Result<R, VaultError> {
+        let dek_guard = self.dek.read().map_err(|_| VaultError::Locked)?;
+        let dek = dek_guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let doc = self.doc.read().map_err(|_| VaultError::Locked)?;
+        let entry = doc
+            .keys
+            .iter()
+            .find(|k| k.label == label)
+            .ok_or_else(|| VaultError::NoSuchKey(label.to_string()))?;
+
+        let sealed = entry
+            .phrase
+            .as_ref()
+            .ok_or_else(|| VaultError::NoPhrase(label.to_string()))?;
+
+        let opened = open_sealed(dek, sealed, entry.aad(&doc.wallet_id, "phrase").as_bytes())
+            .map_err(|_| VaultError::Corrupt("the phrase does not decrypt".into()))?;
+
+        let phrase = Zeroizing::new(
+            String::from_utf8(opened.to_vec())
+                .map_err(|_| VaultError::Corrupt("the phrase is not text".into()))?,
+        );
+
+        Ok(crate::shielded::with_spending_key(&phrase, f)?)
+    }
+
     /// Add a key. Needs the vault unlocked, but **not** the passphrase — adding
     /// a second key to an open wallet should not re-prompt.
     pub fn add_key(&self, label: &str, new: NewKey) -> Result<KeyRef, VaultError> {

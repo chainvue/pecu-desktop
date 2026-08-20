@@ -103,6 +103,60 @@ fn the_address_is_a_zs_address() {
     assert!(zaddr::decode(&view.address).is_ok());
 }
 
+/// The spending key is the one the account derives, and it goes no further.
+///
+/// Checked against `derive_account` directly rather than against a literal, for
+/// the same reason the address test is: a pinned hex string would agree with
+/// whatever the code produced, including the wrong thing.
+#[test]
+fn the_spending_key_is_the_accounts_and_stays_in_the_closure() {
+    let seed = bip39::mnemonic_to_seed(MNEMONIC, "").expect("mnemonic");
+    let expected = derive_account(seed.as_ref(), COIN_TYPE_MAINNET, 0).expect("derive");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = vault_with_phrase(&dir, MNEMONIC);
+
+    // Only the length escapes. Copying the key out of the closure is exactly
+    // what the shape exists to prevent, so the test does not do it either.
+    let length = vault
+        .with_shielded_key("main", |extsk| {
+            assert_eq!(extsk, &*expected.extsk, "not the account's spending key");
+            extsk.len()
+        })
+        .expect("the spending key is reachable while unlocked");
+
+    assert_eq!(length, 169, "a ZIP-32 extended spending key is 169 bytes");
+}
+
+/// The spending key needs the wallet open, exactly as the viewing key does.
+#[test]
+fn a_locked_vault_yields_no_spending_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = vault_with_phrase(&dir, MNEMONIC);
+    vault.lock();
+
+    assert!(matches!(
+        vault.with_shielded_key("main", |_| ()),
+        Err(VaultError::Locked),
+    ));
+}
+
+/// And a WIF import has no spending key either — same reason, same wording.
+#[test]
+fn a_wif_import_has_no_shielded_spending_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault =
+        Vault::create(&dir.path().join("vault.json"), "test", &Secret::from(PASS)).expect("create");
+    vault
+        .add_key("main", NewKey::FromWif { key: key() })
+        .expect("add");
+
+    assert!(matches!(
+        vault.with_shielded_key("main", |_| ()),
+        Err(VaultError::NoPhrase(label)) if label == "main",
+    ));
+}
+
 /// A WIF import can never have a shielded side, and must say so specifically.
 ///
 /// The interface has to tell somebody this at the moment they ask for a

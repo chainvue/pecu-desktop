@@ -110,6 +110,13 @@ pub struct WalletVm {
     /// permanent reasons — a WIF import has no words and never will, and a
     /// phrase that is not a valid BIP-39 mnemonic cannot walk ZIP-32.
     pub shielded_note: Option<NoteVm>,
+
+    /// The shielded balance, already formatted in coins.
+    ///
+    /// Empty when there is no shielded account. **Not** "0" in that case: zero
+    /// is a balance somebody has looked for and not found, and an absent
+    /// account is a different statement.
+    pub shielded_balance: String,
 }
 
 /// One word of a recovery phrase, on its way to a screen that shows it once.
@@ -971,6 +978,71 @@ pub struct SendDraft {
     pub to: String,
     /// As typed, in coins. Core parses it with `Amount::from_coins_str`.
     pub amount: String,
+    /// Which of this key's two balances the money comes out of.
+    ///
+    /// **Never inferred.** A wallet holding both could pick the one that covers
+    /// the amount, and that would be choosing, on somebody's behalf and without
+    /// telling them, whether this payment is traceable. The two pools are not
+    /// interchangeable and the interface asks.
+    pub from_pool: Pool,
+}
+
+/// Which balance a payment is drawn from.
+///
+/// The wallet has two, and they are the same coin with different visibility.
+/// Which one pays decides what the chain records, so this is a decision rather
+/// than an optimisation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pool {
+    /// The `R` address. Amounts and addresses are public.
+    #[default]
+    Transparent,
+    /// The `zs` address. Nothing is public except that a shielded transaction
+    /// happened — and, if the recipient is transparent, what it delivered.
+    Shielded,
+}
+
+/// What a payment does, once its source and destination are both known.
+///
+/// Named by the core because it is the core that knows: the interface has an
+/// address in a text field and no business deciding what kind of transaction
+/// that becomes. It exists so the review step can say, in words, which of the
+/// four things is about to happen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Route {
+    /// `R → R`. Everything public, and the only route that existed before.
+    #[default]
+    Transparent,
+    /// `R → z`. Value enters the shielded pool. The sender is visible, the
+    /// amount is visible, and where it went is not.
+    Shield,
+    /// `z → z`. Nothing visible but that a shielded transaction happened.
+    Private,
+    /// `z → R`. Value leaves the pool. The recipient and amount become public;
+    /// the sender does not.
+    Unshield,
+}
+
+impl Route {
+    /// Work out the route from where the money is and where it is going.
+    pub fn of(from: Pool, to_shielded: bool) -> Self {
+        match (from, to_shielded) {
+            (Pool::Transparent, false) => Self::Transparent,
+            (Pool::Transparent, true) => Self::Shield,
+            (Pool::Shielded, true) => Self::Private,
+            (Pool::Shielded, false) => Self::Unshield,
+        }
+    }
+
+    /// Whether this route needs the Groth16 prover, and therefore the ~50 MB of
+    /// Sapling parameters and tens of seconds of work.
+    ///
+    /// Every route that touches the shielded pool does, `Shield` included: a
+    /// Sapling *output* needs a proof just as a spend does, so having a
+    /// transparent balance does not avoid it.
+    pub fn needs_proving(self) -> bool {
+        !matches!(self, Self::Transparent)
+    }
 }
 
 /// A sentence the **interface** writes, named by the core.
@@ -1049,6 +1121,11 @@ pub struct DraftValidationVm {
     pub to_label: String,
     /// Everything checks out and Review may be pressed.
     pub ready: bool,
+    /// What this payment would be, given the source and the destination.
+    ///
+    /// Shown before Review is pressed, because the route decides both what
+    /// becomes public and how long the button will appear to hang.
+    pub route: Route,
 }
 
 /// The review step, built by decoding the transaction that was actually

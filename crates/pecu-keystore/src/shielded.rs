@@ -123,6 +123,51 @@ impl std::fmt::Debug for ShieldedView {
     }
 }
 
+/// Run `f` with the account's **extended spending key**, then drop it.
+///
+/// # Why this exists and why it is shaped like this
+///
+/// Building a shielded spend needs the 169-byte extended spending key: it
+/// authorises each note and signs the spend. Nothing else on the shielded path
+/// does — finding notes, valuing them and receiving at the address all work
+/// from [`ShieldedView`], which cannot spend.
+///
+/// So this is the exception, and it is written as the same closure the
+/// transparent path has used since the beginning: the key is derived, handed to
+/// one operation, and gone when that operation returns. There is no accessor
+/// that yields it, and no struct that holds it, precisely so that "how long does
+/// a spending key live" has one answer instead of one per caller.
+///
+/// # The cost of that shape, stated plainly
+///
+/// Proving a Sapling spend takes tens of seconds, and it happens **inside**
+/// `f`. So a spending key exists for the length of a proof rather than for the
+/// length of a signature — much longer than the transparent path's window,
+/// while still being one operation rather than one session.
+///
+/// The alternative was to hand the key out to a worker thread and let the proof
+/// run outside the keystore. That is easier to wire and strictly worse: the key
+/// would then outlive the call that needed it, with nothing in the type system
+/// saying when it stops. A long window that closes is not the same as no window
+/// at all.
+///
+/// # Errors
+///
+/// The same as [`view_from_phrase`]: a phrase that is not BIP-39 has no
+/// shielded account and never will.
+pub fn with_spending_key<R>(
+    phrase: &str,
+    f: impl FnOnce(&[u8; 169]) -> R,
+) -> Result<R, ShieldedError> {
+    let seed = bip39::mnemonic_to_seed(phrase, "").map_err(|_| ShieldedError::NotBip39)?;
+    let account = derive_account(seed.as_ref(), COIN_TYPE_MAINNET, ACCOUNT)
+        .map_err(|e| ShieldedError::Derivation(e.to_string()))?;
+
+    // `account.extsk` is `Zeroizing`, so it is wiped when this scope ends —
+    // which is the line after `f` returns.
+    Ok(f(&account.extsk))
+}
+
 /// Derive the shielded account a recovery phrase produces.
 ///
 /// The BIP-39 passphrase is empty. Verus Mobile has no field for one, so a

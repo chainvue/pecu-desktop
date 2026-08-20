@@ -562,16 +562,29 @@ fn wire_settings(ui: &AppWindow, dispatcher: &Dispatcher) {
 /// crosses this boundary is a draft on the way in and a ticket number on the way
 /// back, so a compromised UI can ask for a payment to be built but cannot make
 /// one happen without the confirm step, and cannot forge the bytes at all.
+/// The interface says which balance pays with a bool; the core wants the name.
+///
+/// One place rather than two, so the two callbacks cannot disagree about which
+/// way round it is.
+const fn pool(shielded: bool) -> pecu_protocol::Pool {
+    if shielded {
+        pecu_protocol::Pool::Shielded
+    } else {
+        pecu_protocol::Pool::Transparent
+    }
+}
+
 fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
     let actions = ui.global::<Actions>();
 
     {
         let dispatcher = dispatcher.clone();
-        actions.on_validate_draft(move |to, amount| {
+        actions.on_validate_draft(move |to, amount, from_shielded| {
             dispatcher.send(Command::ValidateDraft(SendDraft {
                 from_label: String::new(),
                 to: to.to_string(),
                 amount: amount.to_string(),
+                from_pool: pool(from_shielded),
             }));
         });
     }
@@ -579,7 +592,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
     {
         let dispatcher = dispatcher.clone();
         let weak = ui.as_weak();
-        actions.on_prepare_send(move |to, amount| {
+        actions.on_prepare_send(move |to, amount, from_shielded| {
             if let Some(ui) = weak.upgrade() {
                 let send = ui.global::<SendState>();
                 send.set_problem(pecu_ui::Note::default());
@@ -588,6 +601,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
                 from_label: String::new(),
                 to: to.to_string(),
                 amount: amount.to_string(),
+                from_pool: pool(from_shielded),
             }));
         });
     }
@@ -1369,8 +1383,13 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
                 // validity flag and the label under the box are filled by the
                 // one piece of code that knows how — rather than by a second
                 // path that would have to agree with it forever.
-                ui.global::<Actions>()
-                    .invoke_validate_draft(hit.target.clone(), send.get_amount_draft());
+                ui.global::<Actions>().invoke_validate_draft(
+                    hit.target.clone(),
+                    send.get_amount_draft(),
+                    // Whatever the form is already set to. Picking a recipient
+                    // from search must not quietly change which balance pays.
+                    send.get_from_shielded(),
+                );
                 ui.invoke_go("send".into());
                 return;
             }

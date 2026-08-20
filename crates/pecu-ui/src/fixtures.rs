@@ -1390,6 +1390,48 @@ pub fn locked_refused(ui: &AppWindow) {
 /// The most common way a payment fails, and the one place the amount field has
 /// something to say. Photographed because a note nobody has seen rendered is a
 /// note that can be the wrong length, the wrong colour, or absent.
+/// Shielding: paying a `zs…` out of the transparent balance.
+///
+/// The state that needs a picture most. Three things only exist together here
+/// — the source selector, a shielded destination, and the sentence naming what
+/// the combination does — and each of them is meaningless without the others.
+pub fn shielding(ui: &AppWindow) {
+    sending(ui);
+
+    let send = ui.global::<SendState>();
+    send.set_shielded_available(true);
+    send.set_shielded_balance("2.5".into());
+    send.set_from_shielded(false);
+    send.set_to_draft(SHIELDED_ADDRESS.into());
+    send.set_amount_draft("1.5".into());
+    send.set_to_valid(true);
+    send.set_to_note(Note {
+        code: "address-shielded".into(),
+        ..Default::default()
+    });
+    send.set_amount_valid(true);
+    send.set_ready(true);
+    send.set_route("shield".into());
+}
+
+/// Paying out of the shielded balance to a public address — an unshield.
+///
+/// Worth its own image because it is the route with the sharpest consequence:
+/// the amount and the recipient become public at the moment it lands, and the
+/// sentence has to say so before the button is pressed rather than after.
+pub fn unshielding(ui: &AppWindow) {
+    shielding(ui);
+
+    let send = ui.global::<SendState>();
+    send.set_from_shielded(true);
+    send.set_to_draft(SECOND_ADDRESS.into());
+    send.set_to_note(Note {
+        code: "address-transparent".into(),
+        ..Default::default()
+    });
+    send.set_route("unshield".into());
+}
+
 pub fn sending_too_much(ui: &AppWindow) {
     sending(ui);
     let send = ui.global::<SendState>();

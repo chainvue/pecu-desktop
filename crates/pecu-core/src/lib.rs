@@ -38,12 +38,14 @@ pub mod currency;
 pub mod identity;
 pub mod launch;
 pub mod market;
+pub mod params;
 pub mod paths;
 pub mod pending;
 pub mod portfolio;
 pub mod registration;
 pub mod runtime;
 pub mod send;
+pub mod shield;
 pub mod shielded;
 pub mod upgrade;
 pub mod wallet;
@@ -144,6 +146,7 @@ pub fn start(
         refreshing: false,
         work: work_tx,
         spendable: verus_sdk::money::Amount::ZERO,
+        shielded: None,
         native_balance: 0,
         prepared: std::collections::HashMap::new(),
         conversions: std::collections::HashMap::new(),
@@ -376,6 +379,16 @@ struct Core {
     /// draft offline; the builder is still the authority, and it refuses on its
     /// own terms if this turns out to be stale.
     spendable: verus_sdk::money::Amount,
+    /// The shielded side of the active key, once the wallet is open.
+    ///
+    /// `None` while locked, for a key that cannot have one, and before the
+    /// first unlock — which are three different situations that all mean "no
+    /// shielded balance to show". `WalletVm::shielded_note` is what tells them
+    /// apart on screen.
+    ///
+    /// Holds the viewing key and whatever has been scanned. It is dropped on
+    /// lock along with everything else the data key reaches.
+    shielded: Option<shielded::Shielded>,
     /// What the confirmed history sums to: spendable + immature + the confirmed
     /// coins an unconfirmed transaction already spends. The anchor the balance
     /// chart is built backwards from — see `emit_chart`.
@@ -3376,11 +3389,74 @@ impl Core {
     /// Runs on every keystroke, so it touches nothing but memory: address
     /// parsing and amount parsing are both offline and both exact, and the name
     /// comes from a map that was loaded at startup.
+    /// The shielded balance in satoshis, or zero when there is none to speak of.
+    ///
+    /// Zero and "there is no shielded account" are deliberately the same number
+    /// here, because for arithmetic they are: neither can pay for anything. The
+    /// difference is carried by `WalletVm::shielded_note`, which is what the
+    /// interface reads to decide whether to offer the choice at all.
+    /// Build, keep or drop the shielded account so it matches the wallet.
+    ///
+    /// Three transitions, and each has to be right:
+    ///
+    /// * the wallet has a shielded address and this does not know it yet — make
+    ///   one, which costs a viewing-key reconstruction and nothing else;
+    /// * the address is the same one — keep what is there, **including whatever
+    ///   has been scanned**. Rebuilding here would silently discard the scan on
+    ///   every publish, which happens several times a second;
+    /// * the wallet has none — drop it. That covers locking, switching to a key
+    ///   that cannot have one, and a key whose phrase is not BIP-39.
+    fn sync_shielded_state(&mut self) {
+        let view = self.wallet.view();
+
+        if view.shielded_address.is_empty() {
+            self.shielded = None;
+            return;
+        }
+
+        if self
+            .shielded
+            .as_ref()
+            .is_some_and(|held| held.address() == view.shielded_address)
+        {
+            return;
+        }
+
+        match self.wallet.shielded_view() {
+            Some(view) => match shielded::Shielded::watching(&view) {
+                Ok(watching) => self.shielded = Some(watching),
+                Err(error) => {
+                    tracing::warn!(%error, "the shielded account could not be watched");
+                    self.shielded = None;
+                }
+            },
+            None => self.shielded = None,
+        }
+    }
+
+    fn shielded_balance(&self) -> u64 {
+        self.shielded
+            .as_ref()
+            .map_or(0, shielded::Shielded::balance)
+    }
+
     fn validate_draft(&mut self, draft: &pecu_protocol::SendDraft) {
         self.last_draft = draft.clone();
         self.maybe_resolve_identity(draft.to.trim());
 
-        let mut verdict = send::validate(draft, self.spendable);
+        // Checked against the balance the money is coming out of, not against
+        // whichever one happens to be larger. A shielded payment measured
+        // against the transparent balance would tell somebody they can afford
+        // something they cannot, and the refusal would then arrive from the
+        // builder — after the form had said it was fine.
+        let against = match draft.from_pool {
+            pecu_protocol::Pool::Transparent => self.spendable,
+            pecu_protocol::Pool::Shielded => {
+                verus_sdk::money::Amount::from_sat(self.shielded_balance())
+            }
+        };
+
+        let mut verdict = send::validate(draft, against);
 
         // A VerusID typed by name. `send::validate` is offline and correctly
         // refuses it — a name is not base58 and no amount of local parsing will
@@ -5861,6 +5937,60 @@ impl Core {
             return;
         };
 
+        let to_shielded = verus_sdk::light::zaddr::decode(draft.to.trim()).is_ok();
+        let route = pecu_protocol::Route::of(draft.from_pool, to_shielded);
+
+        // The parameters are settled *before* anything is dispatched. Loading
+        // them takes seconds and proving takes tens of seconds, so a wallet that
+        // discovered they were missing inside the worker would look like it had
+        // hung and then blame the payment. This way the answer — "this needs a
+        // file you do not have" — arrives immediately.
+        let located = if route.needs_proving() {
+            let Some(located) = params::find(self.paths.home()) else {
+                self.refuse_send(
+                    NoteVm::plain("shielded-params-missing"),
+                    "the Sapling proving parameters are not on this machine",
+                );
+                return;
+            };
+            Some(located)
+        } else {
+            None
+        };
+
+        // Planned on the actor: choosing notes is arithmetic over state this
+        // already holds, and it fails fast for the two reasons somebody most
+        // often hits — nothing scanned, and not enough in one bundle.
+        let plan = match route {
+            pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => {
+                let Some(shielded) = self.shielded.as_ref() else {
+                    self.refuse_send(
+                        NoteVm::plain("shielded-none"),
+                        "this key has no shielded account",
+                    );
+                    return;
+                };
+                match shielded.plan_spend(&draft.to, &draft.amount) {
+                    Ok(plan) => Some(plan),
+                    Err(error) => {
+                        self.refuse_send(Self::shielded_note(&error), &error.to_string());
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        let from_address = self.wallet.active_address().unwrap_or_default();
+        // The chain the wallet was told to be on, not the one a node happens
+        // to answer for. `Testnet` is the same default the rest of the core
+        // uses when nothing has been chosen yet.
+        let network = self
+            .nodes
+            .requested()
+            .cloned()
+            .unwrap_or(pecu_chain::Network::Testnet);
+
         self.tickets += 1;
         let ticket = self.tickets;
         self.busy(TaskKind::PreparingSend, true);
@@ -5868,10 +5998,88 @@ impl Core {
         self.blocking.dispatch(
             move || Work::Prepared {
                 ticket,
-                result: Box::new(send::prepare(&chain, &vault, &label, &draft, &paid_name)),
+                result: Box::new(match (route, located, plan) {
+                    (pecu_protocol::Route::Transparent, _, _) => {
+                        send::prepare(&chain, &vault, &label, &draft, &paid_name)
+                    }
+                    (pecu_protocol::Route::Shield, Some(located), _) => send::prepare_shield(
+                        chain.as_ref(),
+                        &vault,
+                        &label,
+                        &from_address,
+                        &draft,
+                        &located,
+                    ),
+                    (_, Some(located), Some(plan)) => {
+                        // The light server is reached here rather than on the
+                        // actor: it is a network call, and an actor inside one
+                        // is an actor that will not answer Lock.
+                        match pecu_chain::LightServer::shipped(&network) {
+                            Ok(server) => send::prepare_shielded(
+                                server.client(),
+                                chain.as_ref(),
+                                &vault,
+                                &label,
+                                &plan,
+                                &located,
+                            ),
+                            Err(refused) => Err(send::SendError::Shielded(refused.to_string())),
+                        }
+                    }
+                    // Unreachable: `located` is `Some` for every proving route
+                    // and `plan` for both shielded ones. Written as a refusal
+                    // rather than a panic, because a wallet that panics while
+                    // holding signed bytes is worse than one that declines.
+                    _ => Err(send::SendError::Shielded(
+                        "this payment could not be routed".into(),
+                    )),
+                }),
             },
             self.work.clone(),
         );
+    }
+
+    /// Turn a send away before anything is built, with a reason.
+    ///
+    /// Deliberately the same shape `finish_prepare` uses when the *builder*
+    /// refuses, so the form behaves identically whether the objection was found
+    /// here — before a worker was ever dispatched — or thirty seconds later by
+    /// the prover. A refusal that looks different depending on where it came
+    /// from teaches people that the wallet has moods.
+    fn refuse_send(&mut self, note: NoteVm, why: &str) {
+        // Wrapped rather than passed as a string: `notice` walks an error's
+        // `source` chain, and giving it something that is not an error would
+        // mean inventing a second logging path for refusals found early.
+        let error = std::io::Error::other(why.to_string());
+        self.notice("prepare_send", note.clone(), &error);
+        let _ = self
+            .events
+            .send(Event::SendResult(pecu_protocol::SendOutcomeVm::Failed(
+                pecu_protocol::UiError::simple(
+                    "prepare_send",
+                    note,
+                    why.to_string(),
+                    pecu_protocol::Severity::Danger,
+                ),
+            )));
+    }
+
+    /// What the send form says when the shielded side refuses.
+    fn shielded_note(error: &shielded::ShieldedError) -> NoteVm {
+        use shielded::ShieldedError;
+        match error {
+            ShieldedError::BadAddress => NoteVm::plain("address-unparsable"),
+            ShieldedError::BadAmount => NoteVm::plain("amount-unparsable"),
+            ShieldedError::NothingScanned => NoteVm::plain("shielded-not-scanned"),
+            // Both figures, because they differ and the difference is the
+            // answer: a balance spread across many small notes cannot all move
+            // at once.
+            ShieldedError::NotEnough {
+                held, reachable, ..
+            } => NoteVm::with("shielded-not-enough", [held.clone(), reachable.clone()]),
+            ShieldedError::ServerBehind { .. } => NoteVm::plain("shielded-server-behind"),
+            _ => NoteVm::plain("shielded-build-failed"),
+        }
     }
 
     fn finish_prepare(&mut self, ticket: u64, result: Result<send::Prepared, send::SendError>) {
@@ -5949,8 +6157,8 @@ impl Core {
         // Committed to disk BEFORE the broadcast. A process that dies mid-send
         // must not lose the only copy of bytes that may already be propagating.
         let record = match self.pending.commit(
-            &prepared.unsent.txid,
-            &prepared.unsent.hex,
+            prepared.signed.txid(),
+            prepared.signed.hex(),
             &prepared.to,
             &portfolio::coins(prepared.amount),
         ) {
@@ -6136,8 +6344,24 @@ impl Core {
         self.refresh();
     }
 
-    fn emit_wallet(&self) {
-        let _ = self.events.send(Event::Wallet(self.wallet.view()));
+    fn emit_wallet(&mut self) {
+        // The shielded side follows the wallet's, at the one moment everything
+        // else about the wallet is published. Doing it here rather than in each
+        // of unlock, lock and switch-key means there is no lifecycle path that
+        // can forget: whatever changed, the state is rebuilt from the wallet's
+        // own answer before anyone is told about it.
+        self.sync_shielded_state();
+
+        let mut vm = self.wallet.view();
+        // The balance belongs to the core, not the wallet: the wallet knows
+        // which shielded account is active, and only this side has scanned for
+        // what is in it. Left empty when there is no account, because zero and
+        // "no account" are different statements.
+        if !vm.shielded_address.is_empty() {
+            vm.shielded_balance =
+                portfolio::coins(verus_sdk::money::Amount::from_sat(self.shielded_balance()));
+        }
+        let _ = self.events.send(Event::Wallet(vm));
     }
 
     fn emit_challenge(&self, challenge: &wallet::Challenge) {
@@ -6295,6 +6519,8 @@ fn send_note(error: &send::SendError) -> NoteVm {
 
     match error {
         send::SendError::BadAddress => NoteVm::plain("address-unparsable"),
+        send::SendError::ParamsMissing => NoteVm::plain("shielded-params-missing"),
+        send::SendError::Shielded(_) => NoteVm::plain("shielded-build-failed"),
         send::SendError::BadAmount => NoteVm::plain("amount-unparsable"),
         send::SendError::NothingToSend => NoteVm::plain("amount-zero"),
         send::SendError::Vault(_) => NoteVm::plain("wallet-locked"),
@@ -7317,6 +7543,7 @@ mod tests {
             from_label: String::new(),
             to: address.to_string(),
             amount: "1.0".to_string(),
+            from_pool: pecu_protocol::Pool::Transparent,
         }));
         // The label is its own field now, so this reads the thing itself
         // rather than looking for a substring of a sentence the core used to

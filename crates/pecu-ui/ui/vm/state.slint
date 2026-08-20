@@ -131,6 +131,24 @@ export global SendState {
     in-out property <string> step: "form";
     in property <bool> busy: false;
 
+    // Which of the key's two balances pays. `in-out`, because this one is the
+    // interface's to set — it is a decision somebody makes, not a fact the core
+    // reports.
+    //
+    // Never defaulted to whichever pool happens to cover the amount. That would
+    // be choosing on somebody's behalf, silently, whether a payment is
+    // traceable.
+    in-out property <bool> from-shielded: false;
+    // Whether there is a shielded balance to choose at all. False hides the
+    // selector rather than showing a disabled control for a feature this key
+    // cannot use — a WIF import never has one.
+    in property <bool> shielded-available: false;
+    // The shielded balance, already formatted.
+    in property <string> shielded-balance: "";
+    // What this payment would be: "transparent" | "shield" | "private" |
+    // "unshield". From the core, which is the side that knows.
+    in property <string> route: "transparent";
+
     // What is in the two boxes.
     //
     // Held here rather than inside the form, for the reason `restoring` gives
@@ -923,8 +941,12 @@ export global Actions {
 
     // Sending. None of these carries a secret; the signed bytes never leave
     // the core, and what crosses here is a ticket number.
-    callback validate-draft(string, string);
-    callback prepare-send(string, string);
+    // The third argument is which balance pays: true for the shielded one.
+    // Passed rather than read from state, so the value that was on screen when
+    // somebody pressed Review is the value that gets sent — a payment must not
+    // change which pool it comes out of between the click and the dispatch.
+    callback validate-draft(string, string, bool);
+    callback prepare-send(string, string, bool);
     callback confirm-send(int);
     callback cancel-send(int);
     // "check" | "resend" | "abandon" — for a payment whose fate is unknown.

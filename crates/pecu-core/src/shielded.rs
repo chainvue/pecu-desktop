@@ -34,10 +34,13 @@
 use pecu_chain::LightServer;
 use pecu_keystore::ShieldedView;
 use verus_sdk::light::{
-    dfvk_from_bytes, scan, scan_after, DiversifiableFullViewingKey, LightClient, LightTransport,
-    ScanResult,
+    dfvk_from_bytes, min_relay_fee, scan, scan_after, DetectedNote, DiversifiableFullViewingKey,
+    LightClient, LightTransport, ScanResult, ShieldedRecipient, ShieldedSpent, SpendRequest,
+    TransparentRecipient, MAX_SPEND_NOTES,
 };
-use verus_sdk::network::FlowError;
+use verus_sdk::money::Amount;
+use verus_sdk::network::{FlowError, Unsent};
+use verus_sdk::verus_sapling::params::SaplingParams;
 
 /// Why a shielded sync did not complete.
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +71,39 @@ pub enum ShieldedError {
     /// Anything the scan itself reported.
     #[error("the shielded scan failed: {0}")]
     Scan(String),
+
+    /// The destination is neither a shielded nor a transparent address.
+    #[error("that is not an address this wallet can pay")]
+    BadAddress,
+
+    /// The amount could not be read, or is nothing.
+    #[error("that is not an amount")]
+    BadAmount,
+
+    /// Nothing has been scanned, so the question cannot be answered yet.
+    ///
+    /// Distinct from having no funds, and the difference matters: a wallet that
+    /// has not looked does not know that it is empty, and saying so would be a
+    /// claim it has not earned.
+    #[error("this wallet has not scanned for shielded funds yet")]
+    NothingScanned,
+
+    /// The notes do not cover it.
+    ///
+    /// Carries what is reachable **in one spend** as well as the balance,
+    /// because those differ and the difference is not obvious: a bundle carries
+    /// at most a fixed number of notes, so a balance spread thinly across many
+    /// small ones cannot all move at once.
+    #[error(
+        "this wallet holds {held} shielded, and {needed} is needed — but only {reachable} is \
+         reachable in one payment, from {notes} notes"
+    )]
+    NotEnough {
+        held: String,
+        needed: String,
+        reachable: String,
+        notes: usize,
+    },
 }
 
 /// What one sync did.
@@ -251,4 +287,213 @@ impl Shielded {
 /// away the only description of what went wrong.
 fn scan_error(error: &FlowError) -> ShieldedError {
     ShieldedError::Scan(error.to_string())
+}
+
+// ── Spending, which is z→z and z→t ──────────────────────────────────────────
+
+/// Where a shielded spend is going.
+///
+/// One enum rather than two entry points, because a wallet should work this out
+/// from what somebody pasted rather than asking them which kind of address they
+/// hold. The difference is real — one output is a note, the other is a script —
+/// and it is the wallet's job to know it, not the user's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Destination {
+    /// Another shielded address. Nothing about the payment is visible.
+    Shielded(String),
+    /// An `R` address or a VerusID. The amount and the recipient become public
+    /// at the moment it lands, and the sender does not.
+    Transparent(String),
+}
+
+impl Destination {
+    /// Read an address and decide which kind it is.
+    pub fn read(address: &str) -> Result<Self, ShieldedError> {
+        let text = address.trim();
+        if verus_sdk::light::zaddr::decode(text).is_ok() {
+            return Ok(Self::Shielded(text.to_string()));
+        }
+        if text.parse::<verus_sdk::verus_keys::Address>().is_ok() {
+            return Ok(Self::Transparent(text.to_string()));
+        }
+        Err(ShieldedError::BadAddress)
+    }
+
+    /// How many transparent outputs this destination costs.
+    ///
+    /// The fee the daemon enforces counts outputs, and a shielded destination
+    /// adds none: the Sapling bundle is padded to two whatever it carries.
+    fn transparent_outputs(&self) -> usize {
+        match self {
+            Self::Shielded(_) => 0,
+            Self::Transparent(_) => 1,
+        }
+    }
+}
+
+/// A shielded spend that has been costed but not proven.
+#[derive(Debug, Clone)]
+pub struct PlannedSpend {
+    pub to: Destination,
+    pub amount: Amount,
+    pub fee: Amount,
+    /// The notes that will be spent. A note enters a spend whole or not at all.
+    notes: Vec<DetectedNote>,
+}
+
+impl PlannedSpend {
+    /// What the selected notes are worth in total.
+    ///
+    /// Worth showing on a review screen, because it is usually **more** than the
+    /// amount: value cannot be split at the input, so a spend of 0.1 from a
+    /// 0.5 note consumes the whole note and returns 0.3999 as a new one.
+    pub fn notes_worth(&self) -> Amount {
+        Amount::from_sat(self.notes.iter().map(|note| note.value).sum())
+    }
+
+    /// How many notes it takes.
+    pub fn note_count(&self) -> usize {
+        self.notes.len()
+    }
+}
+
+impl Shielded {
+    /// Choose notes and cost a spend, without the spending key and without
+    /// proving.
+    ///
+    /// # Errors
+    ///
+    /// [`ShieldedError::NothingScanned`] before the first scan — a wallet that
+    /// has not looked cannot know it has nothing, and refusing for "no funds"
+    /// would be a different and wrong statement.
+    pub fn plan_spend(&self, to: &str, amount: &str) -> Result<PlannedSpend, ShieldedError> {
+        let to = Destination::read(to)?;
+
+        let amount = Amount::from_coins_str(amount.trim()).map_err(|_| ShieldedError::BadAmount)?;
+        if amount.is_zero() {
+            return Err(ShieldedError::BadAmount);
+        }
+
+        let scanned = self.scanned.as_ref().ok_or(ShieldedError::NothingScanned)?;
+
+        let fee = min_relay_fee(2, to.transparent_outputs());
+        let needed = amount.checked_add(fee).ok_or(ShieldedError::BadAmount)?;
+
+        // Largest first, and capped: a Sapling bundle carries at most
+        // `MAX_SPEND_NOTES` spends, and each one is another Groth16 proof —
+        // so this is not only a consensus limit, it is the difference between
+        // half a minute and several.
+        let mut unspent = scanned.unspent(&[]);
+        unspent.sort_by_key(|note| std::cmp::Reverse(note.value));
+
+        let mut notes = Vec::new();
+        let mut gathered = Amount::ZERO;
+        for note in unspent.into_iter().take(MAX_SPEND_NOTES) {
+            gathered = gathered
+                .checked_add(Amount::from_sat(note.value))
+                .ok_or(ShieldedError::BadAmount)?;
+            notes.push(note);
+            if gathered >= needed {
+                break;
+            }
+        }
+
+        if gathered < needed {
+            return Err(ShieldedError::NotEnough {
+                held: self.balance_amount().to_coins_string(),
+                needed: needed.to_coins_string(),
+                reachable: gathered.to_coins_string(),
+                notes: notes.len(),
+            });
+        }
+
+        Ok(PlannedSpend {
+            to,
+            amount,
+            fee,
+            notes,
+        })
+    }
+
+    /// The balance as an `Amount`, for arithmetic rather than for display.
+    fn balance_amount(&self) -> Amount {
+        Amount::from_sat(self.balance())
+    }
+}
+
+/// Prove and sign a shielded spend. **Tens of seconds of Groth16 per note.**
+///
+/// The extended spending key arrives as a borrowed slice from
+/// `Vault::with_shielded_key`, and the proof therefore runs inside that closure.
+/// See its documentation for what that costs and why the alternative is worse.
+///
+/// # Why this takes the light client
+///
+/// Every note has to be witnessed — a Merkle path to an anchor the chain agrees
+/// with — and the path comes from the light server. That is what makes this the
+/// half that cannot be exercised while `lightwalletd.verustest.net` is serving
+/// an expired certificate, while `pecu_core::shield` (t→z) can: a shield spends
+/// no notes, so there is nothing to witness.
+pub fn prove_spend<T: LightTransport>(
+    light: &LightClient<T>,
+    reader: &impl verus_sdk::network::ChainReader,
+    params: &SaplingParams,
+    extsk: &[u8; 169],
+    planned: &PlannedSpend,
+) -> Result<Unsent<ShieldedSpent>, ShieldedError> {
+    let shielded_to;
+    let transparent_to;
+
+    match &planned.to {
+        Destination::Shielded(address) => {
+            let recipient =
+                verus_sdk::light::zaddr::decode(address).map_err(|_| ShieldedError::BadAddress)?;
+            shielded_to = vec![ShieldedRecipient::new(recipient, planned.amount.to_sat())];
+            transparent_to = Vec::new();
+        }
+        Destination::Transparent(address) => {
+            let parsed = address
+                .parse::<verus_sdk::verus_keys::Address>()
+                .map_err(|_| ShieldedError::BadAddress)?;
+            shielded_to = Vec::new();
+            transparent_to = vec![TransparentRecipient {
+                address: parsed,
+                amount: planned.amount.to_sat(),
+            }];
+        }
+    }
+
+    let request = SpendRequest {
+        extsk,
+        notes: &planned.notes,
+        shielded_to: &shielded_to,
+        transparent_to: &transparent_to,
+        fee: planned.fee.to_sat(),
+        // `None`: change returns to the address the largest selected note was
+        // paid to, which this spending key demonstrably controls. A fresh
+        // diversified address would be better for privacy and is a separate
+        // decision with its own screen — offering it silently would change
+        // where somebody's change lives without telling them.
+        change_address: None,
+        anchor_height: None,
+        expiry: None,
+    };
+
+    // Returned as `Unsent`, not unwrapped. That type is the SDK's own
+    // guarantee that signed bytes reach the network through a `Broadcaster` and
+    // nowhere else — and in this wallet a `Broadcaster` can only be got from a
+    // `SpendPermit`. Reading `hex` and `txid` off it for a review screen costs
+    // nothing; taking the bytes out of it would throw the guarantee away for
+    // the convenience of one return type.
+    verus_sdk::light::prepare_spend(light, reader, params, &request)
+        .map_err(|e| ShieldedError::Scan(e.to_string()))
+}
+
+/// Send a proven shielded spend. The permit is the only route to a broadcaster.
+pub fn broadcast_spend(
+    chain: &pecu_chain::Chain,
+    permit: &pecu_chain::SpendPermit,
+    unsent: Unsent<ShieldedSpent>,
+) -> Result<ShieldedSpent, FlowError> {
+    unsent.broadcast(&chain.broadcaster(permit))
 }

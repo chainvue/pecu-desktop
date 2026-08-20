@@ -32,6 +32,30 @@ use crate::portfolio::coins;
 pub enum SendError {
     #[error("that is not an address this wallet can pay")]
     BadAddress,
+
+    /// A shielded address, which this build cannot pay.
+    ///
+    /// Its own variant because [`Self::BadAddress`] would be a lie now. A `zs…`
+    /// **is** a Verus address — this wallet derives one and shows it on its own
+    /// Receive screen — and telling somebody it is not, two screens later, is
+    /// worse than saying nothing. What is true is narrower: paying one needs a
+    /// Groth16 output proof, and the SDK's `prover` feature that builds it is
+    /// not compiled into this build. That applies to every direction involving
+    /// a shielded address, `t→z` included, so having a transparent balance does
+    /// not help.
+    /// The Sapling proving parameters are not on this machine.
+    ///
+    /// Checked **before** the work is dispatched rather than inside it. The
+    /// parameters are ~50 MB and loading them takes seconds; discovering they
+    /// are absent after the button has already gone quiet would look like a
+    /// hang, and the honest answer — "this needs a file you do not have" —
+    /// would arrive last instead of first.
+    #[error("the Sapling proving parameters are not on this machine")]
+    ParamsMissing,
+
+    /// Proving or building a shielded transaction failed.
+    #[error("{0}")]
+    Shielded(String),
     #[error("that is not an amount")]
     BadAmount,
     #[error("send nothing and nothing happens")]
@@ -48,13 +72,106 @@ pub enum SendError {
 /// number; the bytes stay here. A UI that held the signed hex would be a UI
 /// that could be made to send it.
 pub struct Prepared {
-    pub unsent: Unsent<Sent>,
+    pub signed: Signed,
     pub to: String,
     pub amount: Amount,
+    /// Which of the four things this payment is.
+    pub route: pecu_protocol::Route,
     /// The VerusID name `to` was resolved from, when it was typed as a name.
     /// Empty otherwise. Carried so the review can show the question as well as
     /// the answer.
     pub name: String,
+}
+
+/// Signed bytes, and the only way to send them.
+///
+/// # Why the four routes share one type
+///
+/// Everything downstream of signing is identical for all of them: the bytes are
+/// written to the pending ledger *before* the broadcast, the broadcast needs a
+/// `SpendPermit`, and the outcome is a txid and a fee. Modelling the routes as
+/// four parallel paths would mean four chances to forget the ledger, and the
+/// ledger is what stops a crash mid-send from losing bytes that may already be
+/// propagating.
+///
+/// So the difference is confined to this enum, and it is exactly two things:
+/// what the bytes are, and which call sends them.
+pub enum Signed {
+    /// `R → R`. The transparent path, unchanged.
+    Transparent(Unsent<Sent>),
+    /// `R → z`. Proven by `verus-sapling`, transparent inputs signed after.
+    Shield(crate::shield::Prepared),
+    /// `z → z` or `z → R`. Complete when it is built — a shielded spend has no
+    /// transparent inputs, so there is nothing left to sign.
+    Shielded(Unsent<verus_sdk::light::ShieldedSpent>),
+}
+
+impl Signed {
+    /// The bytes, for the pending ledger.
+    pub fn hex(&self) -> &str {
+        match self {
+            Self::Transparent(unsent) => &unsent.hex,
+            Self::Shield(shield) => &shield.hex,
+            Self::Shielded(unsent) => &unsent.hex,
+        }
+    }
+
+    /// The transaction id, computed locally rather than taken from a reply.
+    pub fn txid(&self) -> &str {
+        match self {
+            Self::Transparent(unsent) => &unsent.txid,
+            Self::Shield(shield) => &shield.txid,
+            Self::Shielded(unsent) => &unsent.txid,
+        }
+    }
+
+    /// What the miner takes.
+    pub fn fee(&self) -> Amount {
+        match self {
+            Self::Transparent(unsent) => unsent.outcome.fee,
+            Self::Shield(shield) => shield.fee,
+            Self::Shielded(unsent) => Amount::from_sat(unsent.outcome.fee),
+        }
+    }
+
+    /// What comes back — as coin for a transparent send or a shield, and as a
+    /// new note for a shielded spend.
+    pub fn change(&self) -> Amount {
+        match self {
+            Self::Transparent(unsent) => unsent.outcome.change,
+            Self::Shield(shield) => shield.change,
+            Self::Shielded(unsent) => Amount::from_sat(unsent.outcome.change),
+        }
+    }
+
+    /// Send it, once.
+    ///
+    /// Every arm ends in the same place: a `Broadcaster`, which in this wallet
+    /// can only be obtained from a [`SpendPermit`].
+    fn broadcast(self, chain: &Chain, permit: &SpendPermit) -> Result<Sent, FlowError> {
+        let broadcaster = chain.broadcaster(permit);
+        match self {
+            Self::Transparent(unsent) => unsent.broadcast(&broadcaster),
+            Self::Shield(shield) => {
+                verus_sdk::network::broadcast(&broadcaster, &shield.hex, &shield.txid)?;
+                Ok(Sent {
+                    txid: shield.txid,
+                    fee: shield.fee,
+                    change: shield.change,
+                    hex: shield.hex,
+                })
+            }
+            Self::Shielded(unsent) => {
+                let spent = unsent.broadcast(&broadcaster)?;
+                Ok(Sent {
+                    txid: spent.txid,
+                    fee: Amount::from_sat(spent.fee),
+                    change: Amount::from_sat(spent.change),
+                    hex: spent.hex,
+                })
+            }
+        }
+    }
 }
 
 // ── Validating what has been typed ──────────────────────────────────────────
@@ -69,8 +186,14 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
     // Codes, not sentences. See `NoteVm`: this decides *what is true about the
     // address*, which is the core's job, and leaves the wording to the side
     // that knows how much room the line has and what language it is in.
+    // Checked first and by decoding rather than by prefix, so a `zs1…` that
+    // fails its checksum falls through to the ordinary typo path instead of
+    // being explained as a shielded payment.
+    let to_shielded = verus_sdk::light::zaddr::decode(draft.to.trim()).is_ok();
+
     let (to_valid, to_note) = match draft.to.trim() {
         "" => (false, NoteVm::none()),
+        _ if to_shielded => (true, NoteVm::plain("address-shielded")),
         text => match text.parse::<Address>() {
             Ok(address) => match address.kind() {
                 AddressKind::PubKeyHash => (true, NoteVm::plain("address-transparent")),
@@ -105,6 +228,7 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
     pecu_protocol::DraftValidationVm {
         to_valid,
         to_note,
+        route: pecu_protocol::Route::of(draft.from_pool, to_shielded),
         amount_valid,
         amount_note,
         // Filled in by the caller, which is the side that knows what this
@@ -129,6 +253,11 @@ pub fn prepare(
     name: &str,
 ) -> Result<Prepared, SendError> {
     let to = draft.to.trim();
+    // No shielded guard here any more. This function builds the transparent
+    // route and nothing else; the router in the core decides which builder a
+    // draft reaches. A `zs…` arriving here would be a routing bug, and the
+    // parse below reports it as the bad address it is from this builder's point
+    // of view rather than inventing a second explanation.
     to.parse::<Address>().map_err(|_| SendError::BadAddress)?;
 
     let amount = Amount::from_coins_str(draft.amount.trim()).map_err(|_| SendError::BadAmount)?;
@@ -139,9 +268,10 @@ pub fn prepare(
     let unsent = vault.with_key(label, |key| network::prepare_send(chain, key, to, amount))??;
 
     Ok(Prepared {
-        unsent,
+        signed: Signed::Transparent(unsent),
         to: to.to_string(),
         amount,
+        route: pecu_protocol::Route::Transparent,
         name: name.to_string(),
     })
 }
@@ -161,24 +291,27 @@ pub fn review(
     spendable: Amount,
     known_recipient: bool,
 ) -> SendReviewVm {
-    let outputs = decode_outputs(&prepared.unsent.hex, from);
-    let sent = &prepared.unsent.outcome;
+    // Decoded from the bytes for every route. A shielded transaction has
+    // transparent outputs too — a shield's change, an unshield's recipient —
+    // and where it has none the list is correctly empty: a `z→z` puts nothing
+    // on the transparent side, which is the whole point of it and is worth
+    // showing as an absence rather than hiding.
+    let outputs = decode_outputs(prepared.signed.hex(), from);
+    let fee = prepared.signed.fee();
+    let change = prepared.signed.change();
 
     // Total leaving the wallet: what the recipient gets plus the fee. Change is
     // not part of it — it comes back — which is exactly the arithmetic a review
     // exists to make visible.
-    let total = prepared
-        .amount
-        .checked_add(sent.fee)
-        .unwrap_or(prepared.amount);
+    let total = prepared.amount.checked_add(fee).unwrap_or(prepared.amount);
 
     SendReviewVm {
         ticket,
         outputs,
         amount_display: coins(prepared.amount),
-        fee_display: coins(sent.fee),
+        fee_display: coins(fee),
         total_display: coins(total),
-        change_display: coins(sent.change),
+        change_display: coins(change),
         balance_after_display: coins(spendable.checked_sub(total).unwrap_or(Amount::ZERO)),
         from_address: from.to_string(),
         first_time_recipient: !known_recipient,
@@ -351,7 +484,104 @@ pub fn broadcast(
     permit: &SpendPermit,
     prepared: Prepared,
 ) -> Result<Sent, FlowError> {
-    prepared.unsent.broadcast(&chain.broadcaster(permit))
+    prepared.signed.broadcast(chain, permit)
+}
+
+/// Build a `t→z`: transparent coin into this wallet's shielded pool.
+///
+/// The proving parameters are loaded here, inside the worker, because that is
+/// where the seconds can be spent. Whether they *exist* was settled before this
+/// was ever dispatched — see [`SendError::ParamsMissing`].
+pub fn prepare_shield(
+    reader: &impl verus_sdk::network::ChainReader,
+    vault: &Vault,
+    label: &str,
+    from_address: &str,
+    draft: &SendDraft,
+    located: &crate::params::Located,
+) -> Result<Prepared, SendError> {
+    let planned = crate::shield::plan(reader, from_address, &draft.to, &draft.amount)
+        .map_err(shield_error)?;
+
+    let params = crate::params::load(located).map_err(|_| SendError::ParamsMissing)?;
+    let shield = crate::shield::prepare(vault, label, &params, &planned).map_err(shield_error)?;
+
+    Ok(Prepared {
+        to: shield.to.clone(),
+        amount: shield.amount,
+        route: pecu_protocol::Route::Shield,
+        name: String::new(),
+        signed: Signed::Shield(shield),
+    })
+}
+
+/// Build a `z→z` or a `z→t`: shielded notes out.
+///
+/// # Why the proving happens inside a closure
+///
+/// `with_shielded_key` hands over the extended spending key for one operation,
+/// and proving *is* that operation — so tens of seconds are spent inside it.
+/// That is a deliberate trade the keystore documents: a long window that closes
+/// beats handing the key to a thread and never saying when it stops.
+pub fn prepare_shielded<T: verus_sdk::light::LightTransport>(
+    light: &verus_sdk::light::LightClient<T>,
+    reader: &impl verus_sdk::network::ChainReader,
+    vault: &Vault,
+    label: &str,
+    planned: &crate::shielded::PlannedSpend,
+    located: &crate::params::Located,
+) -> Result<Prepared, SendError> {
+    let params = crate::params::load(located).map_err(|_| SendError::ParamsMissing)?;
+
+    let unsent = vault
+        .with_shielded_key(label, |extsk| {
+            crate::shielded::prove_spend(light, reader, &params, extsk, planned)
+        })?
+        .map_err(shielded_error)?;
+
+    let (to, route) = match &planned.to {
+        crate::shielded::Destination::Shielded(address) => {
+            (address.clone(), pecu_protocol::Route::Private)
+        }
+        crate::shielded::Destination::Transparent(address) => {
+            (address.clone(), pecu_protocol::Route::Unshield)
+        }
+    };
+
+    Ok(Prepared {
+        signed: Signed::Shielded(unsent),
+        to,
+        amount: planned.amount,
+        route,
+        name: String::new(),
+    })
+}
+
+/// Flatten a shield's own error into the send path's.
+///
+/// The wording is kept — a shield refuses for reasons a transparent send has no
+/// vocabulary for, and replacing them with "could not send" would throw away
+/// the only description of what went wrong.
+fn shield_error(error: crate::shield::ShieldError) -> SendError {
+    use crate::shield::ShieldError;
+    match error {
+        ShieldError::BadAddress => SendError::BadAddress,
+        ShieldError::BadAmount => SendError::BadAmount,
+        ShieldError::Params(_) => SendError::ParamsMissing,
+        ShieldError::Vault(e) => SendError::Vault(e),
+        ShieldError::Flow(e) => SendError::Flow(e),
+        other => SendError::Shielded(other.to_string()),
+    }
+}
+
+/// Flatten a shielded spend's error the same way.
+fn shielded_error(error: crate::shielded::ShieldedError) -> SendError {
+    use crate::shielded::ShieldedError;
+    match error {
+        ShieldedError::BadAddress => SendError::BadAddress,
+        ShieldedError::BadAmount => SendError::BadAmount,
+        other => SendError::Shielded(other.to_string()),
+    }
 }
 
 /// Re-send bytes that were already signed, after an ambiguous failure.
@@ -380,6 +610,7 @@ mod tests {
             from_label: "main".to_string(),
             to: to.to_string(),
             amount: amount.to_string(),
+            from_pool: pecu_protocol::Pool::Transparent,
         }
     }
 
@@ -390,6 +621,62 @@ mod tests {
         assert_eq!(verdict.to_note.code, "address-transparent");
         assert!(verdict.amount_valid);
         assert!(verdict.ready);
+    }
+
+    /// A shielded address is a destination like any other.
+    ///
+    /// It was refused for one commit, while the wallet could see shielded funds
+    /// and not pay them, and the refusal said so in those words. Now it is
+    /// accepted, and what the form reports instead is the **route** — because
+    /// paying a `zs…` from the transparent balance is a different transaction
+    /// from paying it from the shielded one, and the difference decides what
+    /// the chain records.
+    #[test]
+    fn a_shielded_address_is_a_destination_and_names_the_route() {
+        const SHIELDED: &str =
+            "zs18pytujp8qu73a3fu6g9chl7mfumrr0htyqsh60r3ed4capagqwm8tx2l8f9c5g7w87q4566uph3";
+
+        let from_transparent = validate(&draft(SHIELDED, "1"), Amount::from_sat(1_000_000_000));
+        assert!(from_transparent.to_valid);
+        assert_eq!(from_transparent.to_note.code, "address-shielded");
+        assert!(from_transparent.ready);
+        assert_eq!(from_transparent.route, pecu_protocol::Route::Shield);
+
+        let mut shielded_source = draft(SHIELDED, "1");
+        shielded_source.from_pool = pecu_protocol::Pool::Shielded;
+        assert_eq!(
+            validate(&shielded_source, Amount::from_sat(1_000_000_000)).route,
+            pecu_protocol::Route::Private,
+        );
+    }
+
+    /// And paying a transparent address out of the shielded pool is the fourth
+    /// route, not the first one.
+    #[test]
+    fn paying_transparently_from_the_shielded_pool_is_an_unshield() {
+        let mut draft = draft(ADDRESS, "1");
+        draft.from_pool = pecu_protocol::Pool::Shielded;
+
+        let verdict = validate(&draft, Amount::from_sat(1_000_000_000));
+        assert!(verdict.to_valid);
+        assert_eq!(verdict.route, pecu_protocol::Route::Unshield);
+        // Every route but the first needs the prover, `Shield` included: a
+        // Sapling output needs a proof exactly as a spend does.
+        assert!(verdict.route.needs_proving());
+        assert!(!pecu_protocol::Route::Transparent.needs_proving());
+    }
+
+    /// Something that only looks like one is still a typo.
+    ///
+    /// The check decodes rather than matching a prefix, so a `zs1…` that fails
+    /// its checksum must fall through to the ordinary refusal — otherwise a
+    /// mistyped shielded address would be explained as an unbuilt feature and
+    /// nobody would look at the characters.
+    #[test]
+    fn a_broken_shielded_address_is_still_a_typo() {
+        let verdict = validate(&draft("zs1nonsense", "1"), Amount::from_sat(1_000_000_000));
+        assert!(!verdict.to_valid);
+        assert_eq!(verdict.to_note.code, "address-unparsable");
     }
 
     #[test]
