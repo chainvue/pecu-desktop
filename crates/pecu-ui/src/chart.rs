@@ -47,6 +47,10 @@ struct Chart {
     plotted_generation: u64,
     /// Set only by [`seed`], so a rendered reference image is the same every
     /// time it is produced. `None` in the wallet, where "now" is the clock.
+    ///
+    /// It pins the timezone as well as the second — see [`stamp`]. Pinning one
+    /// without the other is not reproducible, which is what CI found on its
+    /// first run.
     pinned_now: Option<i64>,
 }
 
@@ -395,8 +399,6 @@ fn span_range(values: &[i64]) -> String {
 /// somebody to read a significance into 03:40 that the label does not have.
 /// Under two days the time is the interesting part; past a year the year is.
 fn axis_label(from: i64, now: i64) -> String {
-    use chrono::{Local, TimeZone};
-
     const DAY: i64 = 86_400;
     let span = now.saturating_sub(from);
 
@@ -408,10 +410,44 @@ fn axis_label(from: i64, now: i64) -> String {
         "%-d %b %Y"
     };
 
-    Local
-        .timestamp_opt(from, 0)
-        .single()
-        .map_or_else(|| "unknown".to_string(), |at| at.format(format).to_string())
+    stamp(from, format)
+}
+
+/// Render a timestamp in the timezone its reader is sitting in.
+///
+/// A block timestamp is UTC seconds; which day and hour that is, is a question
+/// about where the reader is. In the wallet the reader is somewhere, so it is
+/// `Local`.
+///
+/// A reference image has no reader and no somewhere. `pinned_now` already
+/// means "this rendering has to come out the same every time it is produced",
+/// and the zone is the other half of making that true: the same pinned second
+/// is 02:40 in UTC and 03:40 in Berlin, and a label carrying `%H:%M` is then a
+/// different picture on a machine that sits somewhere else. Two chart screens
+/// disagreed that way between this project's desk and a runner, which is how
+/// it was noticed at all — a test that only passes in one timezone is a test
+/// nobody outside that timezone can trust.
+fn stamp(seconds: i64, format: &str) -> String {
+    use chrono::{DateTime, Local, TimeZone, Utc};
+
+    // A generic function rather than a closure: the two branches hand it
+    // `DateTime<Utc>` and `DateTime<Local>`, and a closure would be fixed to
+    // whichever it saw first.
+    fn render<Tz: TimeZone>(at: Option<DateTime<Tz>>, format: &str) -> String
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        at.map_or_else(
+            || "unknown".to_string(),
+            |at| at.format(format).to_string(),
+        )
+    }
+
+    if CHART.with_borrow(|chart| chart.pinned_now.is_some()) {
+        render(Utc.timestamp_opt(seconds, 0).single(), format)
+    } else {
+        render(Local.timestamp_opt(seconds, 0).single(), format)
+    }
 }
 
 /// The clock the chart is measuring against — pinned in a fixture, real
@@ -420,17 +456,9 @@ fn now_of(_state: &ChartState<'_>) -> i64 {
     CHART.with_borrow(|chart| chart.pinned_now.unwrap_or_else(now))
 }
 
-/// `12 Aug, 14:32` in the machine's own timezone.
-///
-/// A block timestamp is UTC seconds; which day and hour that is, is a question
-/// about where the reader is sitting.
+/// `12 Aug, 14:32`, in the zone [`stamp`] decides on.
 fn when(seconds: i64) -> String {
-    use chrono::{Local, TimeZone};
-
-    Local.timestamp_opt(seconds, 0).single().map_or_else(
-        || "unknown".to_string(),
-        |when| when.format("%-d %b, %H:%M").to_string(),
-    )
+    stamp(seconds, "%-d %b, %H:%M")
 }
 
 fn now() -> i64 {
@@ -448,6 +476,24 @@ mod tests {
             complete,
             ..Chart::default()
         }
+    }
+
+    /// A pinned rendering is the same picture wherever it is drawn.
+    ///
+    /// It was not. The clock was pinned and the timezone was not, so a fixed
+    /// second came out as 03:40 at this project's desk and 02:40 on a runner,
+    /// and two chart references were only correct in one timezone — which the
+    /// first CI run found by being the first machine to sit somewhere else.
+    ///
+    /// 1 770 000 000 is 2 February 2026, 02:40 UTC. Asserting the UTC spelling
+    /// is the whole point: this test passes in Berlin, in Tokyo and on a
+    /// runner, or it is not testing what it claims to.
+    #[test]
+    fn a_pinned_chart_is_labelled_in_utc() {
+        CHART.with_borrow_mut(|chart| chart.pinned_now = Some(1_770_000_000));
+        assert_eq!(stamp(1_770_000_000, "%-d %b, %H:%M"), "2 Feb, 02:40");
+        assert_eq!(stamp(1_770_000_000, "%-d %b %Y"), "2 Feb 2026");
+        CHART.with_borrow_mut(|chart| chart.pinned_now = None);
     }
 
     #[test]

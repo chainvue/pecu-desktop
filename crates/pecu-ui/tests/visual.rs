@@ -15,6 +15,17 @@
 //! Updating without looking defeats the point: the test cannot tell an
 //! improvement from a regression, only that something moved.
 //!
+//! It rewrites **every** image, not the ones that failed — including the 116
+//! that a machine other than the one which recorded them redraws a rounding
+//! step differently, which the comparison forgives and a byte comparison does
+//! not. A two-screen change then arrives as a hundred-file diff. Keep what you
+//! meant to change and put the rest back:
+//!
+//! ```sh
+//! git status --porcelain -- crates/pecu-ui/tests/snapshots \
+//!   | awk '{print $2}' | grep -v <what-you-changed> | xargs -r git checkout --
+//! ```
+//!
 //! # One set for every platform
 //!
 //! There is a single set of references and every platform compares against it.
