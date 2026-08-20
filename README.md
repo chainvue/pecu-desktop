@@ -110,6 +110,17 @@ them. A container does not, and there the runtime list is:
 libx11-6 libxcursor1 libxrandr2 libxi6 libxkbcommon0 libwayland-client0 libgl1 libegl1
 ```
 
+Running it again replaces everything it wrote — the binary, all eight icons,
+the `.desktop` entry — so a re-install is how you move to a newer build. The
+binary is renamed into place rather than written over, because writing over one
+that is **currently running** fails with `ETXTBSY`; a rename leaves the running
+process on its old inode until it is closed.
+
+**It does not touch the wallet.** The vault, the databases and the logs live in
+`$XDG_DATA_HOME/pecu` — `~/.local/share/pecu` — which is a sibling of the
+`icons/` and `applications/` directories this writes, and neither installing nor
+`--uninstall` opens it.
+
 Not a package. There is no `.deb`, no AppImage and no Flatpak, so there is
 nothing to hand somebody else — this installs onto the machine that ran it.
 

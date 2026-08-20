@@ -13,6 +13,18 @@
 # files in the places the desktop already looks — a binary on PATH, icons in
 # the hicolor theme, and a `.desktop` entry that ties them together.
 #
+# ── Running it again ─────────────────────────────────────────────────────────
+#
+# Every file it writes is replaced: the binary, all eight icons, the `.desktop`
+# entry. Nothing is merged and nothing is kept, so a re-install is the way to
+# move to a newer build.
+#
+# **It does not touch the wallet.** The vault, the databases and the logs live
+# in `$XDG_DATA_HOME/pecu`, or `~/.local/share/pecu` — a sibling of the
+# `icons/` and `applications/` directories written here, and never opened by
+# this script. `--uninstall` does not remove it either; a wallet is not a file
+# an installer gets to delete.
+#
 # It is NOT a package. There is no `.deb`, no AppImage and no Flatpak here, so
 # there is nothing to hand somebody else — this installs onto the machine that
 # ran it. Packaging is its own decision; see `docs/LATER.md` §6.
@@ -100,7 +112,24 @@ cargo build --release --locked -p pecu-app
 }
 
 echo "==> installing into ${prefix}"
-install -Dm755 "target/release/${name}" "${bindir}/${name}"
+
+# The binary goes in beside its destination and is then **renamed** over it,
+# rather than written straight onto it.
+#
+# Two reasons, and the second one bites on a re-install:
+#
+#   * `rename(2)` within a directory is atomic, so there is no instant at which
+#     the file on PATH is half-written.
+#   * Writing over a binary that is **currently running** fails with `ETXTBSY`
+#     — "text file busy" — because the kernel holds the executable mapped. A
+#     rename does not touch the old inode at all: a running Pecu keeps the
+#     version it started with until it is closed, and the next launch gets the
+#     new one. Installing over yourself is the ordinary case here, so it has to
+#     be the case that works.
+tmp="${bindir}/.${name}.new.$$"
+trap 'rm -f "$tmp"' EXIT
+install -Dm755 "target/release/${name}" "$tmp"
+mv -f "$tmp" "${bindir}/${name}"
 
 for size in "${sizes[@]}"; do
   src="${assets}/hicolor/${size}x${size}/apps/${name}.png"
