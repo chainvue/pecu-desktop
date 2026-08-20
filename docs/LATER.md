@@ -46,28 +46,34 @@ cross-chain transfer — all three `TransferDestination` constructors hard-code
 ## 1. Choosing a chain — what is left of it
 
 **Status:** built. `Command::SetRequestedNetwork` is handled, `Paths` owns the
-layout, the choice survives a restart, and the Network screen has the chooser.
-Switching relocks the wallet, reopens the vault, both databases, the pending
-ledger and the reservation, resets the node list, clears every cached figure and
-probes the new chain's active node.
+layout, the choice survives a restart, and Network is a tab in Settings with
+the chooser. Switching relocks the wallet, reopens the vault, both databases,
+the pending ledger and the reservation, resets the node list, clears every
+cached figure and probes the new chain's active node.
 
-Three things it does **not** do:
+The shipped node list **is** per chain as of `908eac4`: `BUILTIN_NODES` is gone
+from `pecu-app` and `Network::builtin_nodes()` in `pecu-chain` answers with that
+chain's endpoints and no others, so a wallet on VRSC no longer lists
+`api.verustest.net` and marks it `WrongNetwork` once it answers. The table sits
+with the rest of the chain knowledge rather than in the shell, and the demo
+build's one scripted entry comes from `pecu_core::shipped_nodes` with the mock
+flag, so it does not have to be special-cased at the call site.
 
-1. **The shipped node list is not per chain.** Both public endpoints ship on
-   both chains, so a wallet on VRSC still lists `api.verustest.net` and marks
-   it `WrongNetwork` once it answers. Correct, and untidy. Making
-   `BUILTIN_NODES` a function of the network means moving the table out of
-   `pecu-app` — it is chain knowledge, not shell knowledge — and deciding
-   what the demo build's one scripted entry does with it.
-2. **Theme, reduce-motion and the auto-lock timer are per chain.** They are
+Two things it does **not** do:
+
+1. **Theme, reduce-motion and the auto-lock timer are per chain.** They are
    application preferences living in a per-chain database because that is the
    only database there is. A switch copies them across when the new chain has no
    answer of its own, which makes the common case behave — but two chains can
    still drift apart, and the honest fix is a settings store at the home level.
-3. **PBaaS chains have no way in.** `Network::Other` is carried everywhere and
-   `dir_name()` already sanitises one into a directory, but nothing offers a
-   chooser beyond the two buttons. That is the same question as item 1: where
-   the list of known chains comes from.
+2. **Only the five chains that ship have a way in.** `Network::shipped()` now
+   offers VRSC, VRSCTEST, vARRR, CHIPS and vDEX, each with its own public node,
+   and `Network::Other` is carried everywhere with `dir_name()` sanitising one
+   into a directory. What is missing is a way to name a *sixth* — the list is a
+   constant in `pecu-chain`, and adding a node or a chain by hand was taken out
+   of the interface deliberately. Putting it back is the same question as
+   before: where a list of chains nobody shipped is supposed to come from, and
+   how a wallet decides it is talking to the chain it was told about.
 
 The read guard and the spend permit compared `requested` against `effective`
 long before any of this, so the safety half was never the missing part.
@@ -225,9 +231,12 @@ sometimes is worse on this screen than a sentence that is always right.
 
 **The move.** One field on `Launched` — `miner_fee: Amount`, set from
 `signed.fee` at `verus-flows/src/launch.rs:293` — then a fourth line on the
-review and a fourth figure in `currency::cost`. It also means bumping the pin
-past `8f01520`, which is nine commits behind `verus-rust-sdk` HEAD; one of those
-nine is a `verus-keys` base58check fix worth taking anyway.
+review and a fourth figure in `currency::cost`.
+
+The pin has moved on since this was written — it is `a08d652d`, which is the
+`verus-rust-sdk` `main` tip, so the `verus-keys` base58check fix this entry
+wanted is already in. What is left is genuinely a change to the SDK: the field
+does not exist and has to be added there first.
 
 Proportion, so this is picked up with the right expectations: the miner fee is
 on the order of 0.0001 coins against a launch fee of 200. It does not change
@@ -275,12 +284,12 @@ Slint 1.17 has `MenuBar`/`Menu`/`MenuItem`, and the winit backend answers
 `supports_native_menu_bar()` with `true` wherever `muda` is compiled in — so on
 macOS a declared menu bar really is the strip at the top of the screen and
 nothing is drawn in the window. A menu with Wallet (Lock, Refresh, Settings), Go
-(the seven screens with their existing ⌘1–⌘7) and View (switch theme) was
-written and compiled.
+(the six screens with their existing ⌘1–⌘6, plus Settings on ⌘,) and View
+(switch theme) was written and compiled.
 
 **Why it came out.** `tests/visual.rs` and `docs/shots/` render through
 `MinimalSoftwareWindow`, which has no native menu bar — so it draws the menu
-*inside* the window, as a 38px band above the title bar, in **all eighty**
+*inside* the window, as a 38px band above the title bar, in **all 132**
 reference images. The pictures this project reviews changes with would then show
 a control the shipped application does not have, on every screen. That is the
 same failure the fixtures already warn about in three places: an image that
@@ -293,8 +302,8 @@ declare a menu bar conditionally — `MenuBar` "must not be in a `for` or an `if
 
 **What is not lost.** The backend installs a default native menu bar of its own
 when an application declares none, so ⌘Q and the window menu already work. Every
-shortcut the menu would have advertised — ⌘1–⌘7, ⌘L, ⌘R, ⌘, — is in the focus
-scope in `app.slint` and keeps working. What is missing is discoverability, for
+shortcut the menu would have advertised — ⌘1–⌘6, ⌘L, ⌘R, ⌘K, ⌘, — is in the
+focus scope in `app.slint` and keeps working. What is missing is discoverability, for
 somebody who looks in the menu rather than pressing keys.
 
 **The move,** in order of preference: take it when Slint exposes native-menu
@@ -406,14 +415,21 @@ platform they are for.
   bare binary, and macOS gives one of those a generic Dock icon whatever it
   contains.
 
-* **Linux — the files exist, installing them does not.** `assets/hicolor/` holds
-  eight sizes and `assets/pecu.desktop` names them. Nothing installs either:
-  that is `install -Dm644` into `/usr/share/icons/hicolor/...` and
-  `/usr/share/applications/`, plus `gtk-update-icon-cache`, and it belongs in
-  whatever packaging comes first — a `.deb`, an AppImage, a Flatpak manifest.
-  **`StartupWMClass=pecu` is the documented default and is unverified**; it is
-  what attaches the icon to the *window* rather than only to the launcher, and
-  it has to match the WM class winit sets.
+* **Linux — installed by a script nobody has run on Linux.** `assets/hicolor/`
+  holds eight sizes and `assets/pecu.desktop` names them, and since `ec83ce3`
+  `scripts/install-linux.sh` puts both where a desktop already looks:
+  `install -Dm644` into `share/icons/hicolor/*/apps/` and
+  `share/applications/` under a prefix that defaults to `~/.local`, then
+  `gtk-update-icon-cache` and `update-desktop-database` best-effort. It replaces
+  every file it wrote on a re-install, and swaps the binary through a temporary
+  name so re-installing over a running Pecu cannot hit `ETXTBSY`.
+
+  **None of it has been run on Linux.** The workspace itself has been — clippy
+  and 371 tests on Ubuntu, at `33bf5e5` — but that is `cargo test`, not this
+  script, and the two prove different things. **`StartupWMClass=pecu` is the
+  documented default and is unverified**; it is what attaches the icon to the
+  *window* rather than only to the launcher, and it has to match the WM class
+  winit sets. A `.deb`, an AppImage or a Flatpak is still nobody's job.
 
 * **Windows — the file exists, the executable does not carry it.** `assets/
   pecu.ico` holds seven sizes as PNG-in-ICO, written by hand rather than by a
@@ -438,9 +454,10 @@ closed enum. There was no way round it from this side — the transport is a
 public extension point and *composing a request* deliberately is not.
 
 So the SDK gained `ChainReader::currency_state_range`, on the `price-history`
-branch of `chainvue/verus-rust-sdk`, and the pin moved from `8f01520` to
-`01f662d` — which also brings the eleven commits that had accumulated, including
-the `verus-keys` base58check fix §4b wanted. **The branch is not merged.**
+branch of `chainvue/verus-rust-sdk`, and the pin moved off `8f01520` — which
+also brings the commits that had accumulated, including the `verus-keys`
+base58check fix §4b wanted. **That branch has since landed** as `#192`, and the
+pin is `a08d652d`: `main`'s tip, not a fork of it.
 
 ### What it turned up
 
