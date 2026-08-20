@@ -61,17 +61,18 @@ UPDATE_SNAPSHOTS=1 cargo test -p pecu-ui --test visual # accepts them as referen
 Reference images are whole-tree artefacts: a commit that changes the palette
 changes all of them, so source and images travel together or the tip is red.
 
-They are also **per platform** — `crates/pecu-ui/tests/snapshots/<os>/`, and
-each machine compares against its own set. The software renderer is
-deterministic on one machine but not across them: the same build draws the
-wordmark's cursor a pixel differently on Ubuntu than on macOS, on 116 of the
-132 images, which at a tolerance of zero is 116 failures that mean nothing. The
-tolerance stays at zero and the sets are separate instead.
+There is **one set for every platform**. macOS and Linux do not draw this
+identically — 116 of the 132 images differ — but the entire disagreement is 872
+pixels off by 1 of 255, in the navigation rail's icon column, and nothing
+moves. So the comparison forgives a per-channel delta of 1 and caps how many
+such pixels an image may carry, rather than keeping a set per operating system:
+a change reviewed on one machine would otherwise land red on every other, and
+the only answer to that is a blanket re-record, which verifies nothing.
 
-So `UPDATE_SNAPSHOTS=1` re-records **only the platform it runs on**. A
-deliberate visual change needs a pass on each platform that has a set, or the
-tip is red there; a platform with no set records one on first run and says so,
-and a recorded set is not a reviewed one.
+The tolerance does not blunt the test. The change in `3cfbd84` moved 2,096,525
+pixels, 99.65% of them by more than 1, and not one of its 120 images would have
+been absorbed. `crates/pecu-ui/tests/visual.rs` carries the numbers and the
+argument, including what the budget is there to catch.
 
 ## Packaging
 
