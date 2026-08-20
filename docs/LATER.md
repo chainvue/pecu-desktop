@@ -200,21 +200,74 @@ All four routes share one `send::Signed` enum and therefore one review, one
 `SpendPermit` and one pending-ledger commit. `finish_broadcast` did not change.
 Four parallel paths would have been four chances to forget the ledger.
 
-### Why `z→z` and `z→t` are still unproven, measured rather than assumed
+### The endpoint was the wrong protocol, and that is now fixed
 
-Two doors, both shut, both somebody else's:
+`Network::light_server()` named `https://lightwalletd.verustest.net:8125` for
+testnet. **That endpoint cannot serve this wallet, and no certificate renewal
+would change it.**
 
-* `lightwalletd.verustest.net:8125` still serves a certificate that expired
-  **2026-08-11 17:01:37 UTC**. Witnessing a note needs it.
-* `z_gettreestate` — the daemon route that would supply the same frontier — is
-  **`Method not found`** on `api.verustest.net`. Checked on 2026-08-20.
+`verus-light` speaks **grpc-web over HTTP/1.1** on purpose — no HTTP/2 stack, no
+async runtime, one transport for a desktop build and a wasm one. lightwalletd
+speaks **native gRPC over HTTP/2**. Port 8125 is the second kind: it sends an
+HTTP/2 SETTINGS frame the instant a socket opens, before any request, and
+answers an HTTP/1.1 `GET` with the same. Ports 80, 443, 8080, 8081 and 9067 on
+that host were checked too — nothing there serves grpc-web.
 
-So there is no way to obtain a note this wallet owns *and* a Merkle path to a
-consensus anchor. Offline is no better: the SDK's captured fixtures deliberately
-carry only the viewing key, so its notes cannot be spent by anyone.
+The expired certificate is what hid this: the connection failed before anything
+could notice the protocol was wrong. Two faults, one symptom, and the second was
+the load-bearing one.
 
-The moment either door opens, the first move is a small `z→z` and a `z→t` on
-VRSCTEST, reading what the daemon says at each step.
+`light_server()` now returns `None` for every chain, and a test says why. The
+SDK's own example points at `http://127.0.0.1:8080` — a **local grpc-web
+proxy** — which is the shape this was always meant to have.
+
+### The proxy, and what it unlocked
+
+`scripts/grpcweb-proxy.mjs` is sixty lines of Node standard library — `http` and
+`http2`, no install, no module download, no container. It accepts grpc-web over
+HTTP/1.1 on loopback and forwards to native gRPC over HTTP/2, translating the
+trailers. The wallet's own transport is untouched and still refuses plaintext to
+anything but loopback; the only reason it will talk to this is that 127.0.0.1
+*is* loopback, which the SDK allows for exactly this deployment.
+
+With it running, the read path is proven against the **live chain** rather than
+against committed bytes:
+
+```
+version   v0.3.0-197-g1b13d05     chain VRSCTEST
+branch id 76b809bb                tip   1198574
+```
+
+`crates/pecu-core/tests/live_shielded.rs` — four tests — finds the SDK's real
+note at block 1 167 987 worth 5 VRSCTEST by asking the server, watches it become
+worthless eight blocks later when its nullifier appears, continues a scan across
+a call boundary (`1167995..=1167995`, no rollback), and confirms a stranger's
+key sees none of it.
+
+### `z→z` and `z→t`: everything but the coin
+
+The last gap is not a protocol or a certificate any more. It is **funds**.
+
+Proving a shielded spend needs a note *this wallet owns*, and the only way to
+get one is to shield first. The SDK's captured fixtures deliberately publish
+only a viewing key, so their notes cannot be spent by anyone; and there is no
+VRSCTEST faucet at any of the obvious names.
+
+`crates/pecu-core/tests/live_shielded_spend.rs` does the whole chain in one run
+— `t→z`, then `z→z`, then `z→t`, each broadcast and each waited for — and needs
+a funded WIF:
+
+```sh
+node scripts/grpcweb-proxy.mjs &
+export PECU_LIGHT_URL=http://127.0.0.1:8080
+export PECU_LIVE_SEND=1
+export PECU_LIVE_WIF=<a funded VRSCTEST WIF>
+cargo test -p pecu-core --test live_shielded_spend -- --ignored --nocapture
+```
+
+It generates **its own** recovery phrase for the shielded account, because a WIF
+has none and never will, shields the transparent coin into that account, spends
+inside the pool, and sends the remainder back to the WIF's address.
 
 ### What is left
 

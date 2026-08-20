@@ -127,7 +127,14 @@ pub struct Progress {
 /// here can spend, and in this build the code that would has not been compiled
 /// in at all.
 pub struct Shielded {
-    address: String,
+    /// The viewing material this was built from, kept as it arrived.
+    ///
+    /// `dfvk` below is the same key in the form the scan functions want. Both
+    /// are held rather than one being recomputed, because a caller that wants
+    /// to start a **fresh** scan of the same account needs the bytes, and
+    /// reconstructing them from the parsed key each time would be work to
+    /// undo work.
+    view: ShieldedView,
     dfvk: DiversifiableFullViewingKey,
     scanned: Option<ScanResult>,
 }
@@ -138,7 +145,7 @@ impl Shielded {
         let dfvk =
             dfvk_from_bytes(&view.dfvk).map_err(|e| ShieldedError::BadViewingKey(e.to_string()))?;
         Ok(Self {
-            address: view.address.clone(),
+            view: view.clone(),
             dfvk,
             scanned: None,
         })
@@ -146,7 +153,15 @@ impl Shielded {
 
     /// The address to receive at.
     pub fn address(&self) -> &str {
-        &self.address
+        &self.view.address
+    }
+
+    /// The viewing material, for starting a fresh scan of the same account.
+    ///
+    /// Viewing only — see [`ShieldedView`]. Handing this out grants nothing the
+    /// caller did not already have: it is what they passed in.
+    pub fn view(&self) -> &ShieldedView {
+        &self.view
     }
 
     /// The last block this wallet has scanned, if any.
