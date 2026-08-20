@@ -17,23 +17,38 @@
 // download and no container. Read it before running it — it is sixty lines.
 //
 //   node scripts/grpcweb-proxy.mjs                     # 127.0.0.1:8080
+//   INSECURE=1 node scripts/grpcweb-proxy.mjs          # accept an expired cert
 //   PORT=9000 UPSTREAM=host:port node scripts/grpcweb-proxy.mjs
 //
 // # This is a development tool and is not shipped
 //
-// `insecure` below disables certificate checking on the hop to lightwalletd,
-// because Verus's testnet certificate expired on 2026-08-11. That is acceptable
-// **here** and nowhere else: this runs on a developer's machine, against a
-// testnet, to produce evidence. The wallet itself never relaxes verification —
-// `GrpcWebTransport` refuses plaintext to any non-loopback host, and the only
-// reason it will talk to this proxy is that 127.0.0.1 is loopback.
+// It **verifies the upstream certificate by default**. `INSECURE=1` turns that
+// off, and is needed today only because lightwalletd.verustest.net is serving a
+// certificate that expired on 2026-08-11 — the wildcard was renewed on Aug 7
+// and is live on every other Verus host, so this stops being necessary the
+// moment that one service reloads.
+//
+// The default is the safe one deliberately. A tool that lives in a repository
+// and skips certificate checks unless told otherwise is a tool somebody will
+// eventually point at something that matters, having never read this comment.
+//
+// What relaxing it costs, so the decision is informed: a man in the middle
+// could then feed this proxy a fabricated chain. That cannot move money — the
+// spending key never leaves the machine and every transaction is signed locally
+// against a recipient and an amount the person typed — but it can show a wrong
+// balance, and it can produce a witness anchored to a chain that does not
+// exist, which the daemon rejects after the proof has been paid for.
+//
+// The wallet itself never relaxes anything. `GrpcWebTransport` refuses plaintext
+// to any non-loopback host, and the only reason it will talk to this proxy at
+// all is that 127.0.0.1 is loopback.
 
 import http from 'node:http'
 import http2 from 'node:http2'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const [host, port] = (process.env.UPSTREAM ?? 'lightwalletd.verustest.net:8125').split(':')
-const insecure = process.env.INSECURE !== '0'
+const insecure = process.env.INSECURE === '1'
 
 /** One grpc-web frame: a flag byte, a big-endian length, then the payload. */
 function frame(flag, payload) {
@@ -59,11 +74,24 @@ http
     const chunks = []
     request.on('data', (chunk) => chunks.push(chunk))
     request.on('end', () => {
-      const session = http2.connect(upstream, { rejectUnauthorized: !insecure })
-      session.on('error', (error) => {
+      // One reply per request, whoever notices the failure first.
+      //
+      // A refused certificate raises on the session *and* on the stream, and
+      // an earlier version answered both — the second `writeHead` threw
+      // `ERR_HTTP_HEADERS_SENT` and took the whole proxy down with it. So a
+      // proxy that had just correctly rejected a bad certificate then died,
+      // which is a worse failure than the one it was reporting.
+      let answered = false
+      const fail = (where, error) => {
+        if (answered) return
+        answered = true
+        console.error(`${where}: ${error.message}`)
         response.writeHead(502, { 'content-type': 'text/plain' })
-        response.end(`upstream: ${error.message}\n`)
-      })
+        response.end(`${where}: ${error.message}\n`)
+      }
+
+      const session = http2.connect(upstream, { rejectUnauthorized: !insecure })
+      session.on('error', (error) => fail('upstream', error))
 
       const stream = session.request({
         ':method': 'POST',
@@ -84,6 +112,8 @@ http
       stream.on('data', (chunk) => body.push(chunk))
       stream.on('end', () => {
         session.close()
+        if (answered) return
+        answered = true
         response.writeHead(200, {
           'content-type': 'application/grpc-web+proto',
           // Named here as well as in the trailer frame: the SDK reads whichever
@@ -94,8 +124,7 @@ http
       })
       stream.on('error', (error) => {
         session.close()
-        response.writeHead(502, { 'content-type': 'text/plain' })
-        response.end(`stream: ${error.message}\n`)
+        fail('stream', error)
       })
 
       stream.end(Buffer.concat(chunks))

@@ -3,7 +3,7 @@
 //! `#[ignore]`, and it needs something running: Verus operates no public
 //! grpc-web endpoint, so `scripts/grpcweb-proxy.mjs` has to be up.
 //!
-//!   node scripts/grpcweb-proxy.mjs &
+//!   INSECURE=1 node scripts/grpcweb-proxy.mjs &   # expired upstream cert
 //!   PECU_LIGHT_URL=http://127.0.0.1:8080 \
 //!     cargo test -p pecu-chain --test live_light -- --ignored --nocapture
 //!
