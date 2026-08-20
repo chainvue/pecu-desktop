@@ -38,7 +38,17 @@ export component SendForm inherits HorizontalLayout {
                 }
 
                 for row in SendState.known: ListRow {
-                    title: row.label == "" ? row.address : row.label;
+                    // The chain's name first, then what the owner called it,
+                    // then the address — most recognisable to least. A payment
+                    // to a VerusID records the i-address it resolved to, so
+                    // without the name this list is a column of `i4YzoP8Z…`.
+                    //
+                    // Clicking still fills the **address**, not the name: it is
+                    // the identifier that cannot be re-pointed between the click
+                    // and the signature, and the review shows both.
+                    title: row.name != "" ? row.name
+                        : row.label != "" ? row.label
+                        : row.address;
                     title-mono: row.label == "";
                     subtitle: row.summary;
                     interactive: true;

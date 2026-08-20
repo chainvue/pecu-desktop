@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bumped when a durable table changes shape.
-const WALLET_VERSION: i64 = 5;
+const WALLET_VERSION: i64 = 6;
 
 /// Bumped when a cached table changes shape. Cheap to raise: an unrecognised
 /// cache is deleted, not migrated.
@@ -133,6 +133,26 @@ pub fn wallet(connection: &Connection, path: &Path) -> Result<(), StoreError> {
                  name    TEXT NOT NULL DEFAULT '',
                  seen_at INTEGER NOT NULL
              );",
+        )?;
+    }
+
+    if found < 6 {
+        connection.execute_batch(
+            // What the chain calls an address, as distinct from what its owner
+            // calls it.
+            //
+            // A payment to a VerusID records the **i-address** it resolved to,
+            // because that is what the transaction pays and what can be checked
+            // afterwards. So the address book filled up with `i4YzoP8Z…` rows
+            // for people the user knows as `dude.VRSCTEST@`, and the send
+            // screen showed them that way.
+            //
+            // Separate from `label`, and not folded into it, because they are
+            // different claims. `label` is a private note this wallet's owner
+            // wrote; `name` is a fact about the chain that any node will
+            // confirm. Writing a looked-up name into `label` would silently
+            // overwrite something somebody typed.
+            "ALTER TABLE address_book ADD COLUMN name TEXT NOT NULL DEFAULT '';",
         )?;
     }
 

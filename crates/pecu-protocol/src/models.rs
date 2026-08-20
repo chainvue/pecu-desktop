@@ -718,6 +718,13 @@ pub struct KnownAddressVm {
     pub address: String,
     /// Empty until somebody names it.
     pub label: String,
+    /// What the chain calls it — `dude.VRSCTEST@` — for an i-address that is a
+    /// VerusID. Empty for a plain address.
+    ///
+    /// A payment to a VerusID records the i-address it resolved to, because
+    /// that is what the transaction pays. Without this the list of people you
+    /// have paid is a list of `i4YzoP8Z…`, which is nobody.
+    pub name: String,
     /// "3 payments · 2 days ago", or "never paid" for one that was only named.
     pub summary: String,
 }

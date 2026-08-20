@@ -487,6 +487,7 @@ fn apply_address_book(ui: &AppWindow, rows: &[pecu_protocol::KnownAddressVm]) {
         .map(|row| KnownAddressRow {
             address: row.address.clone().into(),
             label: row.label.clone().into(),
+            name: row.name.clone().into(),
             summary: row.summary.clone().into(),
         })
         .collect();

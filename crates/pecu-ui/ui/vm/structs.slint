@@ -118,6 +118,9 @@ export struct KnownAddressRow {
     address: string,
     // Empty until somebody names it.
     label: string,
+    // What the chain calls it, for a VerusID. Shown in preference to the
+    // address, which for an identity is twenty bytes nobody recognises.
+    name: string,
     // "3 payments · last 2 days ago", or "never paid".
     summary: string,
 }

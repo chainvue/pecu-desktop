@@ -113,6 +113,7 @@ pub fn start(
         #[cfg(feature = "mock")]
         mock_for: Vec::new(),
         cached: portfolio::Cached::default(),
+        named_addresses: false,
         refreshing: false,
         work: work_tx,
         spendable: verus_sdk::money::Amount::ZERO,
@@ -327,6 +328,9 @@ struct Core {
     /// The two things that never change once known: the chain's own currency
     /// id, and the name of every currency the wallet has ever seen.
     cached: portfolio::Cached,
+    /// Whether the address book's identities have been named this session.
+    /// See [`Core::name_known_identities`].
+    named_addresses: bool,
     /// One refresh at a time. Without this, holding the Refresh button would
     /// queue a request storm against a public node.
     refreshing: bool,
@@ -673,6 +677,8 @@ enum Work {
         record: u64,
         result: Box<Result<String, verus_sdk::network::FlowError>>,
     },
+    /// What the chain calls the identities in the address book.
+    AddressNames(Vec<(String, String)>),
     /// A conversion was built and signed, or the attempt failed.
     Converted {
         ticket: u64,
@@ -932,12 +938,21 @@ fn palette_hits(
         if hits.len() >= MOST {
             break;
         }
-        if !search_matches(&needle, &entry.label, &entry.address) {
+        // Three things to match on, not two: the owner's label, the chain's
+        // name, and the address. Somebody who paid `dude.VRSCTEST@` looks for
+        // it by that name — it is what the send screen shows them — and a
+        // palette that only knew the i-address would find nothing.
+        if !search_matches(&needle, &entry.label, &entry.address)
+            && !search_matches(&needle, &entry.name, &entry.address)
+        {
             continue;
         }
         hits.push(pecu_protocol::SearchHitVm {
             kind: "address".to_string(),
-            label: if entry.label.is_empty() {
+            // Most recognisable first, the same order the send screen uses.
+            label: if !entry.name.is_empty() {
+                entry.name.clone()
+            } else if entry.label.is_empty() {
                 entry.address.clone()
             } else {
                 entry.label.clone()
@@ -1409,6 +1424,7 @@ impl Core {
             } => self.finish_check(record, confirmations),
             Work::Resent { record, result } => self.finish_resend(record, *result),
             Work::Broadcast { record, result } => self.finish_broadcast(record, *result),
+            Work::AddressNames(found) => self.finish_address_names(&found),
             Work::Converted { ticket, result } => self.finish_convert_prepare(ticket, *result),
             Work::ConversionSent { record, result } => {
                 self.finish_convert_broadcast(record, *result);
@@ -2523,6 +2539,9 @@ impl Core {
         self.currencies.clear();
         self.eligible.clear();
         self.currency_catalog = Catalog::Unasked;
+        // The other chain's address book has its own identities in it, and an
+        // i-address means a different name — or nothing at all — over there.
+        self.named_addresses = false;
         self.pending_currency_search = None;
         self.open_identity.clear();
         self.open_content_keys.clear();
@@ -2606,10 +2625,85 @@ impl Core {
                 summary: payment_summary(known.payments, known.paid_at, now()),
                 address: known.address,
                 label: known.label,
+                name: known.name,
             })
             .collect();
 
         let _ = self.events.send(Event::AddressBook(rows));
+    }
+
+    /// Ask the chain what the unnamed identities in the address book are called.
+    ///
+    /// # Why this exists at all
+    ///
+    /// Because a payment to a VerusID records the **i-address** it resolved to
+    /// — that is what the transaction pays, and what anybody can check
+    /// afterwards — so the list of people this wallet has paid is a list of
+    /// `i4YzoP8Z…`. Which is nobody.
+    ///
+    /// The name is usually free: `remember_recipient` writes it at the moment
+    /// the payment lands, from the lookup that resolved it. This is for the
+    /// rest — rows written before that existed, and i-addresses somebody pasted
+    /// rather than typed as a name.
+    ///
+    /// **Once per session, and only for rows that have no name.** A name does
+    /// not change; an identity can be *re-pointed*, but the address book's job
+    /// here is to say who a row is, and re-asking on a timer would be a request
+    /// per contact per refresh for an answer that is nearly always the same.
+    /// The send review is where a changed identity is caught, against the
+    /// `identity_name` table, which is a different question asked at the moment
+    /// it matters.
+    fn name_known_identities(&mut self) {
+        if self.named_addresses {
+            return;
+        }
+        let Some(store) = &self.store else {
+            return;
+        };
+        // Only i-addresses, and only ones with nothing recorded. A transparent
+        // R-address is not an identity and asking about one is a request whose
+        // answer is always "no such thing".
+        let wanted: Vec<String> = store
+            .known_addresses()
+            .into_iter()
+            .filter(|known| known.name.is_empty() && known.address.starts_with('i'))
+            .map(|known| known.address)
+            .collect();
+        if wanted.is_empty() {
+            self.named_addresses = true;
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+
+        self.named_addresses = true;
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+                let found = wanted
+                    .into_iter()
+                    .filter_map(|address| {
+                        let record = chain.identity(&address).ok()?;
+                        Some((address, record.fully_qualified_name))
+                    })
+                    .collect();
+                Work::AddressNames(found)
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_address_names(&mut self, found: &[(String, String)]) {
+        if found.is_empty() {
+            return;
+        }
+        if let Some(store) = &self.store {
+            for (address, name) in found {
+                store.name_address(address, name);
+            }
+        }
+        self.emit_address_book();
     }
 
     /// Record that the recipient of `record` has now been paid.
@@ -2636,8 +2730,23 @@ impl Core {
         // this session either way, and a wallet that cannot write is not a
         // wallet that should nag.
         self.known.entry(address.clone()).or_default();
+
+        // The name, when this payment is the thing that resolved it. Free —
+        // the lookup already happened, on the way to building the transaction —
+        // and it is the case that matters most, because a VerusID paid by name
+        // is exactly the row that would otherwise show an i-address.
+        let name = self
+            .identity
+            .as_ref()
+            .filter(|found| found.address == address && !found.revoked)
+            .map(|found| found.name.clone())
+            .or_else(|| self.identities.get(&address).map(|mine| mine.name.clone()));
+
         if let Some(store) = &self.store {
             store.note_payment(&address, now());
+            if let Some(name) = &name {
+                store.name_address(&address, name);
+            }
         }
         self.emit_address_book();
     }
@@ -2669,6 +2778,13 @@ impl Core {
         // endpoints are doing, immediately rather than at the next tick.
         if screen == pecu_protocol::ScreenId::Nodes {
             self.probe_inactive();
+        }
+
+        // The send screen's list of people this wallet has paid. Names for the
+        // i-addresses in it, once, when somebody is actually looking at it —
+        // see `name_known_identities`.
+        if screen == pecu_protocol::ScreenId::Send {
+            self.name_known_identities();
         }
 
         // Same reasoning for the identities: one request per key, and nowhere
@@ -6326,8 +6442,17 @@ mod tests {
         pecu_store::KnownAddress {
             address: address.to_string(),
             label: label.to_string(),
+            name: String::new(),
             paid_at: None,
             payments: 0,
+        }
+    }
+
+    /// The same, for a saved address the chain has a name for.
+    fn known_identity(name: &str, address: &str) -> pecu_store::KnownAddress {
+        pecu_store::KnownAddress {
+            name: name.to_string(),
+            ..known("", address)
         }
     }
 
@@ -6365,6 +6490,25 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].label, "RQxJPwq");
         assert_eq!(hits[0].sub, "RQxJPwq");
+    }
+
+    /// A VerusID paid by name is found by that name.
+    ///
+    /// The address book stores the i-address, because that is what the payment
+    /// paid. The palette has to search what the person was *shown*.
+    #[test]
+    fn a_saved_identity_is_found_by_the_name_it_was_paid_under() {
+        let saved = known_identity("dude.VRSCTEST@", "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP");
+
+        let hits = palette_hits("dude", std::slice::from_ref(&saved), &currencies(&[]));
+        assert_eq!(hits.len(), 1, "searching by name found nothing");
+        assert_eq!(hits[0].label, "dude.VRSCTEST@");
+        assert_eq!(hits[0].target, "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP");
+
+        // And still by its address, which is what somebody arrives with pasted.
+        let hits = palette_hits("i4YzoP8Z", std::slice::from_ref(&saved), &currencies(&[]));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].label, "dude.VRSCTEST@");
     }
 
     /// An empty query answers with nothing rather than with everything.

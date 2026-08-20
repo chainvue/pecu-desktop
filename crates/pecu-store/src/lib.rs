@@ -102,6 +102,14 @@ pub struct KnownAddress {
     pub address: String,
     /// What the user called it. Empty until they say.
     pub label: String,
+    /// What the **chain** calls it: `dude.VRSCTEST@` for an i-address that is a
+    /// VerusID. Empty for a plain address, and for one nothing has looked up
+    /// yet.
+    ///
+    /// Distinct from `label`, which is this wallet's private note. A name is a
+    /// fact any node will confirm; folding the two together would let a lookup
+    /// overwrite something somebody typed.
+    pub name: String,
     /// Unix seconds of the last payment, if there has been one.
     pub paid_at: Option<i64>,
     /// How many times this wallet has paid it. Zero for an address that was
@@ -228,7 +236,7 @@ impl Store {
     /// Every address this wallet knows about, most recently paid first.
     pub fn known_addresses(&self) -> Vec<KnownAddress> {
         let Ok(mut statement) = self.wallet.prepare(
-            "SELECT address, label, paid_at, payments FROM address_book
+            "SELECT address, label, paid_at, payments, name FROM address_book
              ORDER BY paid_at DESC NULLS LAST, address",
         ) else {
             return Vec::new();
@@ -239,6 +247,7 @@ impl Store {
                 label: row.get(1)?,
                 paid_at: row.get(2)?,
                 payments: row.get(3)?,
+                name: row.get(4)?,
             })
         }) else {
             return Vec::new();
@@ -261,6 +270,27 @@ impl Store {
             rusqlite::params![address, at],
         ) {
             tracing::warn!(%error, "a payment could not be recorded against its address");
+        }
+    }
+
+    /// Record what the chain calls an address.
+    ///
+    /// Written when a payment resolves a VerusID, and when a lookup fills one
+    /// in afterwards. Never touches `label`: that is the owner's note and this
+    /// is the chain's answer, and one must not overwrite the other.
+    ///
+    /// An empty `name` is ignored rather than stored, so a failed lookup cannot
+    /// erase a name that was already known.
+    pub fn name_address(&self, address: &str, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        if let Err(error) = self.wallet.execute(
+            "INSERT INTO address_book (address, name) VALUES (?1, ?2)
+             ON CONFLICT (address) DO UPDATE SET name = excluded.name",
+            [address, name],
+        ) {
+            tracing::warn!(%error, "an address could not be given its chain name");
         }
     }
 
@@ -719,6 +749,68 @@ mod tests {
         let known = store(&dir).known_addresses();
         assert_eq!(known[0].label, "somewhere else");
         assert_eq!(known[0].payments, 1, "renaming it reset its history");
+    }
+
+    /// The chain's name and the owner's note are two different things, and
+    /// neither may overwrite the other.
+    ///
+    /// A payment to a VerusID records the i-address, so the name is looked up
+    /// and written afterwards — while the label, if there is one, was typed by
+    /// somebody. Folding them into one column would have let a lookup silently
+    /// replace what they wrote.
+    #[test]
+    fn a_looked_up_name_and_a_typed_label_do_not_overwrite_each_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let address = "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP";
+
+        store(&dir).label_address(address, "my mate");
+        store(&dir).name_address(address, "dude.VRSCTEST@");
+
+        let known = store(&dir).known_addresses();
+        assert_eq!(known[0].label, "my mate");
+        assert_eq!(known[0].name, "dude.VRSCTEST@");
+
+        // And in the other order, on a fresh row.
+        let other = "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq";
+        store(&dir).name_address(other, "someone.VRSCTEST@");
+        store(&dir).label_address(other, "the shop");
+        let known = store(&dir).known_addresses();
+        let row = known
+            .iter()
+            .find(|row| row.address == other)
+            .expect("the row just written");
+        assert_eq!(row.label, "the shop");
+        assert_eq!(row.name, "someone.VRSCTEST@");
+    }
+
+    /// A lookup that came back with nothing must not erase a name that is
+    /// already there.
+    ///
+    /// The failure it guards against is a node that answers for an identity
+    /// once and not the next time: the second answer is an absence, not a
+    /// correction.
+    #[test]
+    fn an_empty_name_is_ignored_rather_than_stored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let address = "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP";
+
+        store(&dir).name_address(address, "dude.VRSCTEST@");
+        store(&dir).name_address(address, "");
+
+        let known = store(&dir).known_addresses();
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].name, "dude.VRSCTEST@");
+    }
+
+    /// Naming an address is not the same as having paid it.
+    #[test]
+    fn a_name_alone_does_not_claim_a_payment() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        store(&dir).name_address("i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP", "dude.VRSCTEST@");
+
+        let known = store(&dir).known_addresses();
+        assert_eq!(known[0].payments, 0);
+        assert_eq!(known[0].paid_at, None);
     }
 
     /// Most recently paid first, with the never-paid ones after — which is the
