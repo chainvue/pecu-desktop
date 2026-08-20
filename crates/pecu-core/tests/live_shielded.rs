@@ -4,7 +4,7 @@
 //! operates no public grpc-web endpoint. See `pecu_chain::Network::light_server`
 //! for why, and `crates/pecu-chain/tests/live_light.rs` for the recipe.
 //!
-//!   node scripts/grpcweb-proxy.mjs &
+//!   INSECURE=1 node scripts/grpcweb-proxy.mjs &   # expired upstream cert
 //!   PECU_LIGHT_URL=http://127.0.0.1:8080 \
 //!     cargo test -p pecu-core --test live_shielded -- --ignored --nocapture
 //!

@@ -14,7 +14,7 @@
 //! sitting in an environment is not by itself consent to spend from it.
 //!
 //! ```sh
-//! node scripts/grpcweb-proxy.mjs &
+//! INSECURE=1 node scripts/grpcweb-proxy.mjs &     # expired upstream cert
 //! export PECU_LIGHT_URL=http://127.0.0.1:8080
 //! export PECU_LIVE_SEND=1
 //! export PECU_LIVE_WIF=<a funded VRSCTEST WIF>       # in your own shell

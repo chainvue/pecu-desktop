@@ -258,7 +258,7 @@ VRSCTEST faucet at any of the obvious names.
 a funded WIF:
 
 ```sh
-node scripts/grpcweb-proxy.mjs &
+INSECURE=1 node scripts/grpcweb-proxy.mjs &   # while the upstream cert is expired
 export PECU_LIGHT_URL=http://127.0.0.1:8080
 export PECU_LIVE_SEND=1
 export PECU_LIVE_WIF=<a funded VRSCTEST WIF>
