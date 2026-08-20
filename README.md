@@ -61,6 +61,18 @@ UPDATE_SNAPSHOTS=1 cargo test -p pecu-ui --test visual # accepts them as referen
 Reference images are whole-tree artefacts: a commit that changes the palette
 changes all of them, so source and images travel together or the tip is red.
 
+They are also **per platform** — `crates/pecu-ui/tests/snapshots/<os>/`, and
+each machine compares against its own set. The software renderer is
+deterministic on one machine but not across them: the same build draws the
+wordmark's cursor a pixel differently on Ubuntu than on macOS, on 116 of the
+132 images, which at a tolerance of zero is 116 failures that mean nothing. The
+tolerance stays at zero and the sets are separate instead.
+
+So `UPDATE_SNAPSHOTS=1` re-records **only the platform it runs on**. A
+deliberate visual change needs a pass on each platform that has a set, or the
+tip is red there; a platform with no set records one on first run and says so,
+and a recorded set is not a reviewed one.
+
 ## Packaging
 
 `render_icon` writes all three platforms' icons from `ui/icon.slint` — the macOS
