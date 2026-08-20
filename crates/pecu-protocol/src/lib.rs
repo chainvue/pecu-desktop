@@ -37,6 +37,7 @@ pub use format::{coins, coins_u64};
 pub use models::{
     AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, CurrencyChoicesVm,
     ConvertDraft, ConvertQuoteVm, CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm,
+    ChainChoiceVm,
     ChainHaltVm,
     ConvertReviewVm,
     CurrencyProblemVm,

@@ -20,7 +20,7 @@ use std::rc::Rc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{
-    ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
+    ActivityRow, AppInfo, AppWindow, AssetRow, ChainChoice, ContentEntry, CurrencyField, CurrencyPick,
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
     ConvertState, HaltState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow,
     MarketState,
@@ -1381,48 +1381,33 @@ pub fn sending_too_much(ui: &AppWindow) {
 /// distinguish were never looked at together.
 pub fn network_trouble(ui: &AppWindow) {
     unlocked(ui);
-    ui.set_screen("nodes".into());
+    ui.set_screen("settings".into());
+    ui.set_settings_tab(4);
 
     let net = ui.global::<NetworkState>();
-    net.set_nodes(ModelRc::from(Rc::new(VecModel::from(vec![
-        NodeRow {
-            id: 0,
-            label: "VRSCTEST (public)".into(),
-            url: "https://api.verustest.net".into(),
-            status: "degraded".into(),
-            network: "Testnet".into(),
-            tip: "1 187 102".into(),
-            latency: "612 ms".into(),
-            note: note("node-catching-up", &["1 187 102", "1 187 500"]),
-            builtin: true,
-            active: true,
-        },
-        NodeRow {
-            id: 1,
-            label: "VRSC (public)".into(),
-            url: "https://api.verus.services".into(),
-            status: "degraded".into(),
-            network: "Mainnet".into(),
-            tip: "3 402 118".into(),
-            latency: "132 ms".into(),
-            note: note("node-other-chain", &["Mainnet"]),
-            builtin: true,
-            active: false,
-        },
-        NodeRow {
-            id: 1000,
-            label: "my node".into(),
-            url: "https://my-node.example:27486".into(),
-            status: "offline".into(),
-            network: SharedString::new(),
-            tip: SharedString::new(),
-            latency: SharedString::new(),
-            note: note("node-offline", &["connection refused"]),
-            builtin: false,
-            active: false,
-        },
-    ]))));
-    net.set_requested("Testnet".into());
+    // One node, behind the chain.
+    //
+    // This fixture used to hold three: the testnet endpoint, `api.verus.services`
+    // marked as being on the wrong chain, and one somebody had typed in. Neither
+    // of the last two can happen any more — the shipped list is one endpoint per
+    // chain, and there is no form to add another. Photographing states the
+    // wallet can no longer reach would be photographing a different program.
+    //
+    // What is left is the trouble that is still real: the one endpoint there is,
+    // catching up.
+    net.set_nodes(ModelRc::from(Rc::new(VecModel::from(vec![NodeRow {
+        id: 0,
+        label: "VRSCTEST (public)".into(),
+        url: "https://api.verustest.net".into(),
+        status: "degraded".into(),
+        network: "Testnet".into(),
+        tip: "1 187 102".into(),
+        latency: "612 ms".into(),
+        note: note("node-catching-up", &["1 187 102", "1 187 500"]),
+        builtin: true,
+        active: true,
+    }]))));
+    net.set_requested("VRSCTEST".into());
     net.set_effective("Testnet".into());
     net.set_syncing(true);
     net.set_endpoint("https://api.verustest.net".into());
@@ -1433,7 +1418,6 @@ pub fn network_trouble(ui: &AppWindow) {
     // between the picture and the running application, which is the one thing
     // these images exist to catch.
     net.set_node_state("degraded".into());
-    net.set_problem(note("node-url-insecure", &[]));
 }
 
 /// A wallet whose phrase has never been written down, on the dashboard.
@@ -2230,32 +2214,19 @@ pub fn registering(ui: &AppWindow) {
 
 pub fn network(ui: &AppWindow) {
     unlocked(ui);
+    ui.set_screen("settings".into());
+    ui.set_settings_tab(4);
 
-    let nodes = vec![
-        NodeRow {
-            status: "online".into(),
-            network: "Testnet".into(),
-            tip: "1 187 500".into(),
-            latency: "84 ms".into(),
-            ..node(0, "VRSCTEST (public)", "https://api.verustest.net", true)
-        },
-        NodeRow {
-            // Answering perfectly about the wrong chain. Degraded, not online —
-            // and the note is what says which, since the colour alone cannot.
-            status: "degraded".into(),
-            network: "Mainnet".into(),
-            tip: "3 402 118".into(),
-            latency: "132 ms".into(),
-            note: note("node-other-chain", &["Mainnet"]),
-            ..node(1, "VRSC (public)", "https://api.verus.services", false)
-        },
-        NodeRow {
-            builtin: false,
-            status: "offline".into(),
-            note: note("node-offline", &["connection refused"]),
-            ..node(1000, "my node", "https://my-node.example:27486", false)
-        },
-    ];
+    // One endpoint, online. That is the whole list on a chain now — the
+    // wrong-chain row and the hand-typed one that used to be here describe a
+    // wallet this build cannot produce.
+    let nodes = vec![NodeRow {
+        status: "online".into(),
+        network: "Testnet".into(),
+        tip: "1 187 500".into(),
+        latency: "84 ms".into(),
+        ..node(0, "VRSCTEST (public)", "https://api.verustest.net", true)
+    }];
 
     let net = ui.global::<NetworkState>();
     net.set_nodes(ModelRc::from(Rc::new(VecModel::from(nodes))));
@@ -2280,15 +2251,38 @@ fn nodes(ui: &AppWindow) {
     // renderer applies to the language, for the same reason.
     ui.global::<AppInfo>().set_search_shortcut("⌘K".into());
 
-    let nodes = vec![
-        node(0, "VRSCTEST (public)", "https://api.verustest.net", true),
-        node(1, "VRSC (public)", "https://api.verus.services", false),
-    ];
+    // One endpoint, because the shipped list is per chain now: a wallet on
+    // testnet is offered the testnet node and nothing else. The second row here
+    // used to be `api.verus.services`, marked `WrongNetwork` the moment it
+    // answered — correct, and an endpoint that could never be used.
+    let nodes = vec![node(
+        0,
+        "VRSCTEST (public)",
+        "https://api.verustest.net",
+        true,
+    )];
 
     let net = ui.global::<NetworkState>();
     net.set_nodes(ModelRc::from(Rc::new(VecModel::from(nodes))));
-    net.set_requested("Testnet".into());
+    net.set_requested("VRSCTEST".into());
     net.set_endpoint("https://api.verustest.net".into());
+
+    // The chains the core offers. Names and titles both, because the button
+    // shows one and sends the other — see `ChainChoiceVm`.
+    let chains: Vec<ChainChoice> = [
+        ("VRSCTEST", "Testnet"),
+        ("VRSC", "Verus"),
+        ("VARRR", "Pirate Chain"),
+        ("CHIPS", "CHIPS"),
+        ("VDEX", "vDEX"),
+    ]
+    .into_iter()
+    .map(|(name, title)| ChainChoice {
+        name: name.into(),
+        title: title.into(),
+    })
+    .collect();
+    net.set_chains(ModelRc::from(Rc::new(VecModel::from(chains))));
 }
 
 fn node(id: i32, label: &str, url: &str, active: bool) -> NodeRow {

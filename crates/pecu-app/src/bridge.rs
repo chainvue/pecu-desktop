@@ -1135,6 +1135,15 @@ fn close_finished_key_forms(state: &WalletState<'_>, vm: &pecu_protocol::WalletV
 fn apply_network(ui: &AppWindow, vm: &pecu_protocol::NetworkVm) {
     let state = ui.global::<NetworkState>();
     state.set_requested(vm.requested.clone().into());
+    let chains: Vec<pecu_ui::ChainChoice> = vm
+        .chains
+        .iter()
+        .map(|chain| pecu_ui::ChainChoice {
+            name: chain.name.clone().into(),
+            title: chain.title.clone().into(),
+        })
+        .collect();
+    state.set_chains(slint::ModelRc::new(slint::VecModel::from(chains)));
     // The chooser follows the wallet, never the other way round, so a switch
     // the core refused puts the selection back. Only mainnet moves it: anything
     // else — testnet, or a PBaaS chain this build has no button for — leaves it

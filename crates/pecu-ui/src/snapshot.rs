@@ -250,8 +250,15 @@ pub const CASES: &[Case] = &[
     ("settings", "addresses", crate::fixtures::addresses),
     ("settings", "general", crate::fixtures::general_settings),
     ("settings", "keys-renaming", crate::fixtures::renaming_key),
-    ("nodes", "network", crate::fixtures::network),
-    ("nodes", "network-trouble", crate::fixtures::network_trouble),
+    // Under `settings`, because that is where this screen lives now — a fifth
+    // tab rather than a rail entry. The fixture sets the tab; the case has to
+    // set the screen, because `render` applies it after the fixture runs.
+    ("settings", "network", crate::fixtures::network),
+    (
+        "settings",
+        "network-trouble",
+        crate::fixtures::network_trouble,
+    ),
     ("identities", "identities", crate::fixtures::identities),
     (
         "identities",

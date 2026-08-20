@@ -55,6 +55,15 @@ export struct NavItem {
     hidden: bool,
 }
 
+// One chain this build offers. Mirrors `ChainChoiceVm`.
+export struct ChainChoice {
+    // The chain's own name, which is what goes back to the core. Never the
+    // title: a guard compares against this.
+    name: string,
+    // What a person recognises. `VARRR` is a name; "Pirate Chain" is a title.
+    title: string,
+}
+
 export struct NodeRow {
     id: int,
     label: string,

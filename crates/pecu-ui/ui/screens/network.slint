@@ -6,88 +6,6 @@ import { Actions, NetworkState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
 import { NoteText, NoticeTitle } from "../components/note.slint";
 
-// Configuring an endpoint of your own.
-//
-// Its own component because its two inputs have to be readable from one place —
-// an input declared inside an `if` cannot be reached from outside it — and
-// because the form has to be able to clear itself once the node is accepted.
-export component AddNodeForm inherits VerticalLayout {
-    spacing: Sp.s4;
-
-    HorizontalLayout {
-        spacing: Sp.s4;
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: Sp.s3;
-            Text {
-                text: @tr("Address");
-                font-size: Typo.caption;
-                color: Theme.text-secondary;
-            }
-            url := Field {
-                mono: true;
-                placeholder: "https://my-node.example:27486";
-                text <=> NetworkState.draft-url;
-                accepted => { root.submit(); }
-                edited => { NetworkState.problem = { code: "", args: [] }; }
-            }
-        }
-
-        VerticalLayout {
-            width: 200px;
-            spacing: Sp.s3;
-            Text {
-                text: @tr("Name (optional)");
-                font-size: Typo.caption;
-                color: Theme.text-secondary;
-            }
-            name := Field {
-                placeholder: @tr("my node");
-                text <=> NetworkState.draft-label;
-                accepted => { root.submit(); }
-            }
-        }
-    }
-
-    if NetworkState.problem.code != "": NoticeTitle {
-        note: NetworkState.problem;
-        font-size: Typo.caption;
-        color: Theme.negative;
-        wrap: word-wrap;
-    }
-
-    HorizontalLayout {
-        spacing: Sp.s5;
-        Text {
-            horizontal-stretch: 1;
-            // The one sentence worth having here. Someone typing an address in
-            // is about to be told "no" by a rule they cannot see otherwise.
-            text: @tr("Pecu only talks to encrypted endpoints, so an https:// address is required unless the node is on this machine. It never sends a key to a node.");
-            font-size: Typo.caption;
-            color: Theme.text-tertiary;
-            wrap: word-wrap;
-            vertical-alignment: center;
-        }
-        Btn {
-            text: @tr("Add node");
-            variant: "primary";
-            enabled: url.text != "";
-            y: (parent.height - self.height) / 2;
-            clicked => { root.submit(); }
-        }
-    }
-
-    // The fields are NOT cleared here. Rust clears them once the node has
-    // actually been accepted — so a refused address is still on screen to be
-    // corrected rather than retyped from memory.
-    function submit() {
-        if (url.text == "") { return; }
-        NetworkState.problem = { code: "", args: [] };
-        Actions.add-node(name.text, url.text);
-    }
-}
-
 export component NodesScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
@@ -131,16 +49,28 @@ export component NodesScreen inherits VerticalLayout {
             VerticalLayout {
                 padding: Sp.s5;
                 spacing: Sp.s3;
-                Segmented {
-                    width: 320px;
-                    options: [@tr("Testnet"), @tr("Mainnet")];
-                    index <=> NetworkState.chain-index;
-                    changed(i) => {
-                        Actions.set-requested-network(i == 1 ? "VRSC" : "VRSCTEST");
+                // One button per chain, from the core.
+                //
+                // Not a `Segmented` any more: that takes a fixed list of
+                // labels and gives back an index, so the interface had to turn
+                // the index back into a name — which it did with a ternary
+                // holding `"VRSC"` and `"VRSCTEST"` as literals. Five chains
+                // is where that stops being possible and starts being wrong.
+                //
+                // What goes back is `chain.name`, never `chain.title`: the
+                // title is for reading and the name is what every guard in the
+                // core compares against.
+                HorizontalLayout {
+                    spacing: Sp.s3;
+                    alignment: start;
+                    for chain in NetworkState.chains: Btn {
+                        text: chain.title;
+                        variant: NetworkState.requested == chain.name ? "primary" : "";
+                        clicked => { Actions.set-requested-network(chain.name); }
                     }
                 }
                 Text {
-                    text: @tr("Each chain is a separate wallet: its own keys, its own history, its own saved nodes. Nothing is shared between them, and changing chains locks the wallet.");
+                    text: @tr("Each chain is a separate wallet: its own keys, its own history, its own coins. Nothing is shared between them, and changing chains locks the wallet.");
                     font-size: Typo.caption;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -231,42 +161,21 @@ export component NodesScreen inherits VerticalLayout {
                             : node.status;
                         y: (parent.height - self.height) / 2;
                     }
-
-                    // The slot is always here; the button is not. Reserving the
-                    // space keeps the status column straight whether or not the
-                    // row can be removed — and a column that shifts by a button
-                    // width is the sort of thing that reads as unfinished
-                    // without anyone being able to say why.
-                    Rectangle {
-                        width: 96px;
-
-                        // Only what the user added. A built-in comes from the
-                        // build, so removing one would last until the next
-                        // start and then quietly undo itself — the core refuses
-                        // it, and offering a button that cannot work is worse
-                        // than not offering one.
-                        if !node.builtin: Btn {
-                            text: @tr("Remove");
-                            x: parent.width - self.width;
-                            y: (parent.height - self.height) / 2;
-                            clicked => { Actions.remove-node(node.id); }
-                        }
-                    }
                 }
             }
         }
     }
 
-    VerticalLayout {
-        spacing: Sp.s4;
-        Eyebrow { text: @tr("ADD A NODE"); }
-        Card {
-            VerticalLayout {
-                padding: Sp.card-pad;
-                AddNodeForm {}
-            }
-        }
-    }
-
+    // There was an "ADD A NODE" form here, and a Remove button on every row
+    // somebody had added.
+    //
+    // Both are gone while the shipped list is one endpoint per chain. A node is
+    // where this wallet reads balances and hands over signed transactions, so
+    // choosing one is a security decision — and the form asked for it in a text
+    // box, on a screen most people pass through once. What is offered now is
+    // what this build ships and has been checked against.
+    //
+    // The core still refuses to remove a built-in, and `Command::AddNode` still
+    // exists: nothing was taken out of the wallet, only out of the way in.
     Rectangle { vertical-stretch: 1; }
 }
