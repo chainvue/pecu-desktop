@@ -226,37 +226,34 @@ impl Network {
     /// `None` is **not** "nothing is switched off". It is "there is nowhere to
     /// ask", which is a third state the caller has to keep apart from a clear
     /// answer and from a failed one — see `pecu_core::upgrade`.
-    /// The lightwalletd server this chain's shielded notes are read from.
+    /// The grpc-web endpoint this chain's shielded notes are read from.
     ///
-    /// A **different server from the RPC node**, speaking a different protocol
-    /// for a different purpose: the node answers about transparent addresses,
-    /// and lightwalletd streams compact blocks so a wallet can trial-decrypt
-    /// them without telling anyone which notes are its own.
+    /// **`None` everywhere, and that is a measurement rather than an
+    /// omission.**
     ///
-    /// `None` is the honest answer for every chain but testnet. Verus runs one
-    /// public lightwalletd, on VRSCTEST, and this wallet will not guess a
-    /// hostname for the others — a shielded balance read from the wrong server
-    /// is not a smaller version of a right one, it is a number with no meaning.
-    /// Where this is `None` the interface says the chain has no shielded
-    /// support here yet, which is true, rather than failing to connect to
-    /// something that was never there.
+    /// This wallet reads notes through `verus-light`, which speaks **grpc-web
+    /// over HTTP/1.1** — deliberately, so one transport serves both a desktop
+    /// and a wasm build with no HTTP/2 stack and no async runtime. What
+    /// lightwalletd itself speaks is **native gRPC over HTTP/2**. The two are
+    /// not interchangeable: bridging them is what a grpc-web proxy is for, and
+    /// the SDK's own example points at `http://127.0.0.1:8080` for exactly that
+    /// reason.
     ///
-    /// `https` is not a preference. `GrpcWebTransport` refuses plaintext to any
-    /// non-loopback host, because a light client leaks which blocks it asks
-    /// for.
+    /// An earlier version of this function returned
+    /// `https://lightwalletd.verustest.net:8125` for testnet. That endpoint is
+    /// real and is the wrong shape: it sends an HTTP/2 SETTINGS frame the
+    /// instant a connection opens, before any request, and answers an HTTP/1.1
+    /// request with the same. Measured 2026-08-20, along with 8080, 8081, 9067
+    /// and 443 on the same host — nothing there serves grpc-web. Its
+    /// certificate had also expired on 2026-08-11, which is what hid the
+    /// protocol mismatch: the connection failed before anything could notice
+    /// the wrong protocol.
+    ///
+    /// So naming it here promised a shielded balance the wallet could never
+    /// fetch. Until a public grpc-web endpoint exists, the address has to come
+    /// from whoever runs the proxy — see [`crate::LightServer::connect`].
     pub fn light_server(&self) -> Option<&'static str> {
-        match self {
-            // Verus's public testnet lightwalletd, and at the time of writing
-            // the only one that exists.
-            Self::Testnet => Some("https://lightwalletd.verustest.net:8125"),
-            // Deliberately absent, for mainnet and for every PBaaS chain
-            // alike. There is a mainnet server somewhere or there is not; this
-            // wallet has not measured one, and inventing the name would
-            // produce a wallet that looks shielded-capable on VRSC and cannot
-            // be. One arm rather than two because the answer and the reason
-            // are the same for both.
-            Self::Mainnet | Self::Other(_) => None,
-        }
+        None
     }
 
     pub fn oracle(&self) -> Option<Oracle> {
@@ -299,14 +296,23 @@ mod tests {
     /// balance on VRSC and cannot deliver one — and a shielded balance read
     /// from the wrong server is not a smaller version of a right one, it is a
     /// number with no meaning.
+    /// No chain ships a grpc-web endpoint, because none is known to exist.
+    ///
+    /// This asserted the opposite for one commit. The address it named speaks
+    /// native gRPC over HTTP/2, which this wallet's transport cannot use — so
+    /// the test passed while the wallet promised a balance it could never
+    /// fetch. Naming an endpoint is not the same as being able to reach it.
     #[test]
-    fn only_testnet_has_a_light_server() {
-        assert_eq!(
-            Network::Testnet.light_server(),
-            Some("https://lightwalletd.verustest.net:8125"),
-        );
-        assert_eq!(Network::Mainnet.light_server(), None);
-        assert_eq!(Network::Other("VARRR".into()).light_server(), None);
+    fn no_chain_names_a_light_server_it_cannot_reach() {
+        for network in Network::shipped() {
+            assert_eq!(
+                network.light_server(),
+                None,
+                "{} names a grpc-web endpoint; if one now exists, connect to it \
+                 in a test before shipping the address",
+                network.chain_name(),
+            );
+        }
     }
 
     /// Plaintext would leak which blocks are being fetched, and the SDK's

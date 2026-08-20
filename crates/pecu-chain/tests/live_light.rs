@@ -1,17 +1,40 @@
-//! What the real lightwalletd says, asked on demand.
+//! What a real lightwalletd says, asked through a grpc-web proxy.
 //!
-//! `#[ignore]`, like every other live test here: it needs the open internet and
-//! a server this project does not run. Run with
-//! `cargo test -p pecu-chain --test live_light -- --ignored --nocapture`.
+//! `#[ignore]`, and it needs something running: Verus operates no public
+//! grpc-web endpoint, so `scripts/grpcweb-proxy.mjs` has to be up.
+//!
+//!   node scripts/grpcweb-proxy.mjs &
+//!   PECU_LIGHT_URL=http://127.0.0.1:8080 \
+//!     cargo test -p pecu-chain --test live_light -- --ignored --nocapture
+//!
+//! # Why the address is not shipped
+//!
+//! `verus-light` speaks grpc-web over HTTP/1.1; lightwalletd speaks native gRPC
+//! over HTTP/2. `lightwalletd.verustest.net:8125` is the second kind — it sends
+//! an HTTP/2 SETTINGS frame the instant a socket opens — so no amount of
+//! certificate renewal would make the wallet able to read it directly. See
+//! `Network::light_server`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use pecu_chain::{LightRefused, LightServer, Network};
 
+/// Where the proxy is, or nothing.
+fn url() -> Option<String> {
+    std::env::var("PECU_LIGHT_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+}
+
+/// The server answers, and says which chain it serves.
 #[test]
-#[ignore = "talks to Verus's public testnet lightwalletd"]
-fn the_testnet_light_server_answers_and_says_which_chain_it_is() {
-    let server = LightServer::shipped(&Network::Testnet).expect("connect to the testnet server");
+#[ignore = "needs a grpc-web proxy; see the module docs"]
+fn the_light_server_answers_and_says_which_chain_it_is() {
+    let Some(url) = url() else {
+        panic!("set PECU_LIGHT_URL — see the module docs for the proxy");
+    };
+
+    let server = LightServer::connect(&url, &Network::Testnet).expect("connect");
 
     let info = server.info();
     println!("url        {}", server.url());
@@ -24,6 +47,8 @@ fn the_testnet_light_server_answers_and_says_which_chain_it_is() {
 
     assert_eq!(info.chain_name, "VRSCTEST");
     assert!(info.block_height > 1_000_000, "implausible tip");
+    // The one Verus-specific value on the whole shielded path.
+    assert_eq!(info.consensus_branch_id, "76b809bb");
 
     let synced = server.synced_height().expect("synced height");
     println!("synced_height() -> {synced}");
@@ -33,13 +58,13 @@ fn the_testnet_light_server_answers_and_says_which_chain_it_is() {
 /// The guard is not decoration: pointed at testnet while expecting mainnet, it
 /// must refuse rather than hand back a balance from the wrong chain.
 #[test]
-#[ignore = "talks to Verus's public testnet lightwalletd"]
+#[ignore = "needs a grpc-web proxy; see the module docs"]
 fn a_server_for_another_chain_is_refused() {
-    let url = Network::Testnet
-        .light_server()
-        .expect("testnet ships a server");
+    let Some(url) = url() else {
+        panic!("set PECU_LIGHT_URL — see the module docs for the proxy");
+    };
 
-    match LightServer::connect(url, &Network::Mainnet) {
+    match LightServer::connect(&url, &Network::Mainnet) {
         Err(LightRefused::WrongNetwork {
             reported, expected, ..
         }) => {
@@ -51,13 +76,13 @@ fn a_server_for_another_chain_is_refused() {
     }
 }
 
-/// Mainnet ships no light server, and that must be a plain statement rather
-/// than a connection attempt to a name nobody measured.
+/// No chain ships an address, so `shipped` refuses for every one of them.
 #[test]
-fn mainnet_reports_no_light_server_rather_than_guessing_one() {
-    assert!(Network::Mainnet.light_server().is_none());
-    assert!(matches!(
-        LightServer::shipped(&Network::Mainnet),
-        Err(LightRefused::NoServer(chain)) if chain == "VRSC"
-    ));
+fn nothing_is_shipped_to_connect_to() {
+    for network in Network::shipped() {
+        assert!(matches!(
+            LightServer::shipped(&network),
+            Err(LightRefused::NoServer(_)),
+        ));
+    }
 }
