@@ -7,7 +7,7 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChartVm, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
+    ChainHaltVm, ChartVm, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
     HistoryRowVm,
     IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
     ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NoteVm, PendingVm, PortfolioVm,
@@ -133,6 +133,14 @@ pub enum Event {
     /// Every field is answered on every edit, including the ones that are
     /// empty — a quote that left the last conversion's fee on screen beside a
     /// new pair of currencies would be describing something nobody asked for.
+    /// What the protocol has switched off on this chain.
+    ///
+    /// Emitted on its own rather than folded into `Network`, because it has its
+    /// own lifetime: it changes on the order of weeks, is read once per chain
+    /// per session, and stands in for itself for a bounded window when a read
+    /// fails. A field on the network view would be re-sent — and re-guessed —
+    /// on every tip poll.
+    ChainHalt(ChainHaltVm),
     ConvertQuote(Box<ConvertQuoteVm>),
     /// A conversion built and signed but not sent.
     ///

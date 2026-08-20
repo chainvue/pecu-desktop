@@ -140,6 +140,54 @@ impl Network {
     }
 }
 
+/// Where a chain publishes whether the protocol has switched anything off.
+///
+/// A [notification oracle], which for every chain here is the chain's own root
+/// identity. Its `contentmultimap` carries at most one upgrade descriptor,
+/// under a VDXF key derived per chain — and the key **must not** be reused
+/// across chains, which is why this is a pair and not a constant.
+///
+/// [notification oracle]: https://docs.verus.io
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Oracle {
+    /// The identity to ask for.
+    pub identity: &'static str,
+    /// The one key in its content map worth reading. Other entries appear —
+    /// testnet's oracle carries one — and they are different record types, not
+    /// upgrade descriptors.
+    pub content_key: &'static str,
+}
+
+impl Network {
+    /// The oracle for this chain, or `None` when there is not one.
+    ///
+    /// `None` is **not** "nothing is switched off". It is "there is nowhere to
+    /// ask", which is a third state the caller has to keep apart from a clear
+    /// answer and from a failed one — see `pecu_core::upgrade`.
+    pub fn oracle(&self) -> Option<Oracle> {
+        let oracle = |identity, content_key| {
+            Some(Oracle {
+                identity,
+                content_key,
+            })
+        };
+        match self {
+            Self::Mainnet => oracle("VRSC@", "iSJ38vYX7qoCtotc9wBHb1vZdR3oTgoHCX"),
+            Self::Testnet => oracle("VRSCTEST@", "iH51dFy7vF3LTRuVQvCTVu6QSbYfhTjek8"),
+            // The PBaaS chains this build knows about. A chain that is not in
+            // this list has no oracle **here** — which is a fact about this
+            // wallet, not about the chain, and is why it is reported as its own
+            // state rather than as silence.
+            Self::Other(name) => match name.as_str() {
+                "VARRR" | "vARRR" => oracle("vARRR@", "i8XmQTLRRvffV9XaNV1asxXduQMSypKksT"),
+                "CHIPS" => oracle("CHIPS@", "iCgYC8eJm7raNJ2o6zYmfe8a2zeUF4e7tZ"),
+                "VDEX" | "vDEX" => oracle("vDEX@", "iCNqwtiqG1ZgfrJcsPK92N8P9wVEnQVVus"),
+                _ => None,
+            },
+        }
+    }
+}
+
 impl core::fmt::Display for Network {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.label())
@@ -156,6 +204,47 @@ mod tests {
         assert_eq!(Network::from_chain_name("VRSCTEST"), Network::Testnet);
         assert!(Network::from_chain_name("VRSC").is_mainnet());
         assert!(!Network::from_chain_name("VRSCTEST").is_mainnet());
+    }
+
+    /// Every chain this build can ask about its own halts, and none of them
+    /// share a key.
+    ///
+    /// Reusing one chain's content key on another reads whatever that chain
+    /// happens to publish under it — which is either nothing, or somebody
+    /// else's record parsed as an upgrade descriptor.
+    #[test]
+    fn no_two_chains_share_an_oracle_key() {
+        let chains = [
+            Network::Mainnet,
+            Network::Testnet,
+            Network::Other("VARRR".to_string()),
+            Network::Other("CHIPS".to_string()),
+            Network::Other("VDEX".to_string()),
+        ];
+
+        let mut keys = std::collections::BTreeSet::new();
+        let mut identities = std::collections::BTreeSet::new();
+        for chain in &chains {
+            let oracle = chain
+                .oracle()
+                .unwrap_or_else(|| panic!("{chain} has no oracle"));
+            assert!(
+                keys.insert(oracle.content_key),
+                "{chain} reuses a content key",
+            );
+            assert!(
+                identities.insert(oracle.identity),
+                "{chain} reuses an oracle identity",
+            );
+            assert!(oracle.content_key.starts_with('i'));
+            assert!(oracle.identity.ends_with('@'));
+        }
+    }
+
+    /// A chain nobody has configured is not a chain with nothing switched off.
+    #[test]
+    fn an_unknown_chain_has_nowhere_to_ask() {
+        assert_eq!(Network::Other("SOMEPBAAS".to_string()).oracle(), None);
     }
 
     /// A chain this build does not know is carried, not rejected — and is not

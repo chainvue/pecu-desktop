@@ -22,7 +22,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use crate::{
     ActivityRow, AppInfo, AppWindow, AssetRow, ContentEntry, CurrencyField, CurrencyPick,
     CurrencyProblem, CurrencyRow, CurrencySlice, CurrencyState, EligibleIdentity, FlowStep,
-    ConvertState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow, MarketState,
+    ConvertState, HaltState, IdentityRow, IdentityState, KeyRow, KnownAddressRow, MarketRow,
+    MarketState,
     NetworkState, NodeRow, PendingRow,
     ActivityState, PreallocEntry, ReserveEntry, ReviewOutput, SearchHit, SearchState, SeedState,
     Note, SeedWord, SendState, Stat, TxState, Venue, WalletState,
@@ -87,6 +88,34 @@ pub fn converting_thin(ui: &AppWindow) {
     state.set_slippage("2.15%".into());
     state.set_slippage_tone("warning".into());
     state.set_note(note("convert-slippage-high", &["2.15%"]));
+}
+
+/// Convert, with the protocol not taking conversions.
+///
+/// **The state this build is actually in on VRSCTEST**, and it had no picture.
+/// `disabledefi` has been in force since block 1 187 000, which is why every
+/// conversion is rejected — and the point of the screen is that everything
+/// above the button is still true. The pools have reserves, the node prices
+/// them, the quote is real. It describes a market nobody can trade in.
+pub fn converting_halted(ui: &AppWindow) {
+    converting(ui);
+
+    let halt = ui.global::<HaltState>();
+    halt.set_severity("critical".into());
+    halt.set_note(note("halt-conversions", &[]));
+    halt.set_conversions_halted(true);
+}
+
+/// The same switch, before its height. A halt that has not landed yet is a
+/// warning with a countdown, and it stops nothing — reporting it as active
+/// would say trading has stopped when it has not.
+pub fn converting_halt_scheduled(ui: &AppWindow) {
+    converting(ui);
+
+    let halt = ui.global::<HaltState>();
+    halt.set_severity("warning".into());
+    halt.set_note(note("halt-conversions", &[]));
+    halt.set_in_blocks(40);
 }
 
 /// The conversion review: what was actually signed.

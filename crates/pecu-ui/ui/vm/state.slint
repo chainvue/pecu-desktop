@@ -611,6 +611,26 @@ export global ActivityState {
 // A conversion moves money irreversibly and its output is an estimate rather
 // than a promise. So it is a form and then a review, the review is built from
 // something signed, and nothing leaves until the second button.
+// What the protocol has switched off on this chain.
+//
+// Its own global rather than a field on `NetworkState`, because it has its own
+// lifetime: read once per chain, changing on the order of weeks, and standing
+// in for itself for a bounded window when a read fails. Mirrors `ChainHaltVm`.
+export global HaltState {
+    // "clear" | "info" | "warning" | "unknown" | "critical". Empty until the
+    // chain has been asked, which is not the same as clear.
+    in property <string> severity: "";
+    // What stops working, as a named reason — never the switch's own name.
+    in property <Note> note;
+    // The one field that changes what this interface lets somebody do.
+    in property <bool> conversions-halted: false;
+    // Blocks until it lands. Zero means it is already in force.
+    in property <int> in-blocks: 0;
+    // A reading that is standing in for a failed one. Worth saying: it is the
+    // same fact measured slightly earlier, not a guess.
+    in property <bool> stale: false;
+}
+
 export global ConvertState {
     // "form" | "review" | "sent" | "uncertain".
     //

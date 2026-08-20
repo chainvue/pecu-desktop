@@ -32,7 +32,7 @@ import { NavRail, TitleBar, StatusBar } from "components/shell.slint";
 import { AppIcon } from "icon.slint";
 import { Icon } from "components/icons.slint";
 import { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit, MarketRow, Venue, Stat } from "vm/structs.slint";
-import { WalletState, SeedState, SendState, CurrencyState, IdentityState, TxState, NetworkState, ChartState, ActivityState, ConvertState, MarketState, SearchState, ToastState, AppInfo, Actions } from "vm/state.slint";
+import { WalletState, SeedState, SendState, CurrencyState, IdentityState, TxState, NetworkState, ChartState, ActivityState, ConvertState, HaltState, MarketState, SearchState, ToastState, AppInfo, Actions } from "vm/state.slint";
 import { CommandPalette, ToastHost, ComingSoon } from "components/overlay.slint";
 import { Onboarding, BackupScreen } from "screens/onboarding.slint";
 import { DashboardScreen } from "screens/dashboard.slint";
@@ -52,7 +52,7 @@ import { ReceiveScreen } from "screens/receive.slint";
 // global below is written to by `bridge.rs`.
 export { NavItem, NodeRow, KeyRow, KnownAddressRow, AssetRow, ActivityRow, SeedWord, ReviewOutput, PendingRow, ToastRow, IdentityRow, ContentEntry, CurrencyRow, EligibleIdentity, CurrencySlice, CurrencyField, CurrencyProblem, FlowStep, ReserveEntry, PreallocEntry, CurrencyPick, SearchHit, MarketRow, Venue, Stat }
 export { Theme, Motion, InputMode }
-export { WalletState, SeedState, SendState, CurrencyState, IdentityState, TxState, NetworkState, ChartState, ActivityState, ConvertState, MarketState, SearchState, ToastState, AppInfo, Actions }
+export { WalletState, SeedState, SendState, CurrencyState, IdentityState, TxState, NetworkState, ChartState, ActivityState, ConvertState, HaltState, MarketState, SearchState, ToastState, AppInfo, Actions }
 // Rendered to a PNG by `examples/render_icon.rs`, never shown. Exported from
 // here because this file is the one compile root — see `build.rs`.
 export { AppIcon }

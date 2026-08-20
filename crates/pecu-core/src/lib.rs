@@ -44,6 +44,7 @@ pub mod portfolio;
 pub mod registration;
 pub mod runtime;
 pub mod send;
+pub mod upgrade;
 pub mod wallet;
 
 use std::sync::Arc;
@@ -113,6 +114,8 @@ pub fn start(
         #[cfg(feature = "mock")]
         mock_for: Vec::new(),
         cached: portfolio::Cached::default(),
+        halt: None,
+        reading_halt: false,
         named_addresses: false,
         refreshing: false,
         work: work_tx,
@@ -328,6 +331,16 @@ struct Core {
     /// The two things that never change once known: the chain's own currency
     /// id, and the name of every currency the wallet has ever seen.
     cached: portfolio::Cached,
+    /// The last thing the chain's oracle said, and when it was read.
+    ///
+    /// Kept so a failed read can stand in with it for a bounded window rather
+    /// than reporting `unknown` — see [`Core::read_chain_halt`]. **A failure is
+    /// never stored here**, which is the whole point: caching one as if it were
+    /// an answer pins the banner to "unavailable" for as long as the window
+    /// lasts, and every failed refresh extends it.
+    halt: Option<(std::time::Instant, upgrade::Status)>,
+    /// Whether a read is out, so a slow node cannot pile them up.
+    reading_halt: bool,
     /// Whether the address book's identities have been named this session.
     /// See [`Core::name_known_identities`].
     named_addresses: bool,
@@ -677,6 +690,12 @@ enum Work {
         record: u64,
         result: Box<Result<String, verus_sdk::network::FlowError>>,
     },
+    /// What the chain's oracle published, or nothing at all.
+    ///
+    /// `None` is a read that failed. It is deliberately not an empty vector:
+    /// "the key is absent" and "I could not ask" are different answers and
+    /// collapsing them is how a halt goes unannounced.
+    ChainHalt(Option<Vec<Vec<u8>>>),
     /// What the chain calls the identities in the address book.
     AddressNames(Vec<(String, String)>),
     /// A conversion was built and signed, or the attempt failed.
@@ -1424,6 +1443,7 @@ impl Core {
             } => self.finish_check(record, confirmations),
             Work::Resent { record, result } => self.finish_resend(record, *result),
             Work::Broadcast { record, result } => self.finish_broadcast(record, *result),
+            Work::ChainHalt(found) => self.finish_chain_halt(found.as_deref()),
             Work::AddressNames(found) => self.finish_address_names(&found),
             Work::Converted { ticket, result } => self.finish_convert_prepare(ticket, *result),
             Work::ConversionSent { record, result } => {
@@ -2189,6 +2209,14 @@ impl Core {
         let after = self.nodes.get(node).and_then(|n| n.tip);
         self.emit_network();
 
+        // The first time this chain answers, find out whether the protocol is
+        // taking conversions at all. Once — `halt` is cleared on a chain
+        // switch and on nothing else, because this state moves on the order of
+        // weeks and polling it would be a request per tick for the same answer.
+        if info.is_ok() && self.halt.is_none() {
+            self.read_chain_halt();
+        }
+
         // A node that has now failed three times in a row is a node that is
         // down rather than briefly unreachable.
         if info.is_err() {
@@ -2542,6 +2570,10 @@ impl Core {
         // The other chain's address book has its own identities in it, and an
         // i-address means a different name — or nothing at all — over there.
         self.named_addresses = false;
+        // And its own oracle, its own key, and its own idea of what is switched
+        // off. Carrying one chain's answer onto another is how a wallet offers
+        // a conversion on a halted chain.
+        self.halt = None;
         self.pending_currency_search = None;
         self.open_identity.clear();
         self.open_content_keys.clear();
@@ -2630,6 +2662,95 @@ impl Core {
             .collect();
 
         let _ = self.events.send(Event::AddressBook(rows));
+    }
+
+    /// How long a reading stands in for itself after a read fails.
+    ///
+    /// This state changes on the order of weeks — the mainnet halt at the time
+    /// of writing had stood since July — so a reading from four minutes ago is
+    /// the same fact measured slightly earlier, not a guess.
+    const HALT_STANDBY: std::time::Duration = std::time::Duration::from_mins(15);
+
+    /// Ask the chain's oracle whether the protocol has switched anything off.
+    ///
+    /// Two reads and no more: the tip, which is already in hand, and one
+    /// `getidentity`. It is asked when a chain first answers and again when the
+    /// chain changes, because nothing else moves it.
+    fn read_chain_halt(&mut self) {
+        if self.reading_halt {
+            return;
+        }
+        let Some(chain) = self.chain() else {
+            return;
+        };
+        let Some(network) = self.nodes.active().and_then(|node| node.network.clone()) else {
+            return;
+        };
+        // No oracle for this chain. Not a failure and not a clear answer — see
+        // `Status::unconfigured`.
+        let Some(oracle) = network.oracle() else {
+            self.halt = None;
+            let _ = self.events.send(Event::ChainHalt(halt_vm(
+                &upgrade::Status::unconfigured(),
+                false,
+            )));
+            return;
+        };
+
+        self.reading_halt = true;
+        self.blocking.dispatch(
+            move || {
+                use verus_sdk::network::ChainReader;
+
+                let found = chain.identity_content(oracle.identity).ok().map(|content| {
+                    content
+                        .content_multimap
+                        .get(oracle.content_key)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(|value| value.as_bytes().map(<[u8]>::to_vec))
+                                .collect()
+                        })
+                        // The key is absent, which is the healthy state and is
+                        // an **answer** — an empty list, not a failed read.
+                        .unwrap_or_default()
+                });
+                Work::ChainHalt(found)
+            },
+            self.work.clone(),
+        );
+    }
+
+    fn finish_chain_halt(&mut self, found: Option<&[Vec<u8>]>) {
+        self.reading_halt = false;
+        let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
+
+        let (status, stale) = match found {
+            Some(values) => {
+                let status = upgrade::read(values, tip);
+                self.halt = Some((std::time::Instant::now(), status.clone()));
+                (status, false)
+            }
+            // The read failed. Stand in with the last good one for a bounded
+            // window — and **do not store this**, or one dropped connection
+            // pins the banner for as long as the window lasts and every failed
+            // refresh extends it.
+            None => match &self.halt {
+                Some((at, last)) if at.elapsed() < Self::HALT_STANDBY => (last.clone(), true),
+                // Nothing to stand in with, or too old. Unknown, which outranks
+                // info and is never the same as clear.
+                _ => (upgrade::Status::unknown(), false),
+            },
+        };
+
+        if status.conversions_halted {
+            tracing::warn!(
+                reason = %status.note.code,
+                "the protocol has conversions switched off on this chain",
+            );
+        }
+        let _ = self.events.send(Event::ChainHalt(halt_vm(&status, stale)));
     }
 
     /// Ask the chain what the unnamed identities in the address book are called.
@@ -4425,6 +4546,19 @@ impl Core {
     fn prepare_conversion(&mut self) {
         self.wallet.touch();
 
+        // The protocol is not taking conversions. Refused here rather than let
+        // through to a node that would reject it in validation: the quote came
+        // back and describes a market nobody can trade in, and signing it costs
+        // a key, a round trip and somebody's confidence for nothing.
+        if self
+            .halt
+            .as_ref()
+            .is_some_and(|(_, status)| status.conversions_halted)
+        {
+            self.refuse_conversion(NoteVm::plain("halt-conversions"));
+            return;
+        }
+
         let ready = match convert::check(
             &self.convert,
             &self.market,
@@ -6149,6 +6283,17 @@ fn send_note(error: &send::SendError) -> NoteVm {
             NoteVm::plain("send-not-enough-spendable")
         }
         send::SendError::Flow(_) => NoteVm::plain("send-build-failed"),
+    }
+}
+
+/// The halt as the interface receives it.
+fn halt_vm(status: &upgrade::Status, stale: bool) -> pecu_protocol::ChainHaltVm {
+    pecu_protocol::ChainHaltVm {
+        severity: status.severity.label().to_string(),
+        note: status.note.clone(),
+        conversions_halted: status.conversions_halted,
+        in_blocks: status.in_blocks,
+        stale,
     }
 }
 

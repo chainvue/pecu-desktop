@@ -386,6 +386,27 @@ export component NoteText inherits Text {
         : root.note.code == "convert-refused-by-node"
             ? @tr("The network refused this conversion. Nothing was spent.")
 
+        // ── What the protocol has switched off ──────────────────────────
+        //
+        // The **effect**, never the switch's name. `disabledefi` means nothing
+        // to anybody; "conversions are halted" does.
+        : root.note.code == "halt-conversions"
+            ? @tr("The network has conversions switched off. Prices are still published, and nothing can be traded at them — a conversion signed now would be rejected before it reached a block.")
+        : root.note.code == "halt-pbaas-bridge"
+            ? @tr("Transfers between Verus chains are switched off. Conversions on this chain are unaffected.")
+        : root.note.code == "halt-eth-gateway"
+            ? @tr("The Ethereum bridge is switched off. Conversions on this chain are unaffected.")
+        : root.note.code == "chain-housekeeping"
+            ? @tr("The protocol has a routine change in force. Nothing you can do here is affected.")
+        : root.note.code == "halt-unrecognised"
+            ? @tr("The protocol has a change in force that this build does not recognise: {0}", root.note.args[0])
+        : root.note.code == "halt-unreadable"
+            ? @tr("The chain published something about a protocol change that this build could not read.")
+        : root.note.code == "halt-unknown"
+            ? @tr("Could not check whether the network is taking conversions. It may not be.")
+        : root.note.code == "halt-unconfigured"
+            ? @tr("This build does not know where this chain announces protocol changes, so it cannot say whether conversions are being taken.")
+
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
 
@@ -505,6 +526,15 @@ export component NoticeTitle inherits Text {
         // and the difference is invisible from here otherwise.
         : root.note.code == "convert-refused-by-node"
             ? @tr("The network refused this conversion — nothing was spent")
+        : root.note.code == "halt-conversions"
+            ? @tr("Conversions are switched off on this chain")
+        : root.note.code == "halt-pbaas-bridge" ? @tr("Transfers between chains are switched off")
+        : root.note.code == "halt-eth-gateway" ? @tr("The Ethereum bridge is switched off")
+        : root.note.code == "chain-housekeeping" ? @tr("A routine protocol change is in force")
+        : root.note.code == "halt-unrecognised" ? @tr("An unrecognised protocol change is in force")
+        : root.note.code == "halt-unreadable" ? @tr("A protocol change could not be read")
+        : root.note.code == "halt-unknown" ? @tr("Could not check the network's status")
+        : root.note.code == "halt-unconfigured" ? @tr("This chain's status cannot be checked")
         : root.note.code == "convert-below-floor"
             ? @tr("The price moved: the node now expects {0}, and {1} was required",
                   root.note.args[0], root.note.args[1])

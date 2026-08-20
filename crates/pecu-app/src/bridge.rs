@@ -195,6 +195,15 @@ fn apply(ui: &AppWindow, event: Event) {
 
         Event::MarketDetail(detail) => apply_market_detail(ui, detail.as_deref()),
 
+        Event::ChainHalt(halt) => {
+            let state = ui.global::<pecu_ui::HaltState>();
+            state.set_severity(halt.severity.clone().into());
+            state.set_note(note(&halt.note));
+            state.set_conversions_halted(halt.conversions_halted);
+            state.set_in_blocks(i32::try_from(halt.in_blocks).unwrap_or(i32::MAX));
+            state.set_stale(halt.stale);
+        }
+
         Event::ConvertQuote(quote) => {
             let state = ui.global::<pecu_ui::ConvertState>();
             state.set_from_name(quote.from.clone().into());

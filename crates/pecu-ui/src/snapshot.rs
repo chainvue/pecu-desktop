@@ -216,6 +216,16 @@ pub const CASES: &[Case] = &[
         crate::fixtures::converting_rejected,
     ),
     ("convert", "convert-sent", crate::fixtures::converting_sent),
+    (
+        "convert",
+        "convert-halted",
+        crate::fixtures::converting_halted,
+    ),
+    (
+        "convert",
+        "convert-halt-scheduled",
+        crate::fixtures::converting_halt_scheduled,
+    ),
     ("activity", "history", crate::fixtures::history),
     (
         "activity",

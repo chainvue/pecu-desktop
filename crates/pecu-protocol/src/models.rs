@@ -729,6 +729,37 @@ pub struct KnownAddressVm {
     pub summary: String,
 }
 
+/// What the protocol has switched off on this chain, if anything.
+///
+/// # Why a wallet needs this at all
+///
+/// Verus can halt conversions chain-wide at consensus level, and **nothing on
+/// the read path changes shape while it is on**: pools still list, states still
+/// answer, `estimateconversion` still quotes a price. A wallet that inferred
+/// health from a successful quote would show green through a total halt and let
+/// somebody sign a transaction the network throws away in validation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainHaltVm {
+    /// "clear" · "info" · "warning" · "unknown" · "critical".
+    ///
+    /// `unknown` is its own state and outranks `info`: a chain nobody could
+    /// reach might be halted, and missing data must never read as working.
+    pub severity: String,
+    /// What stops working, as a named reason — never the switch's own name.
+    /// `disabledefi` means nothing to anybody; "conversions are halted" does.
+    pub note: NoteVm,
+    /// Whether a conversion would be rejected right now. The one field that
+    /// changes what the interface lets somebody do.
+    pub conversions_halted: bool,
+    /// Blocks until it lands. **Zero means it is already in force**, and the
+    /// note says what it stops either way.
+    pub in_blocks: u32,
+    /// Whether this is a reading that has been stood in for — see the standby
+    /// window in `Core::read_chain_halt`. Worth saying: it is a fact measured
+    /// slightly earlier, not a guess, and not a fresh one either.
+    pub stale: bool,
+}
+
 // ── The chart ───────────────────────────────────────────────────────────────
 
 /// One reading of the balance.

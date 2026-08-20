@@ -5,7 +5,7 @@ import { ListView } from "std-widgets.slint";
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Eyebrow, Money, TxId } from "../components/base.slint";
 import { Icon } from "../components/icons.slint";
-import { Actions, ConvertState, MarketState } from "../vm/state.slint";
+import { Actions, ConvertState, HaltState, MarketState } from "../vm/state.slint";
 import { Field, QuoteLine } from "../components/form.slint";
 import { Notice, NoteText, NoticeTitle } from "../components/note.slint";
 
@@ -142,6 +142,31 @@ component ConvertForm inherits HorizontalLayout {
             under: @tr("Estimated. The chain does not guarantee it.");
         }
 
+        // What the protocol has switched off, when it has switched anything off.
+        //
+        // Above the button rather than beside it: this is the reason the button
+        // is dead, and a disabled control with its explanation somewhere else
+        // is a control people press twice and then give up on.
+        //
+        // Shown for a warning too — a bridge halt does not stop a conversion,
+        // and saying so beats leaving somebody to wonder.
+        if HaltState.severity == "critical" || HaltState.severity == "warning"
+            || HaltState.severity == "unknown": Notice {
+            headline: HaltState.in-blocks > 0
+                ? @tr("In {} blocks", HaltState.in-blocks)
+                : @tr("From the network");
+            body: haltwords.text;
+            tone: HaltState.severity == "critical" ? "negative" : "warning";
+        }
+
+        // The sentence itself, resolved once. `Notice` takes strings, and this
+        // is the one place a `Note` has to become one.
+        haltwords := NoteText {
+            note: HaltState.note;
+            visible: false;
+            height: 0px;
+        }
+
         // There was a card here saying the wallet could price a conversion and
         // could not make one. It can now, so the button is back — and it is
         // back the way the send form's is: it builds and signs, and it does not
@@ -151,10 +176,21 @@ component ConvertForm inherits HorizontalLayout {
         // `enabled` on the core's verdict, not on a length check here: "ready"
         // means a route exists, the amount parses and the wallet holds it, and
         // none of those is a property of the text in a field.
+        // Dead while the protocol is not taking conversions.
+        //
+        // The quote above it is still real — the pools have reserves and the
+        // node will price them all day — and it describes a market nobody can
+        // trade in. Letting somebody sign that costs a key, a round trip and
+        // their confidence, and the transaction is rejected in validation
+        // before it reaches a block. The core refuses it too; this is so
+        // nobody gets that far.
         Btn {
-            text: ConvertState.busy ? @tr("Preparing…") : @tr("Review conversion");
+            text: HaltState.conversions-halted ? @tr("Conversions are switched off")
+                : ConvertState.busy ? @tr("Preparing…")
+                : @tr("Review conversion");
             variant: "primary";
-            enabled: ConvertState.ready && !ConvertState.busy;
+            enabled: ConvertState.ready && !ConvertState.busy
+                && !HaltState.conversions-halted;
             clicked => { ConvertState.review(); }
         }
 
