@@ -20,6 +20,15 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The first run filled the disk while linking pecu-ui. `target` holds two
+  # full sets of artefacts — clippy and rustc key their metadata differently,
+  # so nothing is shared between the two commands — and debug information is
+  # the bulk of both. `line-tables-only` keeps file and line in a backtrace,
+  # which is the part worth having when a test fails, and drops the rest.
+  # Incremental artefacts are pure waste on a machine that compiles once.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   checks:
@@ -27,6 +36,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # The image ships toolchains this repository has no use for, and they
+      # cost more disk than the whole build needs. Removing them is cheaper
+      # than being clever about what to keep in `target`.
+      - name: Disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost /usr/local/.ghcup
+          df -h /
 
       # What the build asks pkg-config for, and the compiler SQLite is built
       # with — `rusqlite` compiles it from source rather than linking, which is
@@ -64,6 +83,13 @@ jobs:
 
       - name: Checks
         run: scripts/check.sh
+
+      # So that the next disk failure is one number away rather than a guess.
+      - name: Disk after
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
 
       # A failed visual test writes a diff image beside every reference it did
       # not match. Without these the log says which screens changed but not
