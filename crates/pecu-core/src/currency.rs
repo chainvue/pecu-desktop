@@ -124,7 +124,7 @@ pub fn row(summary: &CurrencySummary, tip: u32) -> pecu_protocol::CurrencyVm {
         // No trailing `@`. That suffix is the identity convention, and none of
         // the currency names on VRSCTEST carries one — copying it here would
         // print a name that does not exist.
-        name: summary.fully_qualified_name.clone(),
+        name: pecu_protocol::format::safe_name(&summary.fully_qualified_name),
         address: summary.currency_id.clone(),
         kind: kind.label().to_string(),
         tone: kind.tone().to_string(),
@@ -208,7 +208,9 @@ pub fn refusal(lookup: &Lookup, can_sign: bool, status: &str) -> NoteVm {
     match lookup {
         Lookup::Defines(summary) => NoteVm::with(
             "eligible-already-defines",
-            [summary.fully_qualified_name.clone()],
+            [pecu_protocol::format::safe_name(
+                &summary.fully_qualified_name,
+            )],
         ),
         Lookup::Unknown(_) => NoteVm::plain("eligible-unknown"),
         Lookup::None if !can_sign => NoteVm::plain("eligible-cannot-sign"),
@@ -653,7 +655,7 @@ pub fn choices(
         .into_iter()
         .take(SHOWN)
         .map(|(_, _, summary)| pecu_protocol::CurrencyPickVm {
-            name: summary.fully_qualified_name.clone(),
+            name: pecu_protocol::format::safe_name(&summary.fully_qualified_name),
             address: summary.currency_id.clone(),
             kind: Kind::of(summary.options).label().to_string(),
             // The one fact about a currency that changes what using it as a

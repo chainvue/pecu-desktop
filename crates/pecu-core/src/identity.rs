@@ -273,7 +273,7 @@ pub fn row_of(record: &IdentityRecord, tip: u32, mine: &[String]) -> pecu_protoc
     let at = as_at_address(record);
     let state = status(&at, tip);
     pecu_protocol::IdentityVm {
-        name: record.fully_qualified_name.clone(),
+        name: pecu_protocol::format::safe_name(&record.fully_qualified_name),
         address: record.identity_address.clone(),
         status: state.label().to_string(),
         tone: state.tone().to_string(),
@@ -442,7 +442,7 @@ pub fn detail(
         .to_string();
 
     pecu_protocol::IdentityDetailVm {
-        name: record.fully_qualified_name.clone(),
+        name: pecu_protocol::format::safe_name(&record.fully_qualified_name),
         address: record.identity_address.clone(),
         status: state.label().to_string(),
         tone: state.tone().to_string(),

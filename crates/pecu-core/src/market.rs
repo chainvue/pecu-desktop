@@ -94,6 +94,9 @@ pub struct Pool {
     /// The block its state was taken at. Shown, because a price is only as
     /// current as the notarization it came out of.
     pub height: u32,
+    /// Its launch failed and every contribution was returned. Never a venue —
+    /// see [`Pool::from_converter`].
+    pub refunded: bool,
     pub supply: f64,
     pub reserves: Vec<Reserve>,
     /// What this pool published before now, oldest first. Empty until somebody
@@ -142,6 +145,22 @@ impl Pool {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
             height: entry.height,
+            // A basket whose launch **failed**.
+            //
+            // Bit 2 of the currency state's flags. It is the one state that
+            // looks completely alive in every other field — definition,
+            // reserves, supply, a start block — and listing it as a market is
+            // the worst thing this file can do, because everything about the
+            // row would be true except that nobody can trade through it.
+            //
+            // **Unverified against a real one.** Nothing on VRSCTEST carries
+            // this bit today — every converter there reads 49, or 27 while it
+            // is still in its launch window — so what is checked is the
+            // arithmetic and not the daemon's agreement with it.
+            refunded: state
+                .get("flags")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|flags| flags & REFUNDED != 0),
             supply: state
                 .get("supply")
                 .and_then(serde_json::Value::as_f64)
@@ -218,6 +237,37 @@ impl Pool {
     /// reserve list alone would drop every basket from its own market.
     pub fn trades(&self, id: &str) -> bool {
         self.id == id || self.reserve(id).is_some()
+    }
+
+    /// Whether anything can actually be converted through this pool.
+    ///
+    /// Three conditions, and each one describes a basket that is real and is
+    /// not a market:
+    ///
+    ///   * **started** — a launch window is not a venue; the chain rejects an
+    ///     ordinary conversion before it and a preconversion after it.
+    ///   * **not refunded** — the launch failed and the money went back.
+    ///   * **supply above zero** — a basket with no units issued has nothing to
+    ///     convert through, whatever its reserves say.
+    pub fn is_venue(&self) -> bool {
+        self.started && !self.refunded && self.supply > 0.0
+    }
+
+    /// Whether this pool holds `id` in a quantity somebody could trade against.
+    ///
+    /// Stricter than [`Pool::trades`], and the difference is the point: a
+    /// basket names its reserves in its definition and may hold **none** of
+    /// one. That leg prices nothing and converts nothing, and a row built from
+    /// it looks tradeable and is not.
+    ///
+    /// The pool's own currency passes on its supply rather than on a reserve
+    /// balance, because a basket does not hold itself.
+    pub fn holds(&self, id: &str) -> bool {
+        if self.id == id {
+            return self.supply > 0.0;
+        }
+        self.reserve(id)
+            .is_some_and(|reserve| reserve.held.is_finite() && reserve.held > 0.0)
     }
 
     /// What one `target` is worth in `quote`, within this pool.
@@ -417,7 +467,7 @@ impl Book {
         let mut pools: Vec<&Pool> = self
             .pools
             .iter()
-            .filter(|pool| pool.started && pool.trades(target))
+            .filter(|pool| pool.is_venue() && pool.holds(target))
             .collect();
         pools.sort_by(|a, b| {
             let depth = |pool: &Pool| pool.depth(target, &self.quote).unwrap_or_default();
@@ -557,6 +607,10 @@ impl Book {
 /// notarizes twice a month fills none of the short ones. One honest window
 /// beats five buttons, four of which draw a straight line.
 pub const WINDOW_DAYS: u32 = 30;
+/// Bit 2 of a currency state's flags: the launch failed and everything paid
+/// in was returned.
+const REFUNDED: u64 = 4;
+
 /// Blocks in a day on this chain, near enough — a minute a block.
 pub const BLOCKS_PER_DAY: u32 = 1440;
 

@@ -274,3 +274,128 @@ mod tests {
         assert_eq!(group("1187149"), "1 187 149");
     }
 }
+
+/// A name the chain supplied, made safe to put in front of somebody.
+///
+/// Named `safe_name` and not `chain_name`, which in this workspace already
+/// means the name *of a chain* — `Core::chain_name` returns "VRSCTEST". Two
+/// things one letter apart in the same file is how the wrong one gets called.
+///
+/// # Why any of this is necessary
+///
+/// **Names on Verus are permissionless.** A currency's `fullyqualifiedname` and
+/// a VerusID's name are chosen by whoever registered them, and they reach this
+/// wallet's most consequential surfaces: the row somebody clicks to pay, the
+/// review they read before signing, the list of people they have paid before.
+///
+/// Two families of character make that dangerous, and neither is visible:
+///
+///   * **Bidi controls** re-order the text around them. `RLO` inside a name
+///     makes the rest of the line render right-to-left, so a name can be
+///     constructed to display as an entirely different one. This is the
+///     [Trojan Source] class of attack, and a wallet is exactly the place it
+///     pays off.
+///   * **Zero-width and other invisible formatting characters** let two
+///     distinct names render identically, so one identity can be made to look
+///     like another that the reader already trusts.
+///
+/// Control characters are removed with them: a newline in a name breaks a row
+/// in half, and a name is a single line by definition.
+///
+/// # What this does not do
+///
+/// It does not shorten, transliterate, or reject anything else. Emoji are
+/// legitimate and common — VRSCTEST has `Token🏭Factory` and `🌲Token AMM1🌲` —
+/// and a wallet that mangled those would be wrong far more often than it was
+/// right. Nor does it make a name safe to *identify* by: **everything in this
+/// workspace keys on the i-address**, and this is about what is displayed, not
+/// about what is decided.
+///
+/// An empty result is a real answer, and the callers already have the right
+/// fallback for it: a name that was nothing but invisible characters becomes
+/// the empty string, and `name_of` then shows the i-address, which is ugly and
+/// cannot be forged.
+///
+/// [Trojan Source]: https://trojansource.codes
+#[must_use]
+pub fn safe_name(raw: &str) -> String {
+    raw.chars().filter(|c| !is_deceptive(*c)).collect()
+}
+
+/// Whether a character can change what the text around it looks like without
+/// being seen itself.
+fn is_deceptive(c: char) -> bool {
+    // A name is one line, so anything Unicode calls a control goes.
+    if c.is_control() {
+        return true;
+    }
+
+    matches!(c,
+        // Explicit bidirectional formatting: the marks, the embeddings and
+        // overrides with their terminator, and the isolates.
+        '\u{061C}'                  // Arabic letter mark
+        | '\u{200E}'..='\u{200F}'    // LRM, RLM
+        | '\u{202A}'..='\u{202E}'    // LRE, RLE, PDF, LRO, RLO
+        | '\u{2066}'..='\u{2069}'    // LRI, RLI, FSI, PDI
+        // Zero-width and other invisibles that join, separate or simply hide.
+        | '\u{00AD}'                // soft hyphen
+        | '\u{180E}'                // Mongolian vowel separator
+        | '\u{200B}'..='\u{200D}'    // ZWSP, ZWNJ, ZWJ
+        | '\u{2060}'..='\u{2064}'    // word joiner and the invisible operators
+        | '\u{FEFF}'                // zero-width no-break space
+    )
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::safe_name;
+
+    /// A right-to-left override makes the text after it render backwards, so a
+    /// name can be built to display as a different one. This is the attack the
+    /// function exists for.
+    #[test]
+    fn a_bidi_override_is_removed() {
+        let deceptive = "safe\u{202E}dlog\u{202C}";
+        assert_eq!(safe_name(deceptive), "safedlog");
+        assert!(!safe_name(deceptive).chars().any(char::is_control));
+    }
+
+    /// Two names that render identically and are not the same name.
+    #[test]
+    fn zero_width_characters_cannot_hide_a_difference() {
+        assert_eq!(safe_name("dude\u{200B}.VRSCTEST@"), "dude.VRSCTEST@");
+        assert_eq!(safe_name("du\u{200D}de.VRSCTEST@"), "dude.VRSCTEST@");
+        assert_eq!(safe_name("\u{FEFF}Bridge.vETH"), "Bridge.vETH");
+    }
+
+    /// A newline in a name would break the row it is drawn in.
+    #[test]
+    fn a_name_is_one_line() {
+        assert_eq!(safe_name("Bridge\n.vETH"), "Bridge.vETH");
+        assert_eq!(safe_name("Bridge\t.vETH"), "Bridge.vETH");
+    }
+
+    /// **Emoji stay.** They are legitimate and common — these two are real
+    /// currencies on VRSCTEST — and a wallet that mangled them would be wrong
+    /// far more often than it was right.
+    #[test]
+    fn the_names_a_real_chain_actually_has_are_left_alone() {
+        for name in [
+            "Token\u{1F3ED}Factory",
+            "\u{1F332}Token AMM1\u{1F332}",
+            "Bridge.vETH",
+            "dude.VRSCTEST@",
+            "VRSC-BTC-USD-EUR-GOLD",
+            "kali-3-seed162-broken_press-mandala.mcp3",
+        ] {
+            assert_eq!(safe_name(name), name, "{name} was altered");
+        }
+    }
+
+    /// A name that was nothing but invisibles becomes nothing, and the callers
+    /// already fall back to the i-address — which is ugly and cannot be forged.
+    #[test]
+    fn a_name_made_only_of_invisibles_is_empty() {
+        assert!(safe_name("\u{200B}\u{200C}\u{FEFF}").is_empty());
+    }
+}

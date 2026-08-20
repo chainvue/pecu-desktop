@@ -2685,7 +2685,10 @@ impl Core {
                     .into_iter()
                     .filter_map(|address| {
                         let record = chain.identity(&address).ok()?;
-                        Some((address, record.fully_qualified_name))
+                        Some((
+                            address,
+                            pecu_protocol::format::safe_name(&record.fully_qualified_name),
+                        ))
                     })
                     .collect();
                 Work::AddressNames(found)
@@ -4163,7 +4166,9 @@ impl Core {
                         .into_iter()
                         .filter(|id| !known.contains(id.as_str()))
                         .filter_map(|id| {
-                            let name = chain.currency_definition(&id).ok()?.fully_qualified_name;
+                            let found = chain.currency_definition(&id).ok()?;
+                            let name =
+                                pecu_protocol::format::safe_name(&found.fully_qualified_name);
                             Some((id, name))
                         })
                         .collect();
@@ -4224,7 +4229,7 @@ impl Core {
             .map(|summary| {
                 (
                     summary.currency_id.clone(),
-                    summary.fully_qualified_name.clone(),
+                    pecu_protocol::format::safe_name(&summary.fully_qualified_name),
                 )
             })
             .collect();
@@ -5648,7 +5653,7 @@ impl Core {
 
                 self.identity = Some(Identity {
                     typed: typed.to_string(),
-                    name: record.fully_qualified_name.clone(),
+                    name: pecu_protocol::format::safe_name(&record.fully_qualified_name),
                     address: record.identity_address.clone(),
                     revoked: record.is_revoked(),
                     was,
