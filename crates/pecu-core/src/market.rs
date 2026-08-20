@@ -402,6 +402,21 @@ impl Book {
     /// `None` when the currency has no price, because a quantity with no price
     /// is not a value. That is a different answer from zero and the table keeps
     /// it apart.
+    ///
+    /// # Why a basket counts itself
+    ///
+    /// The listing specification this follows says a basket is listed when
+    /// **another** basket holds it as a reserve. Measured against VRSCTEST on
+    /// 2026-08-20, that rule removes **twenty-one of the twenty-four live
+    /// baskets** — including `Bridge.vETH`, the deepest market on the chain,
+    /// and every `VRSC-*` index basket. Three are held by another basket.
+    ///
+    /// That rule is right for a board, where "has a market" means somebody
+    /// prices it. It is wrong for a wallet, where the question is "can I trade
+    /// this" — and a basket is bought by converting *into* it
+    /// (`ConversionKind::IntoFractional`), through itself, with no second
+    /// basket involved. So a started basket with a supply counts as its own
+    /// venue here, and the deviation is deliberate.
     pub fn pooled(&self, target: &str) -> Option<f64> {
         let price = self.quote_for(target)?.price;
         if !price.is_finite() || price < 0.0 {
@@ -909,9 +924,22 @@ pub fn detail(
             .map_or_else(|| UNKNOWN.to_string(), pecu_protocol::format::approx),
     }];
     if let Some(pool) = book.pools.iter().find(|pool| pool.id == address) {
+        // Only for a basket, which is why this sits inside the lookup: `supply`
+        // is a consensus quantity for a fractional and nothing at all for a
+        // chain's native coin or a gateway-issued token. The node answers `0`
+        // for both of those, and rendering it would be a confidently wrong
+        // number rather than a missing one.
+        //
+        // A basket reporting zero gets the same treatment. It is not a venue —
+        // see `Pool::is_venue` — so it should not be reachable here, and `—`
+        // beats a figure that says a market exists with nothing in it.
         stats.push(StatVm {
             label: NoteVm::plain("stat-supply"),
-            value: pecu_protocol::format::approx(pool.supply),
+            value: if pool.supply > 0.0 {
+                pecu_protocol::format::approx(pool.supply)
+            } else {
+                UNKNOWN.to_string()
+            },
         });
         stats.push(StatVm {
             label: NoteVm::plain("stat-reserves"),
@@ -1287,6 +1315,41 @@ mod tests {
         assert!(
             basket > reserve,
             "the basket holds more than any one of its reserves: {basket} vs {reserve}",
+        );
+    }
+
+    /// A basket reporting no supply shows no supply, rather than zero.
+    ///
+    /// The node answers `0` for every chain's native coin and every
+    /// gateway-issued token, because supply is a consensus quantity only for a
+    /// fractional. Rendering that as "0 in circulation" is a confidently wrong
+    /// number; this screen only ever shows the figure for a basket, and even
+    /// there a zero is `—`.
+    #[test]
+    fn a_supply_of_zero_is_shown_as_unknown() {
+        let mut book = book();
+        let target = book.pools[0].id.clone();
+        book.pools[0].supply = 0.0;
+
+        let detail = detail(&book, &target, &names(), "DAI.vETH", NOW);
+        let supply = detail
+            .stats
+            .iter()
+            .find(|stat| stat.label.code == "stat-supply")
+            .expect("a basket has a supply row");
+        assert_eq!(supply.value, UNKNOWN);
+    }
+
+    /// A currency that is not a basket has no supply row at all.
+    #[test]
+    fn a_currency_that_is_not_a_basket_is_not_given_a_supply() {
+        let detail = detail(&book(), VRSCTEST, &names(), "DAI.vETH", NOW);
+        assert!(
+            !detail
+                .stats
+                .iter()
+                .any(|stat| stat.label.code == "stat-supply"),
+            "VRSCTEST is a chain currency, and the node reports 0 for it",
         );
     }
 
