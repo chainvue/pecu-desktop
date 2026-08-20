@@ -15,6 +15,23 @@
 //! Updating without looking defeats the point: the test cannot tell an
 //! improvement from a regression, only that something moved.
 //!
+//! # One reference set per platform
+//!
+//! References live in `tests/snapshots/<os>/` and the test only ever reads its
+//! own. The software renderer is deterministic on one machine but not across
+//! them: the macOS set this project started with differs from what Ubuntu
+//! draws on 116 of the 132 images, by one to ten pixels each, almost all of it
+//! on the wordmark's cursor. Every one of those is a subpixel edge and none of
+//! them is a layout change — but at a tolerance of zero the comparison cannot
+//! say so, and raising the tolerance would hide the one-pixel move this test
+//! exists to catch. Splitting the references keeps the comparison exact.
+//!
+//! The cost is real and belongs here in writing: a deliberate visual change
+//! has to be re-recorded on **every** platform that has a set, on that
+//! platform, or the tip is red on the ones that were missed. A platform with
+//! no set yet records one on its first run and reports it as recorded rather
+//! than verified — which is not the same as approved. Look at the images.
+//!
 //! # Why everything happens in one `#[test]`
 //!
 //! Slint permits exactly one platform per process, and `snapshot::install()`
@@ -29,13 +46,22 @@ use pecu_ui::snapshot;
 
 /// Per-channel tolerance.
 ///
-/// Zero. The software renderer is deterministic on a given Slint version, and a
-/// tolerance is where a real one-pixel misalignment goes to hide. If this ever
-/// has to be raised, the reason belongs here in writing.
+/// Zero. The software renderer is deterministic on a given Slint version *on a
+/// given platform* — which is why the references are split per platform rather
+/// than compared loosely — and a tolerance is where a real one-pixel
+/// misalignment goes to hide. If this ever has to be raised, the reason
+/// belongs here in writing.
 const TOLERANCE: u8 = 0;
 
+/// This platform's references, and no other platform's.
+///
+/// `std::env::consts::OS` is the same spelling the target triple uses —
+/// `linux`, `macos`, `windows` — so the directory name is not a second list to
+/// keep in step with anything.
 fn snapshot_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/snapshots")
+        .join(std::env::consts::OS)
 }
 
 #[test]
@@ -80,8 +106,9 @@ fn the_interface_matches_its_reference_images() {
         // Not a silent pass: writing a reference means nothing was verified, and
         // saying so is the difference between "approved" and "recorded".
         eprintln!(
-            "wrote {} reference image(s) — these were RECORDED, not verified: {}",
+            "wrote {} {} reference image(s) — these were RECORDED, not verified: {}",
             written.len(),
+            std::env::consts::OS,
             written.join(", "),
         );
     }
@@ -92,8 +119,11 @@ fn the_interface_matches_its_reference_images() {
          A diff image was written beside each reference. If the change was \
          intended, re-record with:\n    \
          UPDATE_SNAPSHOTS=1 cargo test -p pecu-ui --test visual\n  \
-         and look at docs/shots/ before committing.",
+         and look at docs/shots/ before committing. That re-records the {os} \
+         set and nothing else: every other platform's references have to be \
+         re-recorded on that platform, or its tip goes red.",
         failures.join("\n  "),
+        os = std::env::consts::OS,
     );
 }
 
