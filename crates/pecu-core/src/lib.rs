@@ -3775,76 +3775,13 @@ const SCAN_ATTEMPTS: u32 = 3;
                     }
                 };
 
-                let mut restart = false;
-                let outcome = (|| -> Result<(), String> {
-                    let to = server.synced_height().map_err(|e| e.to_string())?;
-
-                    // Two, at the earliest, and not for a chain reason.
-                    //
-                    // Scanning block N needs the commitment tree as it stood at
-                    // N-1, because note positions are counted forward from that
-                    // frontier. For N=1 that is height 0 — and height 0 cannot
-                    // be asked for at all: protobuf omits zero-valued fields
-                    // from the wire, so a `BlockID { height: 0 }` arrives as an
-                    // empty message and lightwalletd answers "request for
-                    // unspecified identifier".
-                    //
-                    // Sapling activated at height 1 on VRSCTEST, so starting
-                    // there hit exactly that. Block 1 is therefore unscannable;
-                    // it is the chain's first block and carries no Sapling
-                    // output, so nothing is lost — but it is a limit of the
-                    // protocol rather than a choice, and worth saying so.
-                    let start = from
-                        .unwrap_or(server.info().sapling_activation_height)
-                        .max(2);
-
-                    let mut at = start;
-                    loop {
-                        let until = at.saturating_add(stride).min(to);
-
-                        // Retried, because a transport failure on a scan this
-                        // long is ordinary rather than exceptional. One measured
-                        // here was "Error while decoding chunks" on a range that
-                        // answered perfectly a minute later.
-                        let mut attempt = 1;
-                        loop {
-                            match watching.sync(server.client(), at, until) {
-                                Ok(_) => break,
-                                // Not retryable and not survivable: retrying
-                                // fails the same way for as long as the fork
-                                // stands, and the state that cannot be
-                                // continued is the state about to be written
-                                // down. Say so and let the actor discard it.
-                                Err(error @ shielded::ShieldedError::ReorgTooDeep) => {
-                                    restart = true;
-                                    return Err(error.to_string());
-                                }
-                                Err(error) if attempt < attempts => {
-                                    tracing::warn!(
-                                        %error, attempt, at, until,
-                                        "a shielded scan stride failed; retrying",
-                                    );
-                                    attempt += 1;
-                                    std::thread::sleep(std::time::Duration::from_secs(
-                                        u64::from(attempt),
-                                    ));
-                                }
-                                Err(error) => return Err(error.to_string()),
-                            }
-                        }
-
-                        let _ = progress.send(Work::ScanProgress {
-                            scanned_to: watching.scanned_to().unwrap_or(until),
-                            tip: to,
-                            start,
-                        });
-                        if until >= to {
-                            break;
-                        }
-                        at = until + 1;
-                    }
-                    Ok(())
-                })();
+                let outcome =
+                    walk_the_chain(&mut watching, &server, from, stride, attempts, &progress);
+                let restart = matches!(outcome, Err(ScanStop::StartAgain(_)));
+                let outcome = match outcome {
+                    Ok(()) => Ok(()),
+                    Err(ScanStop::Stopped(why) | ScanStop::StartAgain(why)) => Err(why),
+                };
 
                 // The scan comes back either way. What it managed is worth
                 // keeping even when the last stride failed — the alternative is
@@ -7468,6 +7405,141 @@ fn payment_summary(payments: i64, paid_at: Option<i64>, now: i64) -> String {
 /// A wall clock, not a monotonic one: it is compared against block timestamps,
 /// which are wall-clock too. A user changing their clock changes what the list
 /// says, which is correct — it is their clock the list is relative to.
+/// Why a scan stopped before it reached the tip.
+enum ScanStop {
+    /// It failed, and whatever it managed is still worth keeping.
+    Stopped(String),
+    /// It failed in a way that poisons what was kept, so the caller must throw
+    /// that away and scan again from the birthday. Only a reorg deeper than the
+    /// scan can verify a rollback to reaches this.
+    StartAgain(String),
+}
+
+/// Walk from where this scan left off to the tip, in strides.
+///
+/// Extracted from the worker closure rather than written inline, so that the
+/// two decisions inside it — where to resume, and which failures are worth
+/// retrying — are readable without the dispatch around them.
+///
+/// # Why it strides at all
+///
+/// A first scan with no birthday covers the whole chain. In one call that is
+/// minutes of silence; in strides the interface can say how far it has got, and
+/// a failure costs one stride rather than the lot.
+fn walk_the_chain(
+    watching: &mut shielded::Shielded,
+    server: &pecu_chain::LightServer,
+    from: Option<u64>,
+    stride: u64,
+    attempts: u32,
+    progress: &mpsc::UnboundedSender<Work>,
+) -> Result<(), ScanStop> {
+    let to = server
+        .synced_height()
+        .map_err(|e| ScanStop::Stopped(e.to_string()))?;
+
+    let start = scan_resumes_at(
+        watching.scanned_to(),
+        from,
+        server.info().sapling_activation_height,
+    );
+
+    // The server has nothing this wallet has not already read.
+    //
+    // Ordinary, not a fault: it is every scan that runs while no new block has
+    // been mined. It is also what a genuinely lagging server looks like — a
+    // replica that rotated in with less of the same chain — and the SDK is
+    // explicit that the answer to that is to wait rather than to roll anything
+    // back. Either way there is nothing to do and nothing to say.
+    if start > to {
+        tracing::debug!(start, to, "nothing new to scan");
+        return Ok(());
+    }
+
+    let mut at = start;
+    loop {
+        let until = at.saturating_add(stride).min(to);
+
+        // Retried, because a transport failure on a scan this long is ordinary
+        // rather than exceptional. One measured here was "Error while decoding
+        // chunks" on a range that answered perfectly a minute later.
+        let mut attempt = 1;
+        loop {
+            match watching.sync(server.client(), at, until) {
+                Ok(_) => break,
+                // Not retryable and not survivable: retrying fails the same way
+                // for as long as the fork stands, and the state that cannot be
+                // continued is the state about to be written down.
+                Err(error @ shielded::ShieldedError::ReorgTooDeep) => {
+                    return Err(ScanStop::StartAgain(error.to_string()))
+                }
+                Err(error) if attempt < attempts => {
+                    tracing::warn!(
+                        %error, attempt, at, until,
+                        "a shielded scan stride failed; retrying",
+                    );
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_secs(u64::from(attempt)));
+                }
+                Err(error) => return Err(ScanStop::Stopped(error.to_string())),
+            }
+        }
+
+        let _ = progress.send(Work::ScanProgress {
+            scanned_to: watching.scanned_to().unwrap_or(until),
+            tip: to,
+            start,
+        });
+        if until >= to {
+            return Ok(());
+        }
+        at = until + 1;
+    }
+}
+
+/// Where the next stride of a shielded scan should ask from.
+///
+/// # The bug this is named after
+///
+/// It used to be `from.unwrap_or(sapling_activation).max(2)`, and `from` is
+/// `None` for every **continuation** — that is what tells the worker "carry on
+/// where you left off". So a wallet that had scanned to 1 200 172 asked the
+/// next stride for blocks 2..=50 002, and the SDK refused it, correctly, with
+///
+/// ```text
+/// the light server is behind: it has 50002, and this wallet has scanned to 1200172
+/// ```
+///
+/// The server was not behind. The wallet was asking about the wrong end of the
+/// chain. `Shielded::sync` ignores `from` on a continuation and takes the range
+/// from its own state, so only the *upper* bound of a stride ever mattered —
+/// and that upper bound was being computed from block two.
+///
+/// It was reachable before scans were kept, on the second refresh tick of any
+/// session that had finished one; keeping them across restarts made it fire on
+/// every launch instead, which is how it was finally seen.
+fn scan_resumes_at(scanned_to: Option<u64>, from: Option<u64>, sapling_activation: u64) -> u64 {
+    match scanned_to {
+        // A continuation asks for the block after the last one that finished.
+        Some(scanned) => scanned.saturating_add(1),
+        // A first scan asks from the birthday, or from Sapling activation when
+        // there is no birthday to work from.
+        None => from.unwrap_or(sapling_activation),
+    }
+    // Two, at the earliest, and not for a chain reason.
+    //
+    // Scanning block N needs the commitment tree as it stood at N-1, because
+    // note positions are counted forward from that frontier. For N=1 that is
+    // height 0 — and height 0 cannot be asked for at all: protobuf omits
+    // zero-valued fields from the wire, so a `BlockID { height: 0 }` arrives as
+    // an empty message and lightwalletd answers "request for unspecified
+    // identifier". Sapling activated at height 1 on VRSCTEST, so starting there
+    // hit exactly that. Block 1 is the chain's first and carries no Sapling
+    // output, so nothing is lost — but it is a limit of the protocol rather
+    // than a choice.
+    .max(2)
+}
+
 /// What this wallet knows about when a shielded account could first have been
 /// paid.
 ///
@@ -8362,6 +8434,41 @@ mod tests {
         let reported = nodes.active()?.network.as_ref()?;
         let requested = nodes.requested()?;
         (reported != requested).then(|| reported.to_string())
+    }
+
+    /// A continuation asks about the end of the chain it is on, not the start.
+    ///
+    /// The regression test for the message a real wallet showed after a
+    /// restart: *"the light server is behind: it has 50002, and this wallet has
+    /// scanned to 1200172"*. Fifty thousand and two is one stride past block
+    /// two — the wallet was asking about the wrong end of the chain and
+    /// reporting the refusal as the server's fault.
+    #[test]
+    fn a_scan_resumes_after_what_it_has_already_read() {
+        // The failure, in the shape it actually happened: a restored scan, and
+        // therefore no birthday in play.
+        assert_eq!(scan_resumes_at(Some(1_200_172), None, 1), 1_200_173);
+
+        // A birthday does not drag a continuation backwards either. It is only
+        // ever the answer for a scan that has read nothing.
+        assert_eq!(
+            scan_resumes_at(Some(1_200_172), Some(1_199_000), 1),
+            1_200_173
+        );
+        assert_eq!(scan_resumes_at(None, Some(1_199_000), 1), 1_199_000);
+
+        // Without one, the whole chain — slow, and never wrong.
+        assert_eq!(scan_resumes_at(None, None, 227_520), 227_520);
+
+        // Never block zero or one, whichever way it is reached. Sapling
+        // activated at height 1 on VRSCTEST and height 0 cannot be asked for
+        // at all.
+        assert_eq!(scan_resumes_at(None, None, 1), 2);
+        assert_eq!(scan_resumes_at(None, Some(0), 1), 2);
+        assert_eq!(scan_resumes_at(Some(0), None, 1), 2);
+
+        // A tip at the very top must not wrap round to the bottom.
+        assert_eq!(scan_resumes_at(Some(u64::MAX), None, 1), u64::MAX);
     }
 
     /// The anchor the whole chart hangs from.

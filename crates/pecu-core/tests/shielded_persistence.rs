@@ -83,8 +83,15 @@ async fn settled_birthday(store: &pecu_store::Store, label: &str) -> u64 {
 
 /// A key generated here gets a birthday; the wallet then keeps what it scans,
 /// and a later launch with nothing to ask still knows the answer.
+///
+/// Three launches in sequence, and they only mean anything in order — the
+/// second has to find what the first wrote, and the third has to continue what
+/// the second restored. Splitting them into three tests would mean either
+/// sharing state between tests or scanning the chain three times, so this is
+/// one narrative and `too_many_lines` is allowed for it.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "scans against a real lightwalletd"]
+#[allow(clippy::too_many_lines)]
 async fn a_scan_is_kept_and_a_later_launch_takes_it_up() {
     let home = tempfile::tempdir().expect("tempdir");
     let handle = tokio::runtime::Handle::current();
@@ -180,6 +187,56 @@ async fn a_scan_is_kept_and_a_later_launch_takes_it_up() {
         restored.shielded_funds, scanned.shielded_funds,
         "the second launch must show what the first one found, not a fresh nothing",
     );
+    drop(dispatcher);
+    drop(events);
+
+    // ── Third launch: a real server, and therefore a real continuation ──────
+    //
+    // The one the wallet actually got wrong. A restored scan asked its next
+    // stride for blocks 2..=50002 — one stride past the bottom of the chain —
+    // and reported the refusal as though the server were at fault:
+    //
+    //   the light server is behind: it has 50002, and this wallet has scanned
+    //   to 1200172
+    //
+    // So this checks for the absence of that complaint, which means watching
+    // for a while rather than waiting for something to arrive.
+    let (dispatcher, mut events) = start(
+        &handle,
+        Config {
+            nodes: live_nodes(),
+            network: Network::Testnet,
+            mock: false,
+            home: home.path().to_path_buf(),
+        },
+    );
+
+    dispatcher.send(Command::Unlock {
+        passphrase: Secret::from(PASS),
+    });
+
+    let watch_until = tokio::time::Instant::now() + Duration::from_secs(45);
+    let mut still_scanned = false;
+    while let Ok(Some(event)) = tokio::time::timeout_at(watch_until, events.recv()).await {
+        match event {
+            Event::Notice(notice) if notice.message.code.starts_with("shielded-scan") => {
+                panic!(
+                    "a continuation complained: {} / {:?}",
+                    notice.message.code, notice.detail,
+                );
+            }
+            Event::Wallet(vm) if matches!(vm.shielded_funds, ShieldedFunds::Scanned(_)) => {
+                still_scanned = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        still_scanned,
+        "the third launch never reported a scanned balance at all",
+    );
+    println!("third launch      continued without complaint");
 }
 
 /// An imported phrase gets no birthday, however tempting it looks.
