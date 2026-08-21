@@ -73,6 +73,54 @@ pub enum KeyOrigin {
     ImportedWif,
 }
 
+/// What a wallet knows about its shielded pool, which is three things and not
+/// two.
+///
+/// * **Absent** — this key can have no shielded account, or the wallet is
+///   locked. Nothing to show and nothing to explain.
+/// * **Unscanned** — there is an account and nobody has looked in it. Saying
+///   "0" here would be a claim about somebody's money that no scan supports.
+/// * **Scanned** — a figure, which may legitimately be zero.
+///
+/// The distinction is not pedantry. "You have nothing" and "I have not looked"
+/// send a person to different places, and a wallet that conflates them tells
+/// somebody their money is gone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShieldedFunds {
+    #[default]
+    Absent,
+    Unscanned,
+    /// The balance, formatted in coins.
+    Scanned(String),
+}
+
+impl ShieldedFunds {
+    /// The figure, or empty when there is none to give.
+    pub fn balance(&self) -> &str {
+        match self {
+            Self::Scanned(coins) => coins,
+            _ => "",
+        }
+    }
+
+    /// Whether a scan has happened.
+    pub fn scanned(&self) -> bool {
+        matches!(self, Self::Scanned(_))
+    }
+
+    /// Whether there is anything in the pool worth its own line.
+    ///
+    /// A zero beside real numbers is not neutral — it is the wallet stating
+    /// that none of your coins are private, in the weight of a fact. So this is
+    /// false for a scanned zero as well as for an unscanned account.
+    pub fn any(&self) -> bool {
+        match self {
+            Self::Scanned(coins) => coins.chars().any(|c| ('1'..='9').contains(&c)),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalletVm {
     pub name: String,
@@ -103,6 +151,20 @@ pub struct WalletVm {
     /// from, which stays in `pecu-keystore` and never reaches this layer.
     pub shielded_address: String,
 
+    /// What is known about the shielded pool.
+    ///
+    /// One value rather than a balance and two flags beside it. The three
+    /// states are genuinely different and were being carried as a string that
+    /// might be empty plus a pair of booleans that had to agree with it —
+    /// which is three states encoded in eight, five of them meaningless.
+    pub shielded_funds: ShieldedFunds,
+
+    /// How far a scan in flight has got, as a percentage, or `None`.
+    ///
+    /// A first scan with no birthday covers the chain from Sapling activation —
+    /// minutes rather than seconds. Silence for that long reads as a hang.
+    pub shielded_scan: Option<u32>,
+
     /// Why this key has no shielded address, when it cannot have one.
     ///
     /// `None` while locked or when there is an address: an explanation offered
@@ -110,13 +172,6 @@ pub struct WalletVm {
     /// permanent reasons — a WIF import has no words and never will, and a
     /// phrase that is not a valid BIP-39 mnemonic cannot walk ZIP-32.
     pub shielded_note: Option<NoteVm>,
-
-    /// The shielded balance, already formatted in coins.
-    ///
-    /// Empty when there is no shielded account. **Not** "0" in that case: zero
-    /// is a balance somebody has looked for and not found, and an absent
-    /// account is a different statement.
-    pub shielded_balance: String,
 }
 
 /// One word of a recovery phrase, on its way to a screen that shows it once.
@@ -210,6 +265,12 @@ pub struct NetworkVm {
     pub tip: Option<u32>,
     pub syncing: bool,
     pub allow_mainnet_spend: bool,
+    /// The lightwalletd shielded notes are read through, or empty.
+    ///
+    /// Empty on a chain that ships no address — mainnet, today — and there the
+    /// wallet says it cannot look for notes rather than reporting a balance of
+    /// zero, which would be a claim it has not earned.
+    pub light_server: String,
     /// True when the app is running against the mock chain, so the UI can say
     /// so loudly and permanently.
     pub mock_mode: bool,

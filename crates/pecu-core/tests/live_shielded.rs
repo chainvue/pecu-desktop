@@ -1,12 +1,10 @@
 //! Scanning and witnessing against the real chain.
 //!
-//! `#[ignore]`, and it needs `scripts/grpcweb-proxy.mjs` running — Verus
-//! operates no public grpc-web endpoint. See `pecu_chain::Network::light_server`
-//! for why, and `crates/pecu-chain/tests/live_light.rs` for the recipe.
+//! `#[ignore]`, because it reaches the network. Nothing else is needed —
+//! `PECU_LIGHT_URL` overrides the server, and defaults to the one the chain
+//! ships:
 //!
-//!   INSECURE=1 node scripts/grpcweb-proxy.mjs &   # expired upstream cert
-//!   PECU_LIGHT_URL=http://127.0.0.1:8080 \
-//!     cargo test -p pecu-core --test live_shielded -- --ignored --nocapture
+//!   cargo test -p pecu-core --test live_shielded -- --ignored --nocapture
 //!
 //! # What this proves that the fixture tests cannot
 //!
@@ -36,11 +34,14 @@ const SPENT_AT: u64 = 1_167_995;
 const VALUE: u64 = 500_000_000;
 
 fn server() -> LightServer {
-    let url = std::env::var("PECU_LIGHT_URL")
+    let named = std::env::var("PECU_LIGHT_URL")
         .ok()
-        .filter(|u| !u.is_empty())
-        .expect("set PECU_LIGHT_URL — see the module docs for the proxy");
-    LightServer::connect(&url, &Network::Testnet).expect("connect to the light server")
+        .filter(|url| !url.is_empty());
+    match named {
+        Some(url) => LightServer::connect(&url, &Network::Testnet),
+        None => LightServer::shipped(&Network::Testnet),
+    }
+    .expect("connect to the light server")
 }
 
 fn watching() -> Shielded {
@@ -58,7 +59,7 @@ fn watching() -> Shielded {
 
 /// The note is found on the live chain, at the value and height it really had.
 #[test]
-#[ignore = "needs a grpc-web proxy; see the module docs"]
+#[ignore = "reaches a real lightwalletd; see the module docs"]
 fn a_real_note_is_found_by_asking_the_chain() {
     let server = server();
     let mut shielded = watching();
@@ -85,7 +86,7 @@ fn a_real_note_is_found_by_asking_the_chain() {
 /// The join that a wallet gets wrong by reporting detected notes: it is still
 /// detected in this range, and its nullifier is in it too.
 #[test]
-#[ignore = "needs a grpc-web proxy; see the module docs"]
+#[ignore = "reaches a real lightwalletd; see the module docs"]
 fn the_same_note_is_spent_eight_blocks_later() {
     let server = server();
     let mut shielded = watching();
@@ -105,7 +106,7 @@ fn the_same_note_is_spent_eight_blocks_later() {
 /// from the block the last one ended on, which is what makes a reorg loud
 /// rather than a quiet shift of every note position after it.
 #[test]
-#[ignore = "needs a grpc-web proxy; see the module docs"]
+#[ignore = "reaches a real lightwalletd; see the module docs"]
 fn a_second_scan_continues_the_first_against_the_live_chain() {
     let server = server();
     let mut shielded = watching();
@@ -135,7 +136,7 @@ fn a_second_scan_continues_the_first_against_the_live_chain() {
 
 /// A different key sees none of it, asked of the same live blocks.
 #[test]
-#[ignore = "needs a grpc-web proxy; see the module docs"]
+#[ignore = "reaches a real lightwalletd; see the module docs"]
 fn a_stranger_sees_nothing_on_the_live_chain() {
     let stranger = verus_sdk::light::derive_account(&[9u8; 64], 1, 0).expect("derive");
     let mut shielded = Shielded::watching(&ShieldedView {
@@ -151,4 +152,84 @@ fn a_stranger_sees_nothing_on_the_live_chain() {
 
     assert_eq!(shielded.balance(), 0);
     assert_eq!(shielded.note_count(), 0);
+}
+
+/// A scan can begin where a wallet with no birthday begins it.
+///
+/// The wallet starts at Sapling activation, which the server reports as 1 on
+/// VRSCTEST — and scanning block 1 needs the commitment tree at height **0**,
+/// which cannot be asked for at all: protobuf omits zero-valued fields, so the
+/// request arrives with no identifier and lightwalletd says so.
+///
+/// It shipped that way for one build and failed on the first real run, in front
+/// of somebody. This asserts the floor holds.
+#[test]
+#[ignore = "asks the live chain"]
+fn a_scan_can_start_at_the_beginning_of_the_chain() {
+    let server = server();
+    let activation = server.info().sapling_activation_height;
+    println!("sapling activation: {activation}");
+
+    // Exactly what the wallet does, over a short span so the test is quick.
+    let start = activation.max(2);
+    let mut shielded = watching();
+    let progress = shielded
+        .sync(server.client(), start, start + 2_000)
+        .expect("a scan from the earliest scannable height");
+
+    println!("scanned {}..={}", progress.from, progress.to);
+    assert_eq!(progress.from, start);
+
+    // And the height below the floor is genuinely unusable, which is why the
+    // floor exists rather than being a superstition.
+    let refused = watching().sync(server.client(), 1, 100);
+    assert!(
+        refused.is_err(),
+        "height 0 became requestable; the floor in scan_shielded can go",
+    );
+}
+
+/// How long a scan actually takes, per thousand blocks.
+///
+/// Printed rather than asserted: it is a measurement of somebody else's server
+/// and this machine's CPU on one afternoon, and a threshold would fail for
+/// reasons that are nobody's fault. What it exists for is the birthday
+/// question — "what does it cost to scan from Sapling activation" is otherwise
+/// answered by guessing, and the guesses are usually an order of magnitude out.
+#[test]
+#[ignore = "measures scan throughput against the live chain"]
+fn how_long_a_scan_takes() {
+    use std::time::Instant;
+
+    let server = server();
+    let tip = server.synced_height().expect("tip");
+
+    for span in [1_000u64, 5_000, 20_000] {
+        let mut shielded = watching();
+        let from = tip - span;
+        let started = Instant::now();
+        let progress = shielded.sync(server.client(), from, tip).expect("scan");
+        let took = started.elapsed();
+
+        // Precision is irrelevant here: these are seconds printed for a person
+        // to read, and a block height cannot approach the point where an f64
+        // stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let per_1k = took.as_secs_f64() / (span as f64 / 1000.0);
+        println!(
+            "{span:>6} blocks in {:>6.1?}  =  {per_1k:.2}s per 1000  \
+             ({}..={})",
+            took, progress.from, progress.to,
+        );
+        // What the same rate means for a wallet with no birthday at all.
+        println!(
+            "         → Sapling activation to tip ({} blocks) would be {:.0} minutes",
+            tip,
+            {
+                #[allow(clippy::cast_precision_loss)]
+                let minutes = (tip as f64 / 1000.0) * per_1k / 60.0;
+                minutes
+            },
+        );
+    }
 }

@@ -26,6 +26,7 @@ use std::path::Path;
 const FORBIDDEN: &[&str] = &[
     "HttpTransport",
     "GrpcWebTransport",
+    "GrpcTransport",
     "ureq",
     "reqwest",
     "TcpStream",

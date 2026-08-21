@@ -35,7 +35,13 @@ publish = false
 #
 # `multicore` is bellman's rayon backend. It is a large speedup on a desktop and
 # is unavailable only on wasm32, which this does not target.
-verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light", "prover", "multicore"] }
+#
+# `serde` is what lets a `ScanResult` be written down. The SDK's own
+# documentation asks for it — "**Persist this.** A scan is expensive and its
+# result cannot be recovered from a UTXO set" — and the notes and the observed
+# nullifiers round-trip together, which is the pair that is wrong in the
+# dangerous direction if they are stored apart.
+verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light", "prover", "multicore", "serde"] }
 # Taken directly (not through the facade) by pecu-mock, which needs
 # `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
 # dependency graph at all. See pecu-mock/Cargo.toml.
@@ -56,6 +62,38 @@ tokio = { version = "1", default-features = false }
 tokio-util = "0.7"
 tracing = "0.1"
 hex = "0.4"
+
+# ── The native gRPC transport (pecu-chain/src/grpc.rs). ──
+#
+# The SDK's `GrpcWebTransport` speaks grpc-web over HTTP/1.1, which no
+# lightwalletd speaks without a proxy in front of it. These four crates are what
+# it takes to speak the protocol lightwalletd actually serves, so that a wallet
+# can be pointed at the canonical Verus endpoint — or at a lightwalletd on
+# loopback — with nothing in between.
+#
+# Nothing here is a new ecosystem. `rustls` and `webpki-roots` already compile
+# in this tree (ureq's TLS, and the same trust anchors), `tokio` is already the
+# app's runtime, and `bytes`, `slab`, `fnv`, `indexmap`, `futures-*` and
+# `tracing` are all present. What is genuinely new is `h2` — the hyper
+# project's HTTP/2 implementation — plus `http`, `tokio-util` and the
+# `tokio-rustls` adapter, and the sockets `tokio/net` pulls in.
+#
+# `h2` rather than `hyper` or `tonic`: a gRPC status arrives in HTTP/2
+# *trailers*, and h2 hands those over directly. `tonic` would bring prost and a
+# protobuf build step to re-derive message types this workspace already has
+# through the SDK.
+h2 = "0.4"
+http = "1"
+# Pinned to the same major as the `rustls` ureq already builds, with the same
+# provider (`ring`), so one TLS implementation is compiled rather than two.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# The Mozilla root program, which is what ureq is already verifying against in
+# this build. Sharing it means an endpoint that works for the RPC node works
+# here, rather than two different notions of who is trusted.
+webpki-roots = "0.26"
+rustls-pki-types = "1"
+bytes = "1"
 
 [workspace.lints.rust]
 # Mirrors the SDK: a wallet has no business writing unsafe.

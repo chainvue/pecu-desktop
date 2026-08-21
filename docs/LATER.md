@@ -124,16 +124,43 @@ exists to prevent — and `GrpcWebTransport` refuses plaintext to a non-loopback
 host for the same reason. So this waits for the operator, and the offline tests
 carry the weight until then.
 
-### Nothing is written to disk, deliberately
+### Nothing was written to disk — and then it was, sealed
 
 A `ScanResult` is the shielded history: every note, with amounts and heights.
 The wallet's databases are plain SQLite and only the vault is encrypted, so
 persisting it would put a shielded balance and its history in a file any other
 process can read — the exact property somebody chose a shielded address to
-avoid. So the scan lives in memory and starts again next launch. `birthday` for
-a new wallet is the tip, so the common case costs nothing; a restored wallet
-pays a wait. Persisting it properly needs somewhere as protected as the keys
-are, and that is its own decision rather than a line of code.
+avoid. So the scan lived in memory and started again next launch.
+
+That is honest and it is unusable. A VRSCTEST scan from Sapling activation is
+about twelve hundred requests and three minutes; paying it on every start makes
+the shielded balance a thing the wallet is permanently in the middle of finding
+out, and the first thing anybody says about it is that it keeps scanning from
+the beginning.
+
+**Resolved 2026-08-21**, on the terms this paragraph asked for: somewhere as
+protected as the keys are. `Vault::seal_blob` / `open_blob` seal arbitrary bytes
+under the vault's data key — the same key the recovery phrase is under, held
+only while the wallet is open — with the wallet id and a purpose in the AAD, so
+a blob cannot be moved between wallets or presented as a different one. The
+sealed string goes in the **cache** database, not the durable one, because every
+byte of it can be recomputed by asking a server again; the birthday, which
+cannot, is a setting in the durable one.
+
+`tests/shielded_kept.rs` reads the database file back and greps the raw bytes
+for the address, the value, the height and the JSON field names. That is the
+assertion this section is worth anything for.
+
+Two things were needed alongside it, and both are the sort that only show up
+once the state is durable:
+
+- **Locally-spent notes are saved immediately**, not at the next scan. The
+  marker exists to cover the minute between broadcasting a shielded spend and
+  the block arriving; leaving it in memory alone means a wallet closed inside
+  that minute reopens willing to spend the note again.
+- **A reorg deeper than the scan can verify now discards the kept scan.** In
+  memory that was a bad minute. On disk it is a wallet that restores poisoned
+  state, fails identically, and never scans again.
 
 ### One upstream defect found
 
@@ -221,7 +248,12 @@ the load-bearing one.
 SDK's own example points at `http://127.0.0.1:8080` — a **local grpc-web
 proxy** — which is the shape this was always meant to have.
 
-### The proxy, and what it unlocked
+> **Superseded 2026-08-21.** The wallet speaks native gRPC now, so port 8125 is
+> reachable and `light_server()` names it again. The diagnosis above is still
+> exactly right about what was wrong; only the remedy changed. See *A transport
+> that speaks lightwalletd's own protocol*, below.
+
+### The proxy, and what it unlocked — superseded, and worth keeping
 
 `scripts/grpcweb-proxy.mjs` is sixty lines of Node standard library — `http` and
 `http2`, no install, no module download, no container. It accepts grpc-web over
@@ -269,12 +301,104 @@ It generates **its own** recovery phrase for the shielded account, because a WIF
 has none and never will, shields the transparent coin into that account, spends
 inside the pool, and sends the remainder back to the WIF's address.
 
+### Birthdays: recorded where they are a fact, and nowhere else
+
+**Status:** built.
+
+A first scan has to start somewhere, and the wallet now writes down where for
+the one case it can defend: **a key generated here**. Fresh entropy has no
+history, so the chain tip at the moment of generation is a correct floor, and it
+is written per key — one height for a whole wallet would be one account's answer
+applied to another's, in the direction that skips blocks.
+
+The tip is usually not known at that moment, and this is the part the first
+attempt got wrong. A key is generated during onboarding, seconds after launch,
+and the node probe has not come back; writing nothing in that case looked safe
+and was nearly useless — measured against a real testnet endpoint the tip was
+unknown *every* time, so the birthday was recorded never and every new wallet
+still walked the whole chain. So the moment is recorded instead and settled into
+a height at the first tip, with the elapsed wall-clock converted to blocks at
+**half** Verus' block target and a hundred-block floor under it. Every rounding
+in that estimate goes the same way — earlier, meaning more scanning. Until it
+settles the account is not scanned at all, because a scan started before the
+birthday is known is the whole chain, which is the thing being avoided.
+
+An **imported phrase** gets nothing, and this is the part worth not
+"improving". The same words may have been in another wallet for years, so when
+this wallet derived the account says nothing about when the account was first
+paid. An earlier version recorded the tip at the moment a light server was
+configured and hid a real payment of 10 VRSCTEST, sixty-three blocks the wrong
+side of the line. An import walks the chain once and then never again, which is
+the right way round: slow is recoverable, short is not.
+
+If no node has reported a tip when a key is generated, nothing is recorded and
+that key gets the same full first scan. Guessing there would trade a wait nobody
+minds for a balance that is quietly wrong.
+
+### A transport that speaks lightwalletd's own protocol
+
+**Status:** built, and proven against two real servers.
+
+Everything above solved the protocol mismatch by putting a translator in front
+of lightwalletd. That works, and it has a cost nobody was paying attention to:
+the translator has to be *somebody's*. What shipped was `lwd.chainvue.io` —
+chainvue's own box, behind a Cloudflare tunnel — which meant every user's block
+requests went through the machine of the people who wrote the wallet. For a
+privacy feature that is the wrong default, and the fact that it was the only
+option is not a defence.
+
+`crates/pecu-chain/src/grpc.rs` is a native gRPC transport: HTTP/2 over rustls,
+`Content-Type: application/grpc`, and the gRPC status read out of HTTP/2
+trailers. The message framing is byte-identical to grpc-web, so the SDK's
+request encoder and response decoder are untouched on both sides of it — the
+new code moves bytes and reads one header block.
+
+`LightServer::connect` now **probes** both dialects, native first, and keeps
+whichever answered. It has to probe: ALPN cannot decide this, because
+`lwd.chainvue.io` negotiates HTTP/2 at Cloudflare's edge while still speaking
+grpc-web underneath. Measured, both ways:
+
+```
+https://lightwalletd.verustest.net:8125 -> native gRPC
+https://lwd.chainvue.io                 -> grpc-web
+```
+
+So the shipped testnet address is Verus' own server again, reached directly, and
+a proxy — or a lightwalletd on `http://127.0.0.1:9067`, which needs no
+certificate — remains a valid thing to type.
+
+**What it cost:** six crates — `h2`, `http`, `tokio-util`, `tokio-rustls`, and
+the `mio`/`socket2` sockets that `tokio/net` pulls in. `rustls`, `webpki-roots`,
+`tokio`, `bytes`, `slab`, `fnv`, `indexmap` and the `futures-*` family were
+already compiled in this tree.
+
+**One defect this found, which no fixture would have.** h2 charges every DATA
+frame under 256 bytes as framing overhead and hangs up at a default budget of a
+hundred frames in flight — a defence against a peer flooding empty frames.
+lightwalletd streams one message per block and an empty testnet block compacts
+to a few dozen bytes, so a thousand-block range is a thousand undersized frames
+and every live scan died mid-range with `too_many_data_frames`. The budget is
+raised, the flow-control window bounds what can actually be in flight, and
+`a_thousand_small_frames_are_a_block_range_and_not_an_attack` reproduces the
+failure against a real h2 server on loopback — it fails if that line is
+reverted, which is the only reason it is worth having.
+
+A full scan from Sapling activation to the tip measures at **about three
+minutes**, against roughly four through the proxy.
+
 ### What is left
 
-* **Persistence**, on the terms above.
-* **A shielded balance that updates itself.** `Shielded::sync` exists and
-  nothing calls it on a timer — for the same reason: the server it would ask is
-  the one with the expired certificate.
+* **A scan is only written down when it comes back.** The worker holds the
+  state and the actor holds the store, so the save happens once, at the end —
+  including at the end of a scan that *failed* part way, which is why a hiccup
+  no longer costs the whole pass. Quitting the application mid-scan still does:
+  the worker result never arrives. Three minutes, once, and only if somebody
+  quits during the first scan. Fixing it means the worker reporting state per
+  stride rather than progress per stride, which is a bigger change than the
+  thing it buys.
+* **A "rescan from block N" control.** A scan starts at Sapling activation and
+  continues from where it stopped; there is no way to ask for an earlier height
+  after an import, short of forgetting the wallet.
 * **The parameter download has no progress.** `params::fetch` reports it and no
   screen shows it. Instead the send is refused *before* dispatch when the files
   are absent, so nothing hangs — but somebody without a node has to fetch them

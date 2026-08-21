@@ -309,9 +309,7 @@ mod tests {
         let path = dir.path().join("registration.json");
         let (mut store, pending) = reservation(dir.path());
 
-        store
-            .reserve("pecu-test", "main", pending)
-            .expect("write");
+        store.reserve("pecu-test", "main", pending).expect("write");
         store.mark_committed();
         assert_eq!(store.current().expect("still there").step, Step::Committed);
 
@@ -329,9 +327,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("registration.json");
         let (mut store, pending) = reservation(dir.path());
-        store
-            .reserve("pecu-test", "main", pending)
-            .expect("write");
+        store.reserve("pecu-test", "main", pending).expect("write");
 
         let mode = std::fs::metadata(&path)
             .expect("metadata")

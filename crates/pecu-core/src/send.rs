@@ -77,6 +77,15 @@ pub struct Prepared {
     pub amount: Amount,
     /// Which of the four things this payment is.
     pub route: pecu_protocol::Route,
+    /// Nullifiers this payment will publish, for a shielded spend.
+    ///
+    /// Empty for every other route. Carried so the core can mark the notes
+    /// spent the moment the network accepts the transaction — see
+    /// `Shielded::note_spent`. Without it a second spend before the first
+    /// confirms picks the same note and the daemon refuses the whole
+    /// transaction with `bad-txns-sapling-nullifier-exists`, after the prover
+    /// has been paid for.
+    pub spends: Vec<[u8; 32]>,
     /// The VerusID name `to` was resolved from, when it was typed as a name.
     /// Empty otherwise. Carried so the review can show the question as well as
     /// the answer.
@@ -272,6 +281,7 @@ pub fn prepare(
         to: to.to_string(),
         amount,
         route: pecu_protocol::Route::Transparent,
+        spends: Vec::new(),
         name: name.to_string(),
     })
 }
@@ -510,6 +520,7 @@ pub fn prepare_shield(
         to: shield.to.clone(),
         amount: shield.amount,
         route: pecu_protocol::Route::Shield,
+        spends: Vec::new(),
         name: String::new(),
         signed: Signed::Shield(shield),
     })
@@ -553,6 +564,7 @@ pub fn prepare_shielded<T: verus_sdk::light::LightTransport>(
         to,
         amount: planned.amount,
         route,
+        spends: planned.nullifiers(),
         name: String::new(),
     })
 }

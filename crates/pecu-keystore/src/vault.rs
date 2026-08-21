@@ -407,6 +407,70 @@ impl Vault {
         Ok(crate::shielded::with_spending_key(&phrase, f)?)
     }
 
+    // ── Sealing things that are not keys ────────────────────────────────────
+
+    /// Seal arbitrary bytes under this wallet's data key.
+    ///
+    /// # What this is for, and what it is not
+    ///
+    /// Not keys. Everything above holds one key each, with its own AAD binding
+    /// the ciphertext to that entry's label and address. This is for data a
+    /// wallet computes and would rather not lose — the shielded scan is the
+    /// case it was written for — which is worth exactly as much protection as
+    /// the phrase it was derived with, and none of the structure.
+    ///
+    /// It stays out of the vault file. The vault is read and rewritten whole
+    /// on every key operation, and a scan result is orders of magnitude larger
+    /// than everything else in there; putting it inside would make adding a
+    /// key rewrite megabytes. So this hands back a string and the caller
+    /// decides where it lives. Wherever that is, the plaintext never reaches
+    /// it.
+    ///
+    /// # Why `purpose` is in the AAD
+    ///
+    /// Two blobs sealed under one key are otherwise interchangeable: a stored
+    /// scan could be swapped for a stored anything-else by someone who can
+    /// write the file, and it would decrypt. Naming the purpose makes that
+    /// substitution fail as a forgery rather than succeed as a surprise. The
+    /// wallet id is in there for the same reason it is on a key entry — a blob
+    /// cannot be moved between wallets.
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError::Locked`] when the wallet is not open. There is no
+    /// passphrase parameter and that is deliberate: the shielded scan saves on
+    /// a timer, and a save that could prompt is a save that will not happen.
+    pub fn seal_blob(&self, purpose: &str, plaintext: &[u8]) -> Result<String, VaultError> {
+        let dek_guard = self.dek.read().map_err(|_| VaultError::Locked)?;
+        let dek = dek_guard.as_ref().ok_or(VaultError::Locked)?;
+        let doc = self.doc.read().map_err(|_| VaultError::Locked)?;
+
+        let sealed = seal(dek, plaintext, blob_aad(&doc.wallet_id, purpose).as_bytes())?;
+        serde_json::to_string(&sealed).map_err(|error| {
+            VaultError::Corrupt(format!("a sealed blob would not encode: {error}"))
+        })
+    }
+
+    /// Open what [`Self::seal_blob`] wrote, for the same purpose.
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError::Locked`] when the wallet is not open;
+    /// [`VaultError::Corrupt`] when the string is not a sealed blob at all;
+    /// [`VaultError::WrongPassphrase`] when it is one but does not
+    /// authenticate — a different wallet, a different purpose, or an edited
+    /// file. The caller's answer to all three is the same and is not an error
+    /// worth showing anybody: discard it and compute the thing again.
+    pub fn open_blob(&self, purpose: &str, sealed: &str) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        let dek_guard = self.dek.read().map_err(|_| VaultError::Locked)?;
+        let dek = dek_guard.as_ref().ok_or(VaultError::Locked)?;
+        let doc = self.doc.read().map_err(|_| VaultError::Locked)?;
+
+        let sealed: Sealed = serde_json::from_str(sealed)
+            .map_err(|error| VaultError::Corrupt(format!("that is not a sealed blob: {error}")))?;
+        open_sealed(dek, &sealed, blob_aad(&doc.wallet_id, purpose).as_bytes())
+    }
+
     /// Add a key. Needs the vault unlocked, but **not** the passphrase — adding
     /// a second key to an open wallet should not re-prompt.
     pub fn add_key(&self, label: &str, new: NewKey) -> Result<KeyRef, VaultError> {
@@ -784,6 +848,15 @@ fn derive(kdf: &Kdf, passphrase: &Secret) -> Result<Zeroizing<[u8; KEY_BYTES]>, 
 
 fn cipher(key: &[u8; KEY_BYTES]) -> XChaCha20Poly1305 {
     XChaCha20Poly1305::new(key.into())
+}
+
+/// What a sealed blob is authenticated against.
+///
+/// Deliberately a different shape from [`KeyEntry::aad`] rather than a reuse of
+/// it: these are not key entries, and a scheme that could produce the same
+/// string for both would let one be presented as the other.
+fn blob_aad(wallet_id: &str, purpose: &str) -> String {
+    format!("pecu-blob-v1|{purpose}|{wallet_id}")
 }
 
 fn seal(key: &[u8; KEY_BYTES], plaintext: &[u8], aad: &[u8]) -> Result<Sealed, VaultError> {

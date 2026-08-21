@@ -30,6 +30,19 @@ export global WalletState {
     // Why there is no shielded address. Empty code means "no reason to give",
     // which is the locked case — not a refusal.
     in property <Note> shielded-note;
+    // The shielded balance, formatted. **Empty until a scan has happened** —
+    // which is not the same as zero, and the difference is the whole reason
+    // this is a string rather than a number.
+    in property <string> shielded-balance: "";
+    // Whether there is anything in the pool. A zero beside real numbers is
+    // the wallet saying "none of your coins are private" in the weight of a
+    // fact, which is not what silence means.
+    in property <bool> shielded-any: false;
+    // A scan in flight, and how far it has got. A first scan covers the chain
+    // from Sapling activation — minutes, not seconds — and silence that long
+    // reads as a hang.
+    in property <bool> shielded-scanning: false;
+    in property <int> shielded-scan-percent: 0;
     // Every key in the vault. Readable while locked, because an address is
     // public: that is what lets someone be paid without unlocking anything.
     in property <[KeyRow]> keys: [];
@@ -145,6 +158,9 @@ export global SendState {
     in property <bool> shielded-available: false;
     // The shielded balance, already formatted.
     in property <string> shielded-balance: "";
+    // Whether a scan has happened. "Scanned and empty" and "never looked"
+    // are different statements, and the balance alone cannot tell them apart.
+    in property <bool> shielded-scanned: false;
     // What this payment would be: "transparent" | "shield" | "private" |
     // "unshield". From the core, which is the side that knows.
     in property <string> route: "transparent";
@@ -524,6 +540,9 @@ export global NetworkState {
     in property <string> endpoint: "not configured";
     in property <bool> mock-mode: false;
     in property <bool> allow-mainnet-spend: false;
+    // Where shielded notes are read from, or empty. A different server from the
+    // RPC node, speaking a different protocol — see `pecu_chain::light`.
+    in property <string> light-server: "";
     // The active node is behind the chain. Distinct from offline: it answers,
     // but a balance read against a stale tip is wrong in a way that only shows
     // up when a transaction is rejected.
@@ -962,6 +981,8 @@ export global Actions {
     // the label beside it. Everything durable is chosen from this, so the core
     // is what decides; this only asks.
     callback set-requested-network(string);
+    // Where shielded notes are read from. Empty clears it.
+    callback set-light-server(string);
 
     // ── Currencies ──────────────────────────────────────────────────────
     // Reads only. Defining one is a later step and is not wired here yet.

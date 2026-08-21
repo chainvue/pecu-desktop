@@ -23,3 +23,15 @@ verus-sdk = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# The native gRPC transport. See the workspace manifest for why each of these
+# is here; `tokio` takes only what one blocking request/response client needs —
+# a current-thread reactor, sockets, and a timeout.
+h2 = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+webpki-roots = { workspace = true }

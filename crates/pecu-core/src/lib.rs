@@ -147,6 +147,9 @@ pub fn start(
         work: work_tx,
         spendable: verus_sdk::money::Amount::ZERO,
         shielded: None,
+        light_server: None,
+        scanning: false,
+        scan_share: None,
         native_balance: 0,
         prepared: std::collections::HashMap::new(),
         conversions: std::collections::HashMap::new(),
@@ -389,6 +392,21 @@ struct Core {
     /// Holds the viewing key and whatever has been scanned. It is dropped on
     /// lock along with everything else the data key reaches.
     shielded: Option<shielded::Shielded>,
+    /// The lightwalletd shielded notes are read through, if one is overridden.
+    ///
+    /// Per chain, like every other node setting. `None` means the chain's
+    /// shipped address is used — see `Network::light_server`, which names one
+    /// only for chains where connecting to it has actually been tested.
+    light_server: Option<String>,
+    /// Whether a shielded scan is already in flight, so a second refresh does
+    /// not start another. Scans are slow and idempotent; two at once is waste.
+    scanning: bool,
+    /// How far a scan in flight has got, as a percentage, or `None`.
+    ///
+    /// Only meaningful while `scanning`. A first scan with no birthday covers
+    /// the whole chain, so this is the difference between a wallet that is
+    /// working and a wallet that appears to have died.
+    scan_share: Option<u32>,
     /// What the confirmed history sums to: spendable + immature + the confirmed
     /// coins an unconfirmed transaction already spends. The anchor the balance
     /// chart is built backwards from — see `emit_chart`.
@@ -738,10 +756,52 @@ enum Work {
         record: u64,
         result: Box<Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>>,
     },
+    /// A shielded scan has reached this height and is still going.
+    ScanProgress {
+        scanned_to: u64,
+        tip: u64,
+        /// Where this scan began, so a share can be worked out. Without it a
+        /// wallet scanning the last thousand blocks and one scanning the whole
+        /// chain look identical at the same height.
+        start: u64,
+    },
+    /// A shielded scan finished, or gave up part of the way.
+    Scanned {
+        /// The account as far as it got. **Kept even on failure.**
+        ///
+        /// A full scan is about twelve hundred requests over the open
+        /// internet. Throwing the whole thing away because the last one failed
+        /// means starting at block two again — four minutes of work, discarded
+        /// for a hiccup, repeatedly.
+        ///
+        /// `None` only when the server could not be reached at all, so there is
+        /// no partial state to keep.
+        watching: Box<Option<shielded::Shielded>>,
+        /// Why it stopped early, if it did.
+        ///
+        /// A `String` rather than a typed error: three different kinds can end
+        /// up here — the address was refused, the server was, or the scan was —
+        /// and every one of them ends as the same sentence on the same line.
+        failed: Option<String>,
+        /// Whether what was kept has to be thrown away and scanned again.
+        ///
+        /// The one failure that is not "try again in a minute". A reorg deeper
+        /// than the scan can verify a rollback to leaves state that will be
+        /// refused identically on every future call — so with a kept scan on
+        /// disk it is not a bad minute, it is a wallet that never scans again.
+        /// This is what breaks that loop.
+        restart: bool,
+    },
     /// A broadcast finished, one way or another.
     Broadcast {
         /// The ledger row committed before the attempt.
         record: u64,
+        /// Shielded nullifiers this transaction publishes, empty otherwise.
+        ///
+        /// Carried through the worker rather than recorded before it, because a
+        /// refused broadcast has spent nothing — marking its notes would strand
+        /// them until the next scan finds them again.
+        spends: Vec<[u8; 32]>,
         result: Box<Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>>,
     },
     /// A name was checked for availability and price.
@@ -1099,6 +1159,9 @@ impl Core {
         self.busy(TaskKind::CreatingWallet, true);
         match self.wallet.create(name, passphrase) {
             Ok(challenge) => {
+                if let Some(label) = self.wallet.active_key.clone() {
+                    self.remember_birthday(&label);
+                }
                 self.emit_wallet();
                 // A name claim the last run left unfinished. It has a deadline, so it is
                 // worth saying before anything else on that screen.
@@ -1112,7 +1175,11 @@ impl Core {
                 self.refresh();
             }
             Err(error) => {
-                self.notice("wallet_create", NoteVm::plain("wallet-create-failed"), &error);
+                self.notice(
+                    "wallet_create",
+                    NoteVm::plain("wallet-create-failed"),
+                    &error,
+                );
             }
         }
         self.busy(TaskKind::CreatingWallet, false);
@@ -1158,11 +1225,7 @@ impl Core {
     fn reveal_backup(&mut self, label: &str, passphrase: &pecu_protocol::Secret) {
         match self.wallet.begin_reveal(label, passphrase) {
             Ok(challenge) => self.emit_challenge(&challenge),
-            Err(error) => self.notice(
-                "reveal_backup",
-                NoteVm::plain("passphrase-wrong"),
-                &error,
-            ),
+            Err(error) => self.notice("reveal_backup", NoteVm::plain("passphrase-wrong"), &error),
         }
     }
 
@@ -1177,7 +1240,11 @@ impl Core {
 
         if correct {
             if let Err(error) = self.wallet.finish_backup() {
-                self.notice("finish_backup", NoteVm::plain("backup-record-failed"), &error);
+                self.notice(
+                    "finish_backup",
+                    NoteVm::plain("backup-record-failed"),
+                    &error,
+                );
             }
             let _ = self.events.send(Event::SeedWords(Vec::new()));
         }
@@ -1252,11 +1319,7 @@ impl Core {
                 Some(chain)
             }
             Err(error) => {
-                self.notice(
-                    "node_connect",
-                    NoteVm::plain("mock-chain-failed"),
-                    &error,
-                );
+                self.notice("node_connect", NoteVm::plain("mock-chain-failed"), &error);
                 None
             }
         }
@@ -1367,6 +1430,12 @@ impl Core {
             return;
         }
 
+        // The shielded half, on the same timer and on its own worker. It uses a
+        // different server and a different protocol, so it is deliberately not
+        // folded into the transparent refresh: one being down must not stop the
+        // other, and a wallet with no light server configured does nothing here.
+        self.scan_shielded();
+
         let addresses = self.wallet_addresses();
         if addresses.is_empty() {
             return;
@@ -1438,12 +1507,9 @@ impl Core {
                 described,
                 needs_confirmation,
                 result,
-            } => self.finish_identity_change_prepared(
-                ticket,
-                described,
-                needs_confirmation,
-                *result,
-            ),
+            } => {
+                self.finish_identity_change_prepared(ticket, described, needs_confirmation, *result);
+            }
             Work::IdentityChanged(result) => self.finish_identity_changed(*result),
             Work::CommitmentPolled(result) => self.finish_poll(*result),
             Work::Registered(result) => self.finish_registered(*result),
@@ -1471,7 +1537,21 @@ impl Core {
                 confirmations,
             } => self.finish_check(record, confirmations),
             Work::Resent { record, result } => self.finish_resend(record, *result),
-            Work::Broadcast { record, result } => self.finish_broadcast(record, *result),
+            Work::ScanProgress {
+                scanned_to,
+                tip,
+                start,
+            } => self.scan_progress(scanned_to, tip, start),
+            Work::Scanned {
+                watching,
+                failed,
+                restart,
+            } => self.finish_scan(*watching, failed, restart),
+            Work::Broadcast {
+                record,
+                spends,
+                result,
+            } => self.finish_broadcast(record, &spends, *result),
             Work::ChainHalt(found) => self.finish_chain_halt(found.as_deref()),
             Work::AddressNames(found) => self.finish_address_names(&found),
             Work::Converted { ticket, result } => self.finish_convert_prepare(ticket, *result),
@@ -1782,11 +1862,7 @@ impl Core {
                         // fetching, and the moment they are stalest.
                         self.refresh();
                     }
-                    Err(error) => self.notice(
-                        "unlock",
-                        NoteVm::plain("passphrase-wrong"),
-                        &error,
-                    ),
+                    Err(error) => self.notice("unlock", NoteVm::plain("passphrase-wrong"), &error),
                 }
                 self.busy(TaskKind::Unlocking, false);
             }
@@ -1813,6 +1889,7 @@ impl Core {
                 dark,
                 reduce_motion,
             } => self.set_appearance(dark, reduce_motion),
+            Command::SetLightServer(url) => self.set_light_server(&url),
             Command::SetAllowMainnetSpend {
                 on,
                 typed_confirmation,
@@ -1974,7 +2051,11 @@ impl Core {
             Err(error) => {
                 // The list keeps what it has. An older page that could not be
                 // read is a page nobody has seen, not a list that shrank.
-                self.notice("load_history", NoteVm::plain("history-older-unreadable"), &error);
+                self.notice(
+                    "load_history",
+                    NoteVm::plain("history-older-unreadable"),
+                    &error,
+                );
                 return;
             }
         };
@@ -2051,8 +2132,12 @@ impl Core {
     /// hundred rows and carries no in-flight transitions, so there is nothing
     /// for a delta to protect.
     fn emit_history(&self) {
-        let rows =
-            portfolio::rows_from(&self.history.entries, &self.cached.names, now(), &self.history_filter);
+        let rows = portfolio::rows_from(
+            &self.history.entries,
+            &self.cached.names,
+            now(),
+            &self.history_filter,
+        );
         let _ = self.events.send(Event::History {
             key: String::new(),
             delta: pecu_protocol::ListDelta::Replace(rows),
@@ -2140,6 +2225,21 @@ impl Core {
                 tracing::info!(%url, "the node last in use is no longer configured");
             }
         }
+
+        // A stored choice wins; otherwise whatever this chain ships.
+        //
+        // Stored-empty is a *choice* — somebody pressed "Forget it" — and must
+        // not be overridden by the default, or the wallet would silently point
+        // itself back at a server the person had just removed. So the absence
+        // of the key and an empty value mean different things here.
+        self.light_server = match store.setting("light_server") {
+            Some(url) if url.is_empty() => None,
+            Some(url) => Some(url),
+            None => self
+                .nodes
+                .requested()
+                .and_then(|network| network.light_server().map(str::to_string)),
+        };
 
         if let Some(minutes) = store.setting("auto_lock_minutes") {
             self.wallet.auto_lock = minutes
@@ -2297,16 +2397,16 @@ impl Core {
         // screen covers the settings screen, so this cannot happen through the
         // interface; it is here because the core must not depend on that.
         if self.wallet.backup_in_progress() {
-            self.notice_warning(
-                "add_key",
-                NoteVm::plain("backup-in-progress"),
-                "",
-            );
+            self.notice_warning("add_key", NoteVm::plain("backup-in-progress"), "");
             return;
         }
 
         match self.wallet.add_generated_key(label) {
             Ok(challenge) => {
+                // Before anything else: this account came into existence a
+                // moment ago, and now is the only time that can be said with a
+                // straight face.
+                self.remember_birthday(label);
                 self.emit_wallet();
                 // A name claim the last run left unfinished. It has a deadline, so it is
                 // worth saying before anything else on that screen.
@@ -2382,20 +2482,12 @@ impl Core {
         }
 
         if self.nodes.has_url(url) {
-            self.notice_warning(
-                "add_node",
-                NoteVm::plain("node-duplicate"),
-                "",
-            );
+            self.notice_warning("add_node", NoteVm::plain("node-duplicate"), "");
             return;
         }
 
         let Some(store) = &self.store else {
-            self.notice_warning(
-                "add_node",
-                NoteVm::plain("node-store-unavailable"),
-                "",
-            );
+            self.notice_warning("add_node", NoteVm::plain("node-store-unavailable"), "");
             return;
         };
 
@@ -2408,11 +2500,7 @@ impl Core {
         };
 
         let Some(row) = store.add_node(&label, url) else {
-            self.notice_warning(
-                "add_node",
-                NoteVm::plain("node-not-saved"),
-                "",
-            );
+            self.notice_warning("add_node", NoteVm::plain("node-not-saved"), "");
             return;
         };
 
@@ -2631,10 +2719,7 @@ impl Core {
         self.emit_pending();
         self.emit_address_book();
 
-        self.notice_info(
-            "network_switched",
-            NoteVm::with("chain-switched", [label]),
-        );
+        self.notice_info("network_switched", NoteVm::with("chain-switched", [label]));
 
         // Ask the new chain's active node what it is, rather than waiting up to
         // fifteen seconds for the poller. Until something answers, `effective`
@@ -3083,11 +3168,7 @@ impl Core {
         );
         self.chain = None;
         self.remember_active_node();
-        self.notice_warning(
-            "node_failover",
-            NoteVm::plain("node-failover"),
-            "",
-        );
+        self.notice_warning("node_failover", NoteVm::plain("node-failover"), "");
         self.emit_network();
         self.refresh();
     }
@@ -3252,11 +3333,7 @@ impl Core {
                 // Still unknown. The record stays, the backoff resumes, and the
                 // bytes are still the only ones that may be sent.
                 self.pending.set_state(record, pending::State::Resent);
-                self.notice(
-                    "resend",
-                    NoteVm::plain("resend-unconfirmed"),
-                    &error,
-                );
+                self.notice("resend", NoteVm::plain("resend-unconfirmed"), &error);
                 self.emit_pending();
             }
         }
@@ -3291,11 +3368,7 @@ impl Core {
 
     // ── Settings ────────────────────────────────────────────────────────────
 
-    fn change_passphrase(
-        &mut self,
-        old: &pecu_protocol::Secret,
-        new: &pecu_protocol::Secret,
-    ) {
+    fn change_passphrase(&mut self, old: &pecu_protocol::Secret, new: &pecu_protocol::Secret) {
         match self.wallet.change_passphrase(old, new) {
             Ok(()) => {
                 self.notice_info("passphrase_changed", NoteVm::plain("passphrase-changed"));
@@ -3424,13 +3497,607 @@ impl Core {
 
         match self.wallet.shielded_view() {
             Some(view) => match shielded::Shielded::watching(&view) {
-                Ok(watching) => self.shielded = Some(watching),
+                Ok(watching) => self.shielded = Some(self.with_kept_scan(&view, watching)),
                 Err(error) => {
                     tracing::warn!(%error, "the shielded account could not be watched");
                     self.shielded = None;
                 }
             },
             None => self.shielded = None,
+        }
+    }
+
+    /// Fold a kept scan into a freshly built account, when there is one to fold.
+    ///
+    /// # Why every failure here is silent
+    ///
+    /// There is exactly one consequence to any of them — no kept scan, so the
+    /// next one starts from the birthday — and it is not a consequence anybody
+    /// needs to be told about in a toast. A wallet that has just been unlocked
+    /// with a *different* key reaches the `WrongAccount` arm every time, and
+    /// that is the system working.
+    ///
+    /// The one that is logged at warning is a blob that will not open: that
+    /// means the file was edited or the wallet id changed underneath it, which
+    /// is worth a line in a log even though the answer is still "scan again".
+    fn with_kept_scan(
+        &self,
+        view: &pecu_keystore::ShieldedView,
+        fresh: shielded::Shielded,
+    ) -> shielded::Shielded {
+        let (Some(store), Some(vault)) = (self.store.as_ref(), self.wallet.vault()) else {
+            return fresh;
+        };
+        let Some(sealed) = store.shielded_scan() else {
+            return fresh;
+        };
+
+        let opened = match vault.open_blob(Self::SHIELDED_SCAN_BLOB, &sealed) {
+            Ok(opened) => opened,
+            Err(error) => {
+                tracing::warn!(%error, "the kept shielded scan would not open");
+                return fresh;
+            }
+        };
+
+        let kept: shielded::Kept = match serde_json::from_slice(&opened) {
+            Ok(kept) => kept,
+            Err(error) => {
+                tracing::warn!(%error, "the kept shielded scan would not decode");
+                return fresh;
+            }
+        };
+
+        match shielded::Shielded::restore(view, kept) {
+            Ok(restored) => {
+                tracing::info!(
+                    scanned_to = ?restored.scanned_to(),
+                    balance = restored.balance(),
+                    notes = restored.note_count(),
+                    "a kept shielded scan was taken up where it stopped",
+                );
+                restored
+            }
+            Err(error) => {
+                tracing::debug!(%error, "the kept shielded scan is not this account");
+                fresh
+            }
+        }
+    }
+
+    /// Write the scan down, sealed, so the next launch continues it.
+    ///
+    /// Best effort throughout, and every early return means the same thing: the
+    /// next launch scans from the birthday instead. That is slow, never wrong,
+    /// and not worth failing an operation over — which is why nothing here
+    /// returns a `Result`.
+    ///
+    /// Locked is one of those cases and is the reason this is called where it
+    /// is: a scan that comes back after an auto-lock has nowhere to put itself,
+    /// because the data key is gone. It is dropped rather than held for later.
+    fn keep_shielded_scan(&self) {
+        let (Some(store), Some(vault), Some(watching)) = (
+            self.store.as_ref(),
+            self.wallet.vault(),
+            self.shielded.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(kept) = watching.keep() else {
+            return;
+        };
+
+        let Ok(plain) = serde_json::to_vec(&kept) else {
+            tracing::warn!("the shielded scan would not encode");
+            return;
+        };
+
+        match vault.seal_blob(Self::SHIELDED_SCAN_BLOB, &plain) {
+            Ok(sealed) => store.save_shielded_scan(&sealed, now()),
+            Err(error) => tracing::warn!(%error, "the shielded scan could not be sealed"),
+        }
+    }
+
+    /// Remember where shielded notes are read from, or forget it.
+    ///
+    /// Checked before it is saved: plaintext is refused to anything but
+    /// loopback, and credentials in the address are refused outright. Finding
+    /// that out at the next scan would put the complaint minutes away from the
+    /// typing that caused it.
+    ///
+    /// Not checked here: which gRPC dialect the address speaks. `LightServer`
+    /// probes both when it connects, so a lightwalletd and a grpc-web proxy in
+    /// front of one are equally valid things to type.
+    fn set_light_server(&mut self, url: &str) {
+        let url = url.trim();
+
+        if url.is_empty() {
+            self.light_server = None;
+            self.shielded_scan_forgotten();
+        } else if let Err(refused) = pecu_chain::validate_light_url(url) {
+            self.notice(
+                "light_server",
+                NoteVm::plain("light-server-unusable"),
+                &refused,
+            );
+            return;
+        } else {
+            self.light_server = Some(url.to_string());
+        }
+
+        if let Some(store) = self.store.as_ref() {
+            store.set_setting("light_server", self.light_server.as_deref().unwrap_or(""));
+        }
+        self.emit_network();
+        self.scan_shielded();
+    }
+
+    /// Drop what was scanned, because it came from a server nobody is asking
+    /// any more.
+    ///
+    /// A balance from an endpoint that has been removed is a figure with no
+    /// source. Better to have none.
+    fn shielded_scan_forgotten(&mut self) {
+        if let Some(store) = self.store.as_ref() {
+            store.forget_shielded_scan();
+        }
+        if let Some(view) = self.wallet.shielded_view() {
+            if let Ok(fresh) = shielded::Shielded::watching(&view) {
+                self.shielded = Some(fresh);
+            }
+        }
+    }
+
+/// What a kept shielded scan is sealed as.
+///
+/// One name, used by both the write and the read, because the vault
+/// authenticates it: a mismatch is a decryption failure rather than a
+/// mysterious empty result. See `Vault::seal_blob`.
+const SHIELDED_SCAN_BLOB: &str = "shielded-scan";
+
+/// The shortest a Verus block is assumed to take, in seconds.
+///
+/// Half the one-minute target, deliberately. This divides an elapsed time to
+/// estimate a number of blocks, so a smaller number estimates *more* blocks and
+/// starts a scan *earlier* — which is the side to be wrong on.
+const FASTEST_BLOCK_SECONDS: u64 = 30;
+
+/// How far before an estimated birthday a scan starts anyway.
+///
+/// A floor under the estimate above, so even a birthday settled the instant
+/// after a key is generated reaches back a hundred blocks. At Verus' block time
+/// that is under two hours, and it costs a fraction of a second to scan.
+const BIRTHDAY_MARGIN: u64 = 100;
+
+/// How many blocks one stride of a shielded scan covers.
+///
+/// A first scan with no birthday runs from Sapling activation, which on
+/// VRSCTEST is the whole chain. Doing that in a single call means minutes of
+/// silence; doing it in strides means the interface can say how far it has got.
+///
+/// 50 000 blocks measured at roughly ten seconds — the throughput is about
+/// 0.2s per thousand, and it improves with the stride because the per-request
+/// cost spreads over more blocks. Smaller strides would report more often and
+/// finish later.
+const SCAN_STRIDE: u64 = 50_000;
+
+/// How many times one stride of a scan is retried before it stops.
+///
+/// Transport failures on a scan this long are ordinary rather than
+/// exceptional — a full pass is about twelve hundred requests over the open
+/// internet. One measured here was "Error while decoding chunks" on a range
+/// that answered perfectly a minute later, and it cost the whole scan. Three
+/// attempts turn a hiccup into a pause.
+const SCAN_ATTEMPTS: u32 = 3;
+
+    /// Look for shielded notes, off the actor.
+    ///
+    /// # Where a scan starts, in the three cases there are
+    ///
+    /// * **A scan is already under way in this wallet's memory** — continue it.
+    ///   `sync` picks up after the last block it finished, and proves the new
+    ///   range descends from it rather than assuming so.
+    /// * **A scan was kept from a previous run** — the same thing. It was
+    ///   restored when the account was built, so by the time this runs it is
+    ///   indistinguishable from the case above, which is the point of keeping
+    ///   it.
+    /// * **Neither** — start at this key's birthday, if it has one. A key
+    ///   generated by this wallet does: the tip at the moment it was created.
+    ///   An imported phrase does not and cannot, so it starts at Sapling
+    ///   activation and walks the chain once. See `remember_birthday` for why
+    ///   guessing there is the one mistake that loses money quietly.
+    fn scan_shielded(&mut self) {
+        if self.scanning {
+            return;
+        }
+        let Some(url) = self.light_server.clone() else {
+            return;
+        };
+        if !self.wallet.is_unlocked() {
+            return;
+        }
+        // Before the birthday is read, not after: this is the tick that turns a
+        // pending one into a height, and reading first would send exactly one
+        // full-chain scan for every wallet created before its node answered.
+        self.settle_birthday();
+        // Cloned rather than taken, so the balance on screen survives the scan
+        // instead of blinking to zero for the length of it.
+        let Some(watching) = self.shielded.clone() else {
+            return;
+        };
+
+        // `None` for a continuation — `sync` picks up where it stopped — and
+        // for a first scan when nobody has named a height, which the worker
+        // then resolves to Sapling activation.
+        let from = if watching.scanned_to().is_some() {
+            None
+        } else {
+            match self.light_birthday() {
+                Birthday::Known(height) => Some(height),
+                // Wait. The height is one tip away and the account is minutes
+                // old, so there is nothing to miss by waiting and a whole chain
+                // to walk by not.
+                Birthday::Pending => {
+                    tracing::debug!("holding the first shielded scan until the birthday settles");
+                    return;
+                }
+                Birthday::Unknown => None,
+            }
+        };
+
+        let network = self
+            .nodes
+            .requested()
+            .cloned()
+            .unwrap_or(pecu_chain::Network::Testnet);
+
+        self.scanning = true;
+        // A second sender, so the worker can report progress on the way rather
+        // than only its result at the end.
+        let progress = self.work.clone();
+        // Bound out here: the worker closure is `move` and has no `Self` to
+        // reach an associated constant through.
+        let stride = Self::SCAN_STRIDE;
+        let attempts = Self::SCAN_ATTEMPTS;
+        self.blocking.dispatch(
+            move || {
+                let mut watching = watching;
+
+                let server = match pecu_chain::LightServer::connect(&url, &network) {
+                    Ok(server) => server,
+                    // Nothing was scanned, so there is no partial state to keep.
+                    Err(e) => {
+                        return Work::Scanned {
+                            watching: Box::new(None),
+                            failed: Some(e.to_string()),
+                            restart: false,
+                        }
+                    }
+                };
+
+                let mut restart = false;
+                let outcome = (|| -> Result<(), String> {
+                    let to = server.synced_height().map_err(|e| e.to_string())?;
+
+                    // Two, at the earliest, and not for a chain reason.
+                    //
+                    // Scanning block N needs the commitment tree as it stood at
+                    // N-1, because note positions are counted forward from that
+                    // frontier. For N=1 that is height 0 — and height 0 cannot
+                    // be asked for at all: protobuf omits zero-valued fields
+                    // from the wire, so a `BlockID { height: 0 }` arrives as an
+                    // empty message and lightwalletd answers "request for
+                    // unspecified identifier".
+                    //
+                    // Sapling activated at height 1 on VRSCTEST, so starting
+                    // there hit exactly that. Block 1 is therefore unscannable;
+                    // it is the chain's first block and carries no Sapling
+                    // output, so nothing is lost — but it is a limit of the
+                    // protocol rather than a choice, and worth saying so.
+                    let start = from
+                        .unwrap_or(server.info().sapling_activation_height)
+                        .max(2);
+
+                    let mut at = start;
+                    loop {
+                        let until = at.saturating_add(stride).min(to);
+
+                        // Retried, because a transport failure on a scan this
+                        // long is ordinary rather than exceptional. One measured
+                        // here was "Error while decoding chunks" on a range that
+                        // answered perfectly a minute later.
+                        let mut attempt = 1;
+                        loop {
+                            match watching.sync(server.client(), at, until) {
+                                Ok(_) => break,
+                                // Not retryable and not survivable: retrying
+                                // fails the same way for as long as the fork
+                                // stands, and the state that cannot be
+                                // continued is the state about to be written
+                                // down. Say so and let the actor discard it.
+                                Err(error @ shielded::ShieldedError::ReorgTooDeep) => {
+                                    restart = true;
+                                    return Err(error.to_string());
+                                }
+                                Err(error) if attempt < attempts => {
+                                    tracing::warn!(
+                                        %error, attempt, at, until,
+                                        "a shielded scan stride failed; retrying",
+                                    );
+                                    attempt += 1;
+                                    std::thread::sleep(std::time::Duration::from_secs(
+                                        u64::from(attempt),
+                                    ));
+                                }
+                                Err(error) => return Err(error.to_string()),
+                            }
+                        }
+
+                        let _ = progress.send(Work::ScanProgress {
+                            scanned_to: watching.scanned_to().unwrap_or(until),
+                            tip: to,
+                            start,
+                        });
+                        if until >= to {
+                            break;
+                        }
+                        at = until + 1;
+                    }
+                    Ok(())
+                })();
+
+                // The scan comes back either way. What it managed is worth
+                // keeping even when the last stride failed — the alternative is
+                // starting at block two again, for a hiccup.
+                Work::Scanned {
+                    // Nothing to keep when the whole thing is being discarded,
+                    // and handing it back anyway would invite somebody to store
+                    // it out of habit.
+                    watching: Box::new((!restart).then_some(watching)),
+                    failed: outcome.err(),
+                    restart,
+                }
+            },
+            self.work.clone(),
+        );
+    }
+
+    /// Where a first scan starts, when somebody has said.
+    ///
+    /// `None` means nobody has, and the scan then begins at **Sapling
+    /// activation** — see `scan_shielded`.
+    ///
+    /// # Why this is no longer defaulted to the tip
+    ///
+    /// It was, and it was wrong in the one way that loses money quietly: it
+    /// recorded the height at the moment a light server was configured, so a
+    /// wallet found nothing that arrived before somebody happened to fill in a
+    /// setting. That is not a hypothetical — it hid a real payment of 10
+    /// VRSCTEST, sixty-three blocks the wrong side of the line.
+    ///
+    /// There is no honest way to guess it either. The same recovery phrase may
+    /// have been used in another wallet years earlier, so when *this* wallet
+    /// derived the account says nothing about when the account was first paid.
+    /// A key's creation date is a fact about this installation, not about the
+    /// account.
+    fn light_birthday(&self) -> Birthday {
+        let (Some(store), Some(label)) = (self.store.as_ref(), self.wallet.active_key.as_ref())
+        else {
+            return Birthday::Unknown;
+        };
+
+        if let Some(height) = store
+            .setting(&Self::birthday_key(label))
+            .and_then(|height| height.parse().ok())
+        {
+            return Birthday::Known(height);
+        }
+        if store.setting(&Self::birthday_pending_key(label)).is_some() {
+            return Birthday::Pending;
+        }
+        Birthday::Unknown
+    }
+
+    /// Where a key's *unsettled* birthday is written.
+    ///
+    /// Holds the wall-clock second the key was generated, because the height it
+    /// wants is not knowable yet — see [`Self::settle_birthday`].
+    fn birthday_pending_key(label: &str) -> String {
+        format!("light_birthday_pending:{label}")
+    }
+
+    /// Turn a pending birthday into a height, once a node has reported one.
+    ///
+    /// # Why this exists at all
+    ///
+    /// A key is generated during onboarding, seconds after launch, and the node
+    /// probe has usually not come back yet. Writing nothing in that case looked
+    /// safe and was nearly useless: measured against a real testnet node, the
+    /// tip was unknown at creation almost every time, so the birthday was
+    /// recorded almost never and every new wallet still walked the whole chain.
+    ///
+    /// # Why the height is estimated backwards rather than taken as read
+    ///
+    /// The tip that finally arrives is the tip *now*, not the tip when the key
+    /// was made, and the gap between them is blocks this wallet would skip. So
+    /// the gap is estimated from wall-clock and subtracted, and every choice in
+    /// that estimate leans the same way — earlier, meaning more scanning:
+    ///
+    /// * [`Self::FASTEST_BLOCK_SECONDS`] is half Verus' one-minute target, so a
+    ///   chain running fast is still overestimated rather than under.
+    /// * [`Self::BIRTHDAY_MARGIN`] is a floor, so even an instantaneous settle
+    ///   starts a hundred blocks early.
+    /// * A clock that has gone backwards yields zero elapsed, and the margin
+    ///   carries it.
+    ///
+    /// Scanning more than needed costs a fraction of a second. Scanning less
+    /// costs somebody their money, quietly, and this wallet has done that once.
+    fn settle_birthday(&mut self) {
+        let (Some(store), Some(label)) = (self.store.as_ref(), self.wallet.active_key.clone())
+        else {
+            return;
+        };
+        let pending = Self::birthday_pending_key(&label);
+        let Some(generated_at) = store
+            .setting(&pending)
+            .and_then(|second| second.parse::<i64>().ok())
+        else {
+            return;
+        };
+        let Some(tip) = self.nodes.active().and_then(|node| node.tip) else {
+            return;
+        };
+
+        let elapsed = u64::try_from(now().saturating_sub(generated_at)).unwrap_or(0);
+        let blocks = (elapsed / Self::FASTEST_BLOCK_SECONDS).max(Self::BIRTHDAY_MARGIN);
+        // Two at the earliest, for the same protocol reason a scan starts
+        // there: height zero cannot be asked for.
+        let birthday = u64::from(tip).saturating_sub(blocks).max(2);
+
+        tracing::info!(
+            label,
+            tip,
+            elapsed,
+            birthday,
+            "a pending birthday was settled against the first tip this wallet saw",
+        );
+        store.set_setting(&Self::birthday_key(&label), &birthday.to_string());
+        store.forget_setting(&pending);
+    }
+
+    /// Where a key's birthday is written, per key rather than per wallet.
+    ///
+    /// A wallet holds several keys and each is its own shielded account with
+    /// its own history, so one height for all of them would be one account's
+    /// answer applied to another's — and applied in the direction that skips
+    /// blocks, which is the direction that loses money.
+    ///
+    /// Keyed by label, which is what names a key everywhere else here. A rename
+    /// therefore loses the birthday and the next scan starts at Sapling
+    /// activation: slower, never wrong, and the safe way round for something a
+    /// wallet cannot ask anybody to confirm.
+    fn birthday_key(label: &str) -> String {
+        format!("light_birthday:{label}")
+    }
+
+    /// Record that a key generated here cannot have been paid before now.
+    ///
+    /// # Why this is only ever called for a key this wallet generated
+    ///
+    /// The claim being written down is a real one, and it is only true for
+    /// fresh entropy: an account that came into existence a moment ago has no
+    /// history, so the chain tip is a correct floor for it.
+    ///
+    /// An **imported** phrase gets nothing. The same words may have been in
+    /// another wallet for years, and when *this* wallet derived the account
+    /// says nothing whatever about when the account was first paid. That is not
+    /// a hypothetical either: an earlier version recorded the tip at the moment
+    /// a light server was configured, and hid a real payment of 10 VRSCTEST
+    /// sixty-three blocks the wrong side of the line.
+    ///
+    /// # And why an unknown tip records nothing
+    ///
+    /// The wallet has to know a height for the claim to be about anything. If
+    /// no node has answered yet, there is no honest floor to write, and the
+    /// first scan covers the chain — minutes, once. Guessing here would trade a
+    /// wait nobody minds for a balance that is quietly short.
+    fn remember_birthday(&self, label: &str) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+
+        if let Some(tip) = self.nodes.active().and_then(|node| node.tip) {
+            tracing::info!(label, tip, "a freshly generated key was given its birthday");
+            store.set_setting(&Self::birthday_key(label), &tip.to_string());
+            return;
+        }
+
+        // The ordinary case, not the exception: a key is generated during
+        // onboarding and the node probe has usually not come back yet. Measured
+        // against a real testnet node, it had not come back *every* time. So
+        // the moment is recorded instead, and `settle_birthday` turns it into a
+        // height as soon as there is one to work from. Until it does, the
+        // account is not scanned at all — there is nothing to find in an
+        // account that came into existence a moment ago, and a scan started
+        // before the birthday is known would be the whole chain, which is
+        // exactly what the birthday exists to avoid.
+        tracing::info!(
+            label,
+            "no node has reported a tip yet; this key's birthday is pending",
+        );
+        store.set_setting(&Self::birthday_pending_key(label), &now().to_string());
+    }
+
+    /// A scan is under way and has got this far.
+    ///
+    /// Reported because a first scan with no birthday covers the whole chain —
+    /// minutes, measured — and a wallet that goes quiet for minutes is a wallet
+    /// somebody restarts.
+    fn scan_progress(&mut self, scanned_to: u64, tip: u64, start: u64) {
+        let span = tip.saturating_sub(start).max(1);
+        let done = scanned_to.saturating_sub(start);
+        // Integer arithmetic: a percentage needs no floating point, and this
+        // number is read by a person rather than computed with.
+        let percent = u32::try_from(done.saturating_mul(100) / span).unwrap_or(100);
+
+        self.scan_share = Some(percent.min(100));
+        self.emit_wallet();
+    }
+
+    /// A scan came back — completely, or as far as it got.
+    ///
+    /// Whatever was scanned is kept in both cases. A partial result is not a
+    /// failed one: it is fewer blocks than asked for, and the next scan
+    /// continues from there instead of beginning at block two again.
+    fn finish_scan(
+        &mut self,
+        watching: Option<shielded::Shielded>,
+        failed: Option<String>,
+        restart: bool,
+    ) {
+        self.scanning = false;
+        self.scan_share = None;
+
+        if restart {
+            tracing::warn!(
+                "the chain moved further back than the kept scan can verify; discarding it",
+            );
+            // Forgets the stored blob and resets what is in memory, so the next
+            // tick is a first scan from the birthday rather than a continuation
+            // of something the chain no longer agrees with.
+            self.shielded_scan_forgotten();
+            self.notice_warning(
+                "shielded_scan",
+                NoteVm::plain("shielded-scan-restarting"),
+                failed.as_deref().unwrap_or_default(),
+            );
+            self.emit_wallet();
+            return;
+        }
+
+        if let Some(watching) = watching {
+            tracing::info!(
+                balance = watching.balance(),
+                notes = watching.note_count(),
+                scanned_to = ?watching.scanned_to(),
+                complete = failed.is_none(),
+                "shielded scan came back",
+            );
+            self.shielded = Some(watching);
+            // Written down before anything is reported, and on a partial scan
+            // as well as a complete one. What it managed is exactly what the
+            // next launch should not have to do again — a hiccup at block
+            // 900 000 must not cost the 900 000 blocks in front of it.
+            self.keep_shielded_scan();
+            self.emit_wallet();
+        }
+
+        if let Some(why) = failed {
+            // Warned rather than shouted about: a light server that is down
+            // costs a balance, not money, and the transparent half of the
+            // wallet is unaffected.
+            tracing::warn!(%why, "the shielded scan stopped early");
+            self.notice_warning("shielded_scan", NoteVm::plain("shielded-scan-failed"), &why);
         }
     }
 
@@ -4096,11 +4763,7 @@ impl Core {
     /// in memory. Same shape as the pending ledger, for the same reason.
     fn start_registration(&mut self, name: &str, revocation: &str, recovery: &str) {
         if self.reservation.in_progress() {
-            self.notice_warning(
-                "registration_busy",
-                NoteVm::plain("name-claim-busy"),
-                "",
-            );
+            self.notice_warning("registration_busy", NoteVm::plain("name-claim-busy"), "");
             return;
         }
 
@@ -5185,11 +5848,7 @@ impl Core {
             // The interface gates its own button on this, so arriving here
             // means a second interface or a stale draft. Refused rather than
             // trusted: the checks are the core's, and this is where they bind.
-            self.notice_warning(
-                "currency_launch",
-                NoteVm::plain("launch-draft-invalid"),
-                "",
-            );
+            self.notice_warning("currency_launch", NoteVm::plain("launch-draft-invalid"), "");
             return;
         }
 
@@ -5230,11 +5889,7 @@ impl Core {
         // would have to be guessed, and a definition under the wrong parent is
         // a different currency with the same name.
         let Some(parent) = self.cached.native else {
-            self.notice_warning(
-                "currency_launch",
-                NoteVm::plain("launch-chain-unknown"),
-                "",
-            );
+            self.notice_warning("currency_launch", NoteVm::plain("launch-chain-unknown"), "");
             return;
         };
 
@@ -5250,11 +5905,7 @@ impl Core {
         let permit = match self.nodes.spend_permit() {
             Ok(permit) => permit,
             Err(refused) => {
-                self.notice_warning(
-                    "spend_refused",
-                    refusal_note(&refused),
-                    "",
-                );
+                self.notice_warning("spend_refused", refusal_note(&refused), "");
                 return;
             }
         };
@@ -5403,10 +6054,7 @@ impl Core {
                         "currency_launched",
                         NoteVm::with(
                             "launch-on-its-way",
-                            [
-                                done.name.clone(),
-                                currency::thousands(done.start_block),
-                            ],
+                            [done.name.clone(), currency::thousands(done.start_block)],
                         ),
                         String::new(),
                         pecu_protocol::Severity::Info,
@@ -5415,14 +6063,14 @@ impl Core {
                 // file is removed by success; the other is somebody saying stop.
                 self.intent.finish();
                 self.emit_launch_pending();
-                let _ = self.events.send(Event::LaunchDone(Box::new(
-                    pecu_protocol::LaunchDoneVm {
-                        txid: done.txid,
-                        address: done.address,
-                        name: done.name,
-                        start_block: currency::thousands(done.start_block),
-                    },
-                )));
+                let _ =
+                    self.events
+                        .send(Event::LaunchDone(Box::new(pecu_protocol::LaunchDoneVm {
+                            txid: done.txid,
+                            address: done.address,
+                            name: done.name,
+                            start_block: currency::thousands(done.start_block),
+                        })));
                 // The identity now carries a currency, so both halves of the
                 // screen are stale.
                 self.refresh_identities();
@@ -5460,20 +6108,12 @@ impl Core {
             return;
         }
         if self.intent.in_progress() {
-            self.notice_warning(
-                "currency_launch",
-                NoteVm::plain("launch-busy"),
-                "",
-            );
+            self.notice_warning("currency_launch", NoteVm::plain("launch-busy"), "");
             return;
         }
         let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
         if currency::problems(&draft, tip).iter().any(|p| p.blocking) {
-            self.notice_warning(
-                "currency_launch",
-                NoteVm::plain("launch-draft-invalid"),
-                "",
-            );
+            self.notice_warning("currency_launch", NoteVm::plain("launch-draft-invalid"), "");
             return;
         }
         let Some(label) = self.wallet.view().active_key else {
@@ -5963,6 +6603,17 @@ impl Core {
         // often hits — nothing scanned, and not enough in one bundle.
         let plan = match route {
             pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => {
+                // Named separately from "this key has no shielded account".
+                // The two look identical on screen — no shielded payment — and
+                // call for opposite things: one is a key that can never have
+                // one, the other is a setting nobody has filled in yet.
+                if self.light_server.is_none() {
+                    self.refuse_send(
+                        NoteVm::plain("shielded-not-configured"),
+                        "no light server is configured",
+                    );
+                    return;
+                }
                 let Some(shielded) = self.shielded.as_ref() else {
                     self.refuse_send(
                         NoteVm::plain("shielded-none"),
@@ -6101,16 +6752,16 @@ impl Core {
             Err(error) => {
                 let refusal = send_note(&error);
                 self.notice("prepare_send", refusal.clone(), &error);
-                let _ =
-                    self.events
-                        .send(Event::SendResult(pecu_protocol::SendOutcomeVm::Failed(
-                            pecu_protocol::UiError::simple(
-                                "prepare_send",
-                                refusal,
-                                error.to_string(),
-                                pecu_protocol::Severity::Danger,
-                            ),
-                        )));
+                let _ = self
+                    .events
+                    .send(Event::SendResult(pecu_protocol::SendOutcomeVm::Failed(
+                        pecu_protocol::UiError::simple(
+                            "prepare_send",
+                            refusal,
+                            error.to_string(),
+                            pecu_protocol::Severity::Danger,
+                        ),
+                    )));
             }
         }
     }
@@ -6168,20 +6819,20 @@ impl Core {
                 // not record is exactly the situation the ledger exists to
                 // prevent, and it is not made better by proceeding.
                 self.prepared.insert(ticket, prepared);
-                self.notice(
-                    "pending_commit",
-                    NoteVm::plain("pending-unsaved"),
-                    &error,
-                );
+                self.notice("pending_commit", NoteVm::plain("pending-unsaved"), &error);
                 return;
             }
         };
 
         self.busy(TaskKind::Broadcasting, true);
         self.broadcasting = true;
+        // Read before the move: `prepared` goes to the worker, and the
+        // nullifiers have to come back with the answer.
+        let spends = prepared.spends.clone();
         self.blocking.dispatch(
             move || Work::Broadcast {
                 record,
+                spends,
                 result: Box::new(send::broadcast(&chain, &permit, prepared)),
             },
             self.work.clone(),
@@ -6191,6 +6842,7 @@ impl Core {
     fn finish_broadcast(
         &mut self,
         record: u64,
+        spends: &[[u8; 32]],
         result: Result<verus_sdk::network::Sent, verus_sdk::network::FlowError>,
     ) {
         use pecu_protocol::SendOutcomeVm;
@@ -6217,6 +6869,20 @@ impl Core {
                     fee = %portfolio::coins(sent.fee),
                     "a payment was accepted by the network",
                 );
+                // The notes are gone the moment the network takes the
+                // transaction, and the chain will not say so for another block.
+                // Until it does, this is the only thing between a second spend
+                // and `bad-txns-sapling-nullifier-exists` — the shielded half of
+                // what the pending ledger does for transparent outputs.
+                if let Some(shielded) = self.shielded.as_mut() {
+                    shielded.mark_spent(spends);
+                    // Written down immediately rather than at the next scan.
+                    // The window between the two is exactly the window this
+                    // marker exists to cover, so leaving it in memory alone
+                    // would mean a wallet closed in that minute reopens willing
+                    // to spend a note it has already spent.
+                    self.keep_shielded_scan();
+                }
                 self.remember_recipient(record);
                 self.pending.set_state(record, pending::State::Confirmed);
                 self.pending.forget_confirmed();
@@ -6357,10 +7023,24 @@ impl Core {
         // which shielded account is active, and only this side has scanned for
         // what is in it. Left empty when there is no account, because zero and
         // "no account" are different statements.
-        if !vm.shielded_address.is_empty() {
-            vm.shielded_balance =
-                portfolio::coins(verus_sdk::money::Amount::from_sat(self.shielded_balance()));
+        // Only once something has actually been looked at. Before that the
+        // honest answer is nothing at all: a wallet that has not scanned does
+        // not know its pool is empty, and printing "0" would be a claim about
+        // somebody's money that nobody has earned the right to make.
+        if let Some(share) = self.scan_share {
+            vm.shielded_scan = Some(share);
         }
+
+        vm.shielded_funds = match self.shielded.as_ref() {
+            // Scanned: a figure, which may legitimately be zero.
+            Some(held) if held.scanned_to().is_some() => pecu_protocol::ShieldedFunds::Scanned(
+                portfolio::coins(verus_sdk::money::Amount::from_sat(held.balance())),
+            ),
+            // There is an account and nobody has looked in it. Saying "0" here
+            // would be a claim no scan supports.
+            Some(_) => pecu_protocol::ShieldedFunds::Unscanned,
+            None => pecu_protocol::ShieldedFunds::Absent,
+        };
         let _ = self.events.send(Event::Wallet(vm));
     }
 
@@ -6451,6 +7131,7 @@ impl Core {
             ),
             active_node: active.map(|n| n.id),
             allow_mainnet_spend: self.nodes.allow_mainnet_spend(),
+            light_server: self.light_server.clone().unwrap_or_default(),
             mock_mode: self.mock,
             nodes: self.nodes.nodes().iter().map(to_node_vm).collect(),
         };
@@ -6787,6 +7468,24 @@ fn payment_summary(payments: i64, paid_at: Option<i64>, now: i64) -> String {
 /// A wall clock, not a monotonic one: it is compared against block timestamps,
 /// which are wall-clock too. A user changing their clock changes what the list
 /// says, which is correct — it is their clock the list is relative to.
+/// What this wallet knows about when a shielded account could first have been
+/// paid.
+///
+/// Three answers, and they call for three different things — which is why this
+/// is not an `Option<u64>`. `Pending` in particular is not "no birthday": it is
+/// "there will be one shortly, and scanning before it arrives would do the
+/// expensive thing for no reason".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Birthday {
+    /// Scan from here.
+    Known(u64),
+    /// A key generated here, waiting for a tip to measure against.
+    Pending,
+    /// Nobody knows — an imported phrase, or a wallet from before this was
+    /// recorded. Scan from Sapling activation.
+    Unknown,
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -7277,7 +7976,11 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "import_key");
-        assert_eq!(notice.message.code, "phrase-checksum", "{:?}", notice.message);
+        assert_eq!(
+            notice.message.code, "phrase-checksum",
+            "{:?}",
+            notice.message
+        );
         assert!(!path.exists(), "a refused restore created a wallet file");
 
         // The same words with a valid checksum.
@@ -7881,7 +8584,11 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_key");
-        assert_eq!(notice.message.code, "key-name-taken", "{:?}", notice.message);
+        assert_eq!(
+            notice.message.code, "key-name-taken",
+            "{:?}",
+            notice.message
+        );
 
         // A name the vault's own rules refuse gets a different sentence,
         // because it calls for a different fix.
@@ -7896,7 +8603,11 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_key");
-        assert_eq!(notice.message.code, "key-name-rules", "{:?}", notice.message);
+        assert_eq!(
+            notice.message.code, "key-name-rules",
+            "{:?}",
+            notice.message
+        );
     }
 
     /// Wait for a network event the caller is interested in, ignoring the rest.
@@ -8000,7 +8711,11 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_node");
-        assert_eq!(notice.message.code, "node-url-insecure", "{:?}", notice.message);
+        assert_eq!(
+            notice.message.code, "node-url-insecure",
+            "{:?}",
+            notice.message
+        );
 
         // And nothing was written down, so a restart does not resurrect it.
         let store = pecu_store::Store::open(&chain_dir(&dir)).expect("store");
@@ -8039,7 +8754,11 @@ mod tests {
             }
         };
         assert_eq!(notice.code, "add_node");
-        assert_eq!(notice.message.code, "node-duplicate", "{:?}", notice.message);
+        assert_eq!(
+            notice.message.code, "node-duplicate",
+            "{:?}",
+            notice.message
+        );
     }
 
     /// Removing whichever node is in use must not leave the wallet pointed at
@@ -8111,9 +8830,7 @@ mod tests {
     }
 
     /// Wait for the next `Event::Wallet`, ignoring anything else.
-    async fn next_wallet(
-        events: &mut mpsc::UnboundedReceiver<Event>,
-    ) -> pecu_protocol::WalletVm {
+    async fn next_wallet(events: &mut mpsc::UnboundedReceiver<Event>) -> pecu_protocol::WalletVm {
         loop {
             match events.recv().await {
                 Some(Event::Wallet(vm)) => return vm,

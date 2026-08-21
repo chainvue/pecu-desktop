@@ -18,6 +18,7 @@
 //
 //   node scripts/grpcweb-proxy.mjs                     # 127.0.0.1:8080
 //   INSECURE=1 node scripts/grpcweb-proxy.mjs          # accept an expired cert
+//   UPSTREAM=http://127.0.0.1:9077 node scripts/grpcweb-proxy.mjs
 //   PORT=9000 UPSTREAM=host:port node scripts/grpcweb-proxy.mjs
 //
 // # This is a development tool and is not shipped
@@ -47,7 +48,17 @@ import http from 'node:http'
 import http2 from 'node:http2'
 
 const PORT = Number(process.env.PORT ?? 8080)
-const [host, port] = (process.env.UPSTREAM ?? 'lightwalletd.verustest.net:8125').split(':')
+// `UPSTREAM` may carry a scheme. Without one, https is assumed — a bare
+// host:port is almost always somebody else's server across the open internet,
+// and defaulting that to cleartext would be the wrong way round.
+//
+// `http://` selects cleartext HTTP/2, which is what lightwalletd serves on
+// loopback: behind a tunnel it has no reason to hold a certificate, and
+// `--no-tls-very-insecure` is the ordinary way to start it there. That hop is
+// localhost to localhost, with nothing on the wire to protect.
+const rawUpstream = process.env.UPSTREAM ?? 'lightwalletd.verustest.net:8125'
+const upstream = /^https?:\/\//.test(rawUpstream) ? rawUpstream : `https://${rawUpstream}`
+const cleartext = upstream.startsWith('http://')
 const insecure = process.env.INSECURE === '1'
 
 /** One grpc-web frame: a flag byte, a big-endian length, then the payload. */
@@ -66,8 +77,6 @@ function trailerFrame(trailers) {
     .join('\r\n')
   return frame(0x80, Buffer.from(text + '\r\n', 'utf8'))
 }
-
-const upstream = `https://${host}:${port}`
 
 http
   .createServer((request, response) => {
@@ -90,7 +99,11 @@ http
         response.end(`${where}: ${error.message}\n`)
       }
 
-      const session = http2.connect(upstream, { rejectUnauthorized: !insecure })
+      // `rejectUnauthorized` is meaningless without TLS, and passing it for a
+      // cleartext session would suggest a check that is not happening.
+      const session = cleartext
+        ? http2.connect(upstream)
+        : http2.connect(upstream, { rejectUnauthorized: !insecure })
       session.on('error', (error) => fail('upstream', error))
 
       const stream = session.request({
@@ -131,5 +144,6 @@ http
     })
   })
   .listen(PORT, '127.0.0.1', () => {
-    console.log(`grpc-web  http://127.0.0.1:${PORT}  ->  ${upstream}  (insecure=${insecure})`)
+    const how = cleartext ? 'cleartext h2' : insecure ? 'TLS, unverified' : 'TLS, verified'
+    console.log(`grpc-web  http://127.0.0.1:${PORT}  ->  ${upstream}  (${how})`)
   })

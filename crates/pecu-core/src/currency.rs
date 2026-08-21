@@ -26,9 +26,9 @@
 //! requests it makes. It also yields the definition itself, which the list has
 //! to show anyway, so the "extra" request is not extra.
 
+use pecu_protocol::NoteVm;
 use verus_sdk::currency::option;
 use verus_sdk::network::{CurrencySummary, RpcError};
-use pecu_protocol::NoteVm;
 
 /// What `proof_protocol` means when it is 2.
 ///
@@ -440,14 +440,10 @@ fn basket_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>)
 
 fn nft_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) {
     if !draft.reserves.is_empty() {
-        out.push(Problem::stop(
-            NoteVm::plain("draft-nft-no-reserves"),
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-nft-no-reserves")));
     }
     if draft.preallocations.len() > 1 {
-        out.push(Problem::stop(
-            NoteVm::plain("draft-nft-one-holder"),
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-nft-one-holder")));
     }
     // Never broadcast successfully from this SDK. Said here rather than in a
     // footnote, because it is the one thing about this option somebody cannot
@@ -471,13 +467,9 @@ fn token_problems(draft: &pecu_protocol::CurrencyDraft, out: &mut Vec<Problem>) 
         .sum();
 
     if supply == 0 && !draft.mintable {
-        out.push(Problem::stop(
-            NoteVm::plain("draft-supply-none-ever"),
-        ));
+        out.push(Problem::stop(NoteVm::plain("draft-supply-none-ever")));
     } else if supply == 0 {
-        out.push(Problem::warn(
-            NoteVm::plain("draft-supply-mint-later"),
-        ));
+        out.push(Problem::warn(NoteVm::plain("draft-supply-mint-later")));
     }
 
     for allocation in &draft.preallocations {
@@ -833,10 +825,7 @@ pub fn progress(step: crate::launch::Step) -> Vec<pecu_protocol::FlowStepVm> {
 ///
 /// A name being claimed has no address yet and gets no address row at all,
 /// which is itself the difference worth seeing.
-fn under(
-    draft: &pecu_protocol::CurrencyDraft,
-    identity_name: &str,
-) -> Vec<(&'static str, String)> {
+fn under(draft: &pecu_protocol::CurrencyDraft, identity_name: &str) -> Vec<(&'static str, String)> {
     let identity = draft.identity.trim();
     if !identity.is_empty() {
         let named = identity_name.trim();
@@ -1744,7 +1733,9 @@ mod tests {
             "a plan claimed something was already under way: {long:?}",
         );
         assert!(
-            !long.iter().any(|step| step.label.code == "step-choose-a-name"),
+            !long
+                .iter()
+                .any(|step| step.label.code == "step-choose-a-name"),
             "choosing the name is a form field, not a transaction: {long:?}",
         );
     }

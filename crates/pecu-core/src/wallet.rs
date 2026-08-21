@@ -560,7 +560,12 @@ impl Wallet {
             shielded_note: self.shielded_note.clone(),
             // Filled in by the core, which is the side that has scanned. The
             // wallet knows which account it is; it does not know what is in it.
-            shielded_balance: String::new(),
+            // Filled in by the core, which is the side that has scanned. The
+            // wallet knows which account is active; it does not know what is
+            // in it.
+            shielded_funds: pecu_protocol::ShieldedFunds::Absent,
+            // The core fills this in while a scan is under way.
+            shielded_scan: None,
         }
     }
 }

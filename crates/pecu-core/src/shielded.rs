@@ -10,21 +10,31 @@
 //! scanned, ask for the tail, fold it in, and know what to do when the server
 //! says the chain moved.
 //!
-//! # Why nothing is written to disk
+//! # What is written to disk, and how
 //!
 //! A [`ScanResult`] is the wallet's shielded history: every note paid to it,
 //! with amounts and heights. The wallet's databases are plain SQLite, encrypted
-//! by nothing — only the vault is. Writing note data there would put a
+//! by nothing — only the vault is. Writing note data there in clear would put a
 //! shielded balance and its whole history in a file any other process on the
 //! machine can read, which is precisely the property somebody chose a shielded
 //! address to avoid. A wallet that leaks that at rest has not delivered privacy;
 //! it has delivered the appearance of it.
 //!
-//! So this scans into memory and starts again next launch. That is slower, and
-//! it is the honest default until there is a place to put this that is as
-//! protected as the keys are. It is not free: a restored wallet has to walk
-//! from its birthday, and `birthday` for a *new* wallet is the tip, so the
-//! common case costs nothing and the recovery case costs a wait.
+//! For a long time the answer was to write nothing, and rescan on every launch.
+//! That is honest and it is unusable: a VRSCTEST scan from Sapling activation
+//! is about twelve hundred requests and three minutes, and paying it at every
+//! start makes the shielded balance something the wallet is always in the
+//! middle of finding out.
+//!
+//! So it is written, [`Kept`] first and then sealed under the vault's data key
+//! — the same key the recovery phrase is under, held only while the wallet is
+//! open. The database row carries ciphertext and a timestamp; which account it
+//! belongs to is inside. `tests/shielded_kept.rs` reads the file back and
+//! greps it for the address, the value and the height rather than trusting this
+//! paragraph.
+//!
+//! What that does **not** protect against is anything with the passphrase or
+//! with the running process, which is the same boundary as every key here.
 //!
 //! # A balance here is a claim by a server
 //!
@@ -71,6 +81,18 @@ pub enum ShieldedError {
     /// Anything the scan itself reported.
     #[error("the shielded scan failed: {0}")]
     Scan(String),
+
+    /// A kept scan belongs to a different account than the one now loaded.
+    ///
+    /// Not corruption and not an attack — switching keys inside one wallet
+    /// reaches this — but folding it in would report one account's money under
+    /// another's address, so it is refused and the scan starts again.
+    #[error("that scan was made for a different shielded account")]
+    WrongAccount,
+
+    /// A kept scan could not be read back.
+    #[error("the kept shielded scan is unreadable: {0}")]
+    Unreadable(String),
 
     /// The destination is neither a shielded nor a transparent address.
     #[error("that is not an address this wallet can pay")]
@@ -126,6 +148,7 @@ pub struct Progress {
 /// Holds viewing material only — see [`ShieldedView`]. Nothing reachable from
 /// here can spend, and in this build the code that would has not been compiled
 /// in at all.
+#[derive(Clone)]
 pub struct Shielded {
     /// The viewing material this was built from, kept as it arrived.
     ///
@@ -137,6 +160,59 @@ pub struct Shielded {
     view: ShieldedView,
     dfvk: DiversifiableFullViewingKey,
     scanned: Option<ScanResult>,
+
+    /// Nullifiers of notes this wallet has spent, but has not yet seen spent.
+    ///
+    /// # Why this is not redundant with the scan
+    ///
+    /// A note is spent when its nullifier appears in a block. Between
+    /// broadcasting a spend and that block arriving — a minute on Verus, longer
+    /// if the fee was thin — the chain still shows the note as unspent, because
+    /// as far as the chain is concerned it is.
+    ///
+    /// Without this, a second spend in that window selects the same note again
+    /// and the daemon refuses the whole transaction with
+    /// `bad-txns-sapling-nullifier-exists`, after the prover has been paid for.
+    /// That is not a hypothetical: it is what `live_shielded_spend.rs` did on
+    /// its first real run, and it is the shielded half of exactly what the
+    /// pending ledger does for transparent outputs.
+    ///
+    /// Pruned by [`Self::sync`] once the scan has seen them, so this cannot
+    /// grow without bound.
+    spent_locally: Vec<[u8; 32]>,
+}
+
+/// A scan, in a form that can be written down and read back.
+///
+/// # What is in here, and why all of it
+///
+/// The notes **and** every nullifier the scan saw. Keeping only the notes looks
+/// like the smaller thing to store and is the dangerous one: a note spent
+/// inside the range comes back as spendable, and the wallet offers money it no
+/// longer has. The SDK says the same at [`ScanResult`] and this type exists so
+/// that the pair cannot be separated by accident here either.
+///
+/// `spent_locally` too, which is not from the chain at all — it is what this
+/// wallet has spent and not yet seen spent. Dropping it across a restart
+/// reopens the window where a second spend picks the same note and the daemon
+/// refuses the whole transaction after the prover has been paid for.
+///
+/// # Why the account is named inside
+///
+/// So the thing that reads it back can tell whether it is the right one. This
+/// is a serialised blob in a file, and the file cannot say which key it belongs
+/// to without saying so somewhere; putting it in a column would tell anybody
+/// who opens the database which shielded account this wallet holds. Inside the
+/// ciphertext it tells only the wallet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Kept {
+    /// The 128 viewing-key bytes, hex, of the account this describes.
+    account: String,
+    scanned: ScanResult,
+    /// Nullifiers, hex. Hex rather than `[u8; 32]` because serde writes a byte
+    /// array as thirty-two separate numbers, which is neither smaller nor
+    /// readable when somebody is working out what a file contains.
+    spent_locally: Vec<String>,
 }
 
 impl Shielded {
@@ -148,6 +224,57 @@ impl Shielded {
             view: view.clone(),
             dfvk,
             scanned: None,
+            spent_locally: Vec::new(),
+        })
+    }
+
+    /// Start watching an account, with what a previous run already scanned.
+    ///
+    /// # Errors
+    ///
+    /// [`ShieldedError::WrongAccount`] when `kept` was made for a different
+    /// viewing key — which is a switch of keys inside one wallet, not a fault,
+    /// and the caller's answer is to scan from the beginning rather than to
+    /// show anybody a message. [`ShieldedError::BadViewingKey`] if the view
+    /// itself does not reconstruct.
+    ///
+    /// A malformed nullifier is **skipped, not fatal**, and the skip is logged.
+    /// The consequence of dropping one is that a note this wallet spent very
+    /// recently may be offered again before the chain confirms it — recoverable,
+    /// and one bad byte must not cost an hour of scanning.
+    pub fn restore(view: &ShieldedView, kept: Kept) -> Result<Self, ShieldedError> {
+        if kept.account != hex::encode(view.dfvk) {
+            return Err(ShieldedError::WrongAccount);
+        }
+
+        let mut watching = Self::watching(view)?;
+        watching.spent_locally = kept
+            .spent_locally
+            .iter()
+            .filter_map(|hexed| {
+                let bytes: Option<[u8; 32]> = hex::decode(hexed)
+                    .ok()
+                    .and_then(|bytes| bytes.try_into().ok());
+                if bytes.is_none() {
+                    tracing::warn!("a kept nullifier was not 32 hex bytes and was skipped");
+                }
+                bytes
+            })
+            .collect();
+        watching.scanned = Some(kept.scanned);
+        Ok(watching)
+    }
+
+    /// This scan, in a form that can be written down.
+    ///
+    /// `None` before anything has been scanned: there is nothing to keep, and
+    /// writing an empty result would make the next launch believe it had
+    /// already looked.
+    pub fn keep(&self) -> Option<Kept> {
+        Some(Kept {
+            account: hex::encode(self.view.dfvk),
+            scanned: self.scanned.clone()?,
+            spent_locally: self.spent_locally.iter().map(hex::encode).collect(),
         })
     }
 
@@ -182,7 +309,7 @@ impl Shielded {
     pub fn balance(&self) -> u64 {
         self.scanned
             .as_ref()
-            .map_or(0, |result| result.balance(&[]))
+            .map_or(0, |result| result.balance(&self.spent_locally))
     }
 
     /// How many unspent notes back that balance.
@@ -194,7 +321,24 @@ impl Shielded {
     pub fn note_count(&self) -> usize {
         self.scanned
             .as_ref()
-            .map_or(0, |result| result.unspent(&[]).len())
+            .map_or(0, |result| result.unspent(&self.spent_locally).len())
+    }
+
+    /// Record that a spend of these notes has been broadcast.
+    ///
+    /// Called after the network accepts a shielded spend, not before: a
+    /// transaction the daemon refused has spent nothing, and marking its notes
+    /// would strand them until the next scan.
+    pub fn note_spent(&mut self, planned: &PlannedSpend) {
+        self.mark_spent(&planned.nullifiers());
+    }
+
+    /// The same, from nullifiers that have already been carried somewhere.
+    ///
+    /// What the actor uses: by the time a broadcast has been accepted, the plan
+    /// is long gone and only the nullifiers came back with the answer.
+    pub fn mark_spent(&mut self, nullifiers: &[[u8; 32]]) {
+        self.spent_locally.extend_from_slice(nullifiers);
     }
 
     /// Scan whatever this wallet has not, up to `to`.
@@ -245,6 +389,11 @@ impl Shielded {
                     rewound: 0,
                 };
                 previous.absorb(tail).map_err(|e| scan_error(&e))?;
+                // Anything the chain now agrees is spent no longer needs
+                // remembering separately.
+                let seen = previous;
+                self.spent_locally
+                    .retain(|nullifier| !seen.nullifiers.iter().any(|s| s.nullifier == *nullifier));
                 Ok(progress)
             }
             Err(FlowError::Reorged(_)) => {
@@ -357,6 +506,14 @@ pub struct PlannedSpend {
 }
 
 impl PlannedSpend {
+    /// The nullifiers this spend will publish.
+    ///
+    /// What [`Shielded::note_spent`] records, so the same notes are not chosen
+    /// again while the spend is still in the mempool.
+    pub fn nullifiers(&self) -> Vec<[u8; 32]> {
+        self.notes.iter().map(|note| note.nullifier).collect()
+    }
+
     /// What the selected notes are worth in total.
     ///
     /// Worth showing on a review screen, because it is usually **more** than the
@@ -398,7 +555,7 @@ impl Shielded {
         // `MAX_SPEND_NOTES` spends, and each one is another Groth16 proof —
         // so this is not only a consensus limit, it is the difference between
         // half a minute and several.
-        let mut unspent = scanned.unspent(&[]);
+        let mut unspent = scanned.unspent(&self.spent_locally);
         unspent.sort_by_key(|note| std::cmp::Reverse(note.value));
 
         let mut notes = Vec::new();

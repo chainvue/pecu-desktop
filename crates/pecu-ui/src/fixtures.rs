@@ -1395,12 +1395,29 @@ pub fn locked_refused(ui: &AppWindow) {
 /// The state that needs a picture most. Three things only exist together here
 /// — the source selector, a shielded destination, and the sentence naming what
 /// the combination does — and each of them is meaningless without the others.
+/// A dashboard whose wallet has looked at its shielded pool and found some.
+///
+/// Its own fixture rather than a change to `funded`, because the state worth a
+/// picture is the *pair*: a public balance beside a private one. A wallet that
+/// has never scanned shows no shielded column at all, and that is the ordinary
+/// case the other images already cover.
+pub fn funded_with_shielded(ui: &AppWindow) {
+    funded(ui);
+    let wallet = ui.global::<WalletState>();
+    wallet.set_shielded_balance("2.5000 0000".into());
+    // Both, because they are separate questions: whether a scan happened, and
+    // whether it found anything. A picture with only the first would show a
+    // column the wallet does not draw.
+    wallet.set_shielded_any(true);
+}
+
 pub fn shielding(ui: &AppWindow) {
     sending(ui);
 
     let send = ui.global::<SendState>();
     send.set_shielded_available(true);
-    send.set_shielded_balance("2.5".into());
+    send.set_shielded_balance("2.5000 0000".into());
+    send.set_shielded_scanned(true);
     send.set_from_shielded(false);
     send.set_to_draft(SHIELDED_ADDRESS.into());
     send.set_amount_draft("1.5".into());

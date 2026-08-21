@@ -27,10 +27,10 @@
 
 use std::collections::BTreeMap;
 
+use pecu_protocol::NoteVm;
 use verus_sdk::currency::CurrencyId;
 use verus_sdk::identity::{Identity, Timelock};
 use verus_sdk::network::{ContentValue, IdentityAtAddress, IdentityRecord, RpcError};
-use pecu_protocol::NoteVm;
 
 /// What state an identity is in, as a person would describe it.
 ///
@@ -797,10 +797,9 @@ pub fn registration_view(
             NoteVm::with("claim-waiting", [confirmations.to_string()]),
         ),
         Some(CommitmentStatus::Ready(_)) => ("ready", NoteVm::plain("claim-confirmed")),
-        Some(CommitmentStatus::Reorged { detail }) => (
-            "waiting",
-            NoteVm::with("claim-reorged", [detail.clone()]),
-        ),
+        Some(CommitmentStatus::Reorged { detail }) => {
+            ("waiting", NoteVm::with("claim-reorged", [detail.clone()]))
+        }
         Some(CommitmentStatus::CommitmentGone) => ("lost", NoteVm::plain("claim-gone")),
         Some(CommitmentStatus::Expired { expiry_height, .. }) => (
             "expired",
@@ -975,7 +974,11 @@ mod tests {
         // Past it. The wording changes rather than the number vanishing —
         // "about -3 minutes" would be worse than saying it has gone.
         let view = registration_view(&record, None, expiry + 5, false);
-        assert_eq!(view.deadline.code, "claim-deadline-passed", "{:?}", view.deadline);
+        assert_eq!(
+            view.deadline.code, "claim-deadline-passed",
+            "{:?}",
+            view.deadline
+        );
 
         // And when the node says so outright, the panel says what it cost. Not
         // "try again": the same claim cannot be sent again, because the expiry
@@ -1066,7 +1069,10 @@ mod tests {
         };
         let text = away.describe();
         assert_eq!(text.code, "change-recovery");
-        assert_eq!(text.args, vec!["iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".to_string()]);
+        assert_eq!(
+            text.args,
+            vec!["iGRp1CGkuro3LtGazX8W1PRjVupPVfe8Pv".to_string()]
+        );
         assert!(away.changes_authority());
 
         // And an authority change carries the SDK's explicit opt-in, without

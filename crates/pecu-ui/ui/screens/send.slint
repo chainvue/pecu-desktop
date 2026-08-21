@@ -140,9 +140,11 @@ export component SendForm inherits HorizontalLayout {
                     }
 
                     Text {
-                        text: SendState.from-shielded
-                            ? @tr("{} shielded", SendState.shielded-balance)
-                            : @tr("Amounts and addresses are public");
+                        text: !SendState.from-shielded
+                                ? @tr("Amounts and addresses are public")
+                            : !SendState.shielded-scanned
+                                ? @tr("Not scanned — set a shielded server in Settings")
+                            : @tr("{} shielded", SendState.shielded-balance);
                         font-size: Typo.caption;
                         color: Theme.text-tertiary;
                         wrap: word-wrap;
@@ -197,9 +199,15 @@ export component SendForm inherits HorizontalLayout {
                         // the summary line does: with the shielded balance
                         // paying, the transparent figure here is a number that
                         // is true about the wallet and false about the payment.
-                        text: SendState.from-shielded
-                            ? @tr("{} shielded", SendState.shielded-balance)
-                            : @tr("{} spendable", WalletState.spendable);
+                        text: !SendState.from-shielded
+                                ? @tr("{} spendable", WalletState.spendable)
+                            // Empty means nothing has been scanned, which is a
+                            // different statement from a balance of zero — and
+                            // the wrong one to make silently on the line
+                            // somebody checks before pressing send.
+                            : !SendState.shielded-scanned
+                                ? @tr("not scanned yet")
+                            : @tr("{} shielded", SendState.shielded-balance);
                         font-family: Typo.mono;
                         font-size: Typo.num-sm;
                         color: Theme.text-tertiary;
@@ -275,9 +283,9 @@ export component SendForm inherits HorizontalLayout {
                     // wallet and false about the payment is worse on this
                     // screen than no number.
                     label: SendState.from-shielded ? @tr("Shielded") : @tr("Spendable");
-                    value: SendState.from-shielded
-                        ? SendState.shielded-balance
-                        : WalletState.spendable;
+                    value: !SendState.from-shielded ? WalletState.spendable
+                        : !SendState.shielded-scanned ? @tr("not scanned")
+                        : SendState.shielded-balance;
                 }
 
                 Rectangle { height: 1px; background: Theme.border-subtle; }

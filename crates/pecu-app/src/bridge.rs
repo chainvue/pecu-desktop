@@ -72,8 +72,7 @@ fn apply(ui: &AppWindow, event: Event) {
             window,
         } => {
             ui.global::<pecu_ui::Theme>().set_dark(dark);
-            ui.global::<pecu_ui::Motion>()
-                .set_enabled(!reduce_motion);
+            ui.global::<pecu_ui::Motion>().set_enabled(!reduce_motion);
             // Logical pixels, which is what the window reported when it was
             // written down — so a wallet moved between a Retina display and an
             // ordinary one comes back the same size in inches rather than in
@@ -402,8 +401,7 @@ fn apply(ui: &AppWindow, event: Event) {
                 pecu_protocol::TaskKind::RefreshingBalance => {
                     ui.global::<WalletState>().set_busy(on);
                 }
-                pecu_protocol::TaskKind::PreparingSend
-                | pecu_protocol::TaskKind::Broadcasting => {
+                pecu_protocol::TaskKind::PreparingSend | pecu_protocol::TaskKind::Broadcasting => {
                     ui.global::<SendState>().set_busy(on);
                 }
                 pecu_protocol::TaskKind::Converting => {
@@ -658,12 +656,10 @@ fn apply_market_detail(ui: &AppWindow, detail: Option<&pecu_protocol::MarketDeta
         state.set_detail_name(slint::SharedString::new());
         state.set_detail_stats(slint::ModelRc::new(slint::VecModel::from(Vec::<
             pecu_ui::Stat,
-        >::new(
-        ))));
+        >::new())));
         state.set_detail_venues(slint::ModelRc::new(slint::VecModel::from(Vec::<
             pecu_ui::Venue,
-        >::new(
-        ))));
+        >::new())));
         return;
     };
 
@@ -1081,7 +1077,19 @@ fn apply_wallet(ui: &AppWindow, vm: pecu_protocol::WalletVm) {
     // present-and-disabled.
     let send = ui.global::<SendState>();
     send.set_shielded_available(!vm.shielded_address.is_empty());
-    send.set_shielded_balance(vm.shielded_balance.clone().into());
+    // Expanded here rather than carried as three fields: `.slint` has no sum
+    // type, so the one value the core reasons about becomes the two questions
+    // each screen actually asks.
+    send.set_shielded_balance(vm.shielded_funds.balance().into());
+    send.set_shielded_scanned(vm.shielded_funds.scanned());
+    state.set_shielded_balance(vm.shielded_funds.balance().into());
+    state.set_shielded_any(vm.shielded_funds.any());
+    state.set_shielded_scanning(vm.shielded_scan.is_some());
+    state.set_shielded_scan_percent(
+        vm.shielded_scan
+            .and_then(|p| i32::try_from(p).ok())
+            .unwrap_or(0),
+    );
 
     let keys: Vec<KeyRow> = vm
         .keys
@@ -1169,6 +1177,7 @@ fn apply_network(ui: &AppWindow, vm: &pecu_protocol::NetworkVm) {
     state.set_tip(vm.tip.map(thousands).unwrap_or_default().into());
     state.set_syncing(vm.syncing);
     state.set_allow_mainnet_spend(vm.allow_mainnet_spend);
+    state.set_light_server(vm.light_server.clone().into());
     state.set_mock_mode(vm.mock_mode);
 
     // The status pill in the title bar follows the ACTIVE node, and the

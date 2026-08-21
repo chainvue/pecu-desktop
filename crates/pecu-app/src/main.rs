@@ -297,6 +297,7 @@ fn wire_actions(ui: &AppWindow, dispatcher: Dispatcher) {
     wire_reserve_picker(ui, &dispatcher);
     wire_launch(ui, &dispatcher);
     wire_settings(ui, &dispatcher);
+    wire_light_server(ui, &dispatcher);
     wire_shell(ui, dispatcher);
 }
 
@@ -1416,6 +1417,18 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
 fn wire_links(ui: &AppWindow) {
     ui.global::<Actions>()
         .on_open_link(move |url| open_in_browser(&url));
+}
+
+/// Where shielded notes are read from.
+///
+/// Its own function rather than another block inside `wire_shell`, which was
+/// already at the length clippy stops reading at. The shielded server is not a
+/// shell concern anyway — it is a second endpoint, with its own protocol.
+fn wire_light_server(ui: &AppWindow, dispatcher: &Dispatcher) {
+    let dispatcher = dispatcher.clone();
+    ui.global::<Actions>().on_set_light_server(move |url| {
+        dispatcher.send(Command::SetLightServer(url.to_string()));
+    });
 }
 
 fn wire_shell(ui: &AppWindow, dispatcher: Dispatcher) {

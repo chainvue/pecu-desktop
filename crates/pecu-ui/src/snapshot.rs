@@ -174,6 +174,11 @@ pub const CASES: &[Case] = &[
     ("dashboard", "dashboard-funded", crate::fixtures::funded),
     (
         "dashboard",
+        "dashboard-shielded",
+        crate::fixtures::funded_with_shielded,
+    ),
+    (
+        "dashboard",
         "chart-young-wallet",
         crate::fixtures::young_wallet,
     ),

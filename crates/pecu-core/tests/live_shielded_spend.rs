@@ -9,13 +9,12 @@
 //!
 //! # What it needs
 //!
-//! Verus runs no public grpc-web endpoint, so the proxy has to be up. And it
-//! spends, so it is gated the same way `live_send.rs` is — twice, because a WIF
-//! sitting in an environment is not by itself consent to spend from it.
+//! It spends, so it is gated the same way `live_send.rs` is — twice, because a
+//! WIF sitting in an environment is not by itself consent to spend from it. The
+//! light server defaults to the one the chain ships; `PECU_LIGHT_URL` overrides
+//! it.
 //!
 //! ```sh
-//! INSECURE=1 node scripts/grpcweb-proxy.mjs &     # expired upstream cert
-//! export PECU_LIGHT_URL=http://127.0.0.1:8080
 //! export PECU_LIVE_SEND=1
 //! export PECU_LIVE_WIF=<a funded VRSCTEST WIF>       # in your own shell
 //! cargo test -p pecu-core --test live_shielded_spend -- --ignored --nocapture
@@ -58,11 +57,14 @@ const UNSHIELD_SATS: u64 = 400_000;
 const CONFIRM_TIMEOUT: Duration = Duration::from_mins(10);
 
 fn light() -> LightServer {
-    let url = std::env::var("PECU_LIGHT_URL")
+    let named = std::env::var("PECU_LIGHT_URL")
         .ok()
-        .filter(|u| !u.is_empty())
-        .expect("set PECU_LIGHT_URL — see the module docs");
-    LightServer::connect(&url, &Network::Testnet).expect("connect to the light server")
+        .filter(|url| !url.is_empty());
+    match named {
+        Some(url) => LightServer::connect(&url, &Network::Testnet),
+        None => LightServer::shipped(&Network::Testnet),
+    }
+    .expect("connect to the light server")
 }
 
 fn funded_key() -> Option<PrivateKey> {
@@ -93,19 +95,33 @@ fn permitted(chain: &Chain) -> (NodeManager, u32) {
     (nodes, info.blocks)
 }
 
-/// Scan forward until the account's balance reaches `wanted`, or give up.
+/// Scan forward until `ready` is satisfied, or give up.
+///
+/// # Why a predicate and not a balance
+///
+/// The first version waited for the balance to reach a figure, and that was
+/// wrong in a way only a live run could show. After a `z→z` the balance is
+/// **almost unchanged** — value moved inside the pool, so what comes back is
+/// the payment plus the change, less the fee. "Balance is at least X" was
+/// therefore already true of the state from *before* the spend, so the wait
+/// returned at once, the next step planned against a stale scan, and the daemon
+/// refused it with `bad-txns-sapling-nullifier-exists` after the prover had
+/// been paid for.
+///
+/// What distinguishes before from after is the *shape*: one note becomes two.
+/// So the caller says what it is waiting for.
 ///
 /// Polls rather than sleeping a fixed time: testnet blocks are irregular, and a
 /// fixed wait is either too short to be reliable or too long to sit through.
-fn wait_for_balance(
+fn wait_until(
     watching: &mut shielded::Shielded,
     server: &LightServer,
     from: u64,
-    wanted: u64,
     what: &str,
+    ready: impl Fn(&shielded::Shielded) -> bool,
 ) {
     let started = Instant::now();
-    let mut last = 0;
+    let mut last = (0, 0);
     while started.elapsed() < CONFIRM_TIMEOUT {
         let tip = server.synced_height().expect("tip");
         // A fresh scan each round rather than a continuation: the earlier rounds
@@ -113,19 +129,22 @@ fn wait_for_balance(
         // handful of blocks this covers.
         let mut fresh = shielded::Shielded::watching(&view_of(watching)).expect("viewing key");
         if fresh.sync(server.client(), from, tip).is_ok() {
-            let balance = fresh.balance();
-            if balance != last {
-                println!("  {what}: {balance} sat at block {tip}");
-                last = balance;
+            let now = (fresh.balance(), fresh.note_count());
+            if now != last {
+                println!(
+                    "  {what}: {} sat in {} note(s) at block {tip}",
+                    now.0, now.1
+                );
+                last = now;
             }
-            if balance >= wanted {
+            if ready(&fresh) {
                 *watching = fresh;
                 return;
             }
         }
         std::thread::sleep(Duration::from_secs(15));
     }
-    panic!("{what}: gave up after {CONFIRM_TIMEOUT:?} — last balance {last}, wanted {wanted}");
+    panic!("{what}: gave up after {CONFIRM_TIMEOUT:?} — last seen {last:?}");
 }
 
 /// The viewing material of an account being watched, so a fresh scan can be
@@ -201,13 +220,9 @@ fn all_three_shielded_directions_are_accepted_by_the_network() {
         diversifier_index: account.diversifier_index,
     })
     .expect("viewing key");
-    wait_for_balance(
-        &mut watching,
-        &server,
-        start,
-        SHIELD_SATS,
-        "shielded balance",
-    );
+    wait_until(&mut watching, &server, start, "shielded balance", |s| {
+        s.balance() >= SHIELD_SATS
+    });
     println!("  confirmed: {} sat in the pool", watching.balance());
 
     // ── 2. z→z ──────────────────────────────────────────────────────────────
@@ -224,15 +239,17 @@ fn all_three_shielded_directions_are_accepted_by_the_network() {
     let spent = shielded::broadcast_spend(&chain, &permit, unsent).expect("accepted");
     println!("  txid {}", spent.txid);
 
-    // The whole balance minus the fee is still ours: a z→z moves value inside
-    // the pool, so what comes back is the payment plus the change.
-    wait_for_balance(
-        &mut watching,
-        &server,
-        start,
-        SHIELD_SATS - 10_000,
-        "after z→z",
-    );
+    // The note is gone the moment the network takes it, and the chain will not
+    // say so for another block. This is what stops the next step choosing it
+    // again — the same call the actor makes when a broadcast is accepted.
+    watching.note_spent(&plan);
+
+    // One note became two: the payment to itself, and the change. That is the
+    // shape that tells after from before — the balance barely moves, because
+    // the value never left the pool.
+    wait_until(&mut watching, &server, start, "after z→z", |s| {
+        s.note_count() >= 2
+    });
 
     // ── 3. z→t ──────────────────────────────────────────────────────────────
     println!("\n[3/3] z→t  sending {UNSHIELD_SATS} sat back to {from_address}");
