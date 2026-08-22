@@ -24,8 +24,17 @@ export component NodesScreen inherits VerticalLayout {
                 // Whole sentences, not fragments glued together: a language
                 // that puts the verb last cannot be built from "Requested " +
                 // a name + " · connected to " + another one.
+                //
+                // `effective` is empty in two states, not one: nothing has
+                // answered yet, and the active node answered with a name and a
+                // chain id that contradict each other. "No node has answered
+                // yet" is false in the second, and on this screen it would sit
+                // directly above a row reading "calls itself VRSCTEST but
+                // reports chain id i5w5…". One sentence is true of both — in
+                // neither case has anything said which chain this is — and the
+                // row underneath is where the difference belongs.
                 text: NetworkState.effective == ""
-                    ? @tr("Requested {} · no node has answered yet", NetworkState.requested)
+                    ? @tr("Requested {} · no node has said which chain it is on", NetworkState.requested)
                     : @tr("Requested {} · connected to {}",
                           NetworkState.requested, NetworkState.effective);
                 font-size: Typo.caption;

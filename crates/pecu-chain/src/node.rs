@@ -42,6 +42,21 @@ pub enum NodeStatus {
     WrongNetwork {
         reported: Network,
     },
+    /// Answering with a chain name and a chain id that do not go together.
+    ///
+    /// Kept apart from [`NodeStatus::WrongNetwork`] because the two are not the
+    /// same problem and do not have the same remedy. `WrongNetwork` is a node
+    /// honestly on a chain the wallet is not set to, and switching the wallet
+    /// to that chain fixes it. This is a node whose two statements about its
+    /// own identity disagree, so there is no chain to switch to: a relabelling
+    /// proxy, a hand-rolled RPC shim, or something dishonest. Reporting it as
+    /// `WrongNetwork` would tell a user on VRSCTEST that "this node is on
+    /// VRSCTEST", which is the least useful sentence available for the one case
+    /// it would be describing.
+    Unidentified {
+        name: String,
+        chain_id: String,
+    },
     /// Refused a method we need. **Not counted as a failure** — see
     /// [`Node::record_failure`].
     MethodRefused {
@@ -59,9 +74,10 @@ impl NodeStatus {
             Self::Unknown => "unknown",
             Self::Probing => "probing",
             Self::Online => "online",
-            Self::Syncing { .. } | Self::WrongNetwork { .. } | Self::MethodRefused { .. } => {
-                "degraded"
-            }
+            Self::Syncing { .. }
+            | Self::WrongNetwork { .. }
+            | Self::Unidentified { .. }
+            | Self::MethodRefused { .. } => "degraded",
             Self::Offline { .. } => "offline",
         }
     }
@@ -73,6 +89,9 @@ impl NodeStatus {
                 Some(format!("catching up — {blocks} of {longest} blocks"))
             }
             Self::WrongNetwork { reported } => Some(format!("this node is on {reported}")),
+            Self::Unidentified { name, chain_id } => Some(format!(
+                "calls itself {name} but reports chain id {chain_id}"
+            )),
             Self::MethodRefused { method } => Some(format!("refused `{method}`")),
             Self::Offline { reason } => Some(reason.clone()),
             Self::Unknown | Self::Probing | Self::Online => None,
@@ -128,10 +147,51 @@ impl Node {
     ///
     /// `requested` is the chain the wallet is set to: a node that answers
     /// perfectly about the wrong chain is degraded, not online.
+    ///
+    /// # Identity is judged before anything else in the reply
+    ///
+    /// For a chain [`Network::chain_id`] pins an id for, the reported name has
+    /// to be borne out by the reported chain id, and that check comes before
+    /// the sync check rather than after it. A node whose two statements about
+    /// its own identity contradict each other has not made a believable
+    /// statement about anything else in the same reply either, its own height
+    /// included, so "catching up" would be the wrong thing to say about it.
+    ///
+    /// `network` is then left `None` rather than set to what the name read as,
+    /// because that is simply the truth — the wallet does not know which chain
+    /// this is — and because it keeps the spend gate refusing even if that
+    /// gate's own identity branch were ever lost: an unset network is a refusal
+    /// there on its own.
+    ///
+    /// So `None` no longer only means "nothing has answered yet", and every
+    /// gate reading `network` has to decide which of the two it is looking at.
+    /// `pecu_core`'s read gate makes that decision, and argues it, where it
+    /// lives.
+    ///
+    /// The node is left selected all the same. Nothing here rotates away from
+    /// it — `consecutive_failures` is cleared below, because the endpoint did
+    /// answer — and failing over would be worse than staying: the wallet would
+    /// silently move to some other node while the one the user chose sits there
+    /// contradicting itself unread. Refusing loudly on the node the user picked
+    /// is the state a person can act on.
+    ///
+    /// A chain this build pins no id for has nothing to cross-check against and
+    /// is believed on its name exactly as before, so every PBaaS node keeps
+    /// working. Read [`Network`]'s own docs — "The name is cross-checked
+    /// against the chain id, and what that buys" — for what the pair is and is
+    /// not worth: it is not a defence against a hostile endpoint.
     pub fn record_success(&mut self, info: &ChainInfo, latency: Duration, requested: &Network) {
         let reported = Network::from_chain_name(&info.name);
+        let identified = reported
+            .chain_id()
+            .is_none_or(|pinned| pinned == info.chain_id);
 
-        self.status = if info.blocks < info.longest_chain {
+        self.status = if !identified {
+            NodeStatus::Unidentified {
+                name: info.name.clone(),
+                chain_id: info.chain_id.clone(),
+            }
+        } else if info.blocks < info.longest_chain {
             NodeStatus::Syncing {
                 blocks: info.blocks,
                 longest: info.longest_chain,
@@ -144,7 +204,7 @@ impl Node {
             NodeStatus::Online
         };
 
-        self.network = Some(reported);
+        self.network = identified.then_some(reported);
         self.tip = Some(info.blocks);
         self.latency = Some(latency);
         self.last_success = Some(SystemTime::now());
@@ -246,9 +306,9 @@ fn same_endpoint(left: &str, right: &str) -> bool {
 
 /// Ask a node what it is, and how long it took to answer.
 ///
-/// One `chain_info()` call yields the chain name, the tip, the sync state and
-/// the version — so a probe is also the tip poller for the active node, and
-/// costs one request rather than four.
+/// One `chain_info()` call yields the chain name, the chain's own currency id,
+/// the tip, the sync state and the version — so a probe is also the tip poller
+/// for the active node, and costs one request rather than five.
 pub fn probe(url: &str) -> (Result<ChainInfo, RpcError>, Duration) {
     let started = Instant::now();
     let result = connect(url, PROBE_TIMEOUT).and_then(|client| client.chain_info());
@@ -406,13 +466,32 @@ impl NodeManager {
 mod tests {
     use super::*;
 
+    /// What a node says about itself, with the chain id that goes with the name.
+    ///
+    /// The pair has to be consistent or the helper builds a node no daemon
+    /// could be, and every test that is about something else then fails for a
+    /// reason it is not about — `record_success` holds the two together. A name
+    /// this build pins no id for keeps the placeholder, because for those there
+    /// is nothing for the id to agree with.
     fn info(blocks: u32, longest: u32, name: &str) -> ChainInfo {
         ChainInfo {
             name: name.to_string(),
-            chain_id: "i-something".to_string(),
+            chain_id: Network::from_chain_name(name)
+                .chain_id()
+                .unwrap_or("i-something")
+                .to_string(),
             blocks,
             longest_chain: longest,
             version: "test".to_string(),
+        }
+    }
+
+    /// The same, with both halves under the test's control, so a test can build
+    /// the self-contradicting answer the check exists to catch.
+    fn claiming(name: &str, chain_id: &str) -> ChainInfo {
+        ChainInfo {
+            chain_id: chain_id.to_string(),
+            ..info(1_000, 1_000, name)
         }
     }
 
@@ -477,6 +556,127 @@ mod tests {
                 reported: Network::Mainnet
             }
         );
+    }
+
+    /// The case the cross-check exists for. A node calling itself VRSCTEST
+    /// while reporting mainnet's own currency id has contradicted itself, and
+    /// resolving that in favour of the name would leave a wallet set to testnet
+    /// holding a mainnet node's answers — which is fund loss, because the
+    /// addresses are the same on both chains and a signature made "for testnet"
+    /// is valid on mainnet.
+    #[test]
+    fn a_node_whose_name_and_chain_id_disagree_is_not_believed() {
+        let mut node = Node::builtin(0, "n", "https://example.invalid");
+        node.record_success(
+            &claiming("VRSCTEST", "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV"),
+            Duration::from_millis(10),
+            &Network::Testnet,
+        );
+
+        assert_eq!(
+            node.status,
+            NodeStatus::Unidentified {
+                name: "VRSCTEST".to_string(),
+                chain_id: "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV".to_string(),
+            }
+        );
+        assert_eq!(node.status.label(), "degraded");
+        // Deliberately not `Some(Network::Testnet)`. The name is the half that
+        // was contradicted, so believing it here would be believing the thing
+        // the check just rejected.
+        assert_eq!(node.network, None);
+    }
+
+    /// A node that sends no id at all has still failed to bear out its name.
+    /// Reading the empty string as "there was nothing to check" would leave any
+    /// endpoint a one-character way past the check, which is worse than not
+    /// having it: it would look like a guard in the source and not be one.
+    #[test]
+    fn an_empty_chain_id_is_a_mismatch_and_not_an_absence() {
+        let mut node = Node::builtin(0, "n", "https://example.invalid");
+        node.record_success(
+            &claiming("VRSCTEST", ""),
+            Duration::from_millis(10),
+            &Network::Testnet,
+        );
+
+        assert_eq!(
+            node.status,
+            NodeStatus::Unidentified {
+                name: "VRSCTEST".to_string(),
+                chain_id: String::new(),
+            }
+        );
+        assert_eq!(node.network, None);
+    }
+
+    /// Which of three true things the status gets to say, when all three are
+    /// true at once.
+    ///
+    /// A reply can be behind the chain, from a chain the wallet did not ask
+    /// for, and self-contradicting, all together — and the status is one value,
+    /// so the order of the branches is what decides which sentence a person
+    /// reads. Every other test here puts only one branch in contention, so
+    /// without this one the ordering `record_success` argues for above would be
+    /// held by prose and nothing else: the three could be rewritten in any
+    /// order and the suite would stay green.
+    ///
+    /// Identity has to win because the other two answers are built out of the
+    /// same reply that just contradicted itself. "Catching up — 900 of 1000
+    /// blocks" quotes heights from a node with no established identity, and
+    /// "this node is on Mainnet" states as fact the very half of the pair that
+    /// was contradicted.
+    #[test]
+    fn a_node_that_is_behind_and_on_another_chain_is_still_reported_as_unidentified() {
+        let mut node = Node::builtin(0, "n", "https://example.invalid");
+        node.record_success(
+            &ChainInfo {
+                blocks: 900,
+                longest_chain: 1_000,
+                ..claiming("VRSC", "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq")
+            },
+            Duration::from_millis(10),
+            &Network::Testnet,
+        );
+
+        assert_eq!(
+            node.status,
+            NodeStatus::Unidentified {
+                name: "VRSC".to_string(),
+                chain_id: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".to_string(),
+            }
+        );
+        assert_eq!(node.network, None);
+    }
+
+    /// Every PBaaS chain has to keep working, and this is what keeps it honest.
+    ///
+    /// A PBaaS chain is not a root chain — vARRR is registered under VRSC, so
+    /// its id is not derivable from its own name — and this build pins no id
+    /// for it. The id below is arbitrary on purpose: nothing here checks it,
+    /// and pinning a real one from memory rather than from that chain's own
+    /// node is how a wallet ships a guard that refuses honest endpoints.
+    ///
+    /// The mechanism is asserted alongside the outcome, because the outcome
+    /// alone cannot fail: with the cross-check deleted this node would be
+    /// `Online` too. What actually holds every PBaaS chain up is
+    /// [`Network::chain_id`] answering `None` for [`Network::Other`], so that
+    /// is the line a future pin would have to break here rather than in the
+    /// field.
+    #[test]
+    fn a_pbaas_node_is_still_believed_because_no_id_is_pinned_for_it() {
+        let varrr = Network::Other("VARRR".to_string());
+        assert_eq!(varrr.chain_id(), None);
+
+        let mut node = Node::builtin(0, "n", "https://example.invalid");
+        node.record_success(
+            &claiming("VARRR", "iSomethingOnlyThatChainKnows"),
+            Duration::from_millis(10),
+            &varrr,
+        );
+
+        assert_eq!(node.status, NodeStatus::Online);
+        assert_eq!(node.network, Some(varrr));
     }
 
     /// The SDK says `-32601` can mean "not at this arity" rather than "down".
