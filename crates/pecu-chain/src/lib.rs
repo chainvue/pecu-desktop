@@ -21,12 +21,14 @@
 //! then takes `&chain` unchanged, and mock mode costs zero duplicated flow
 //! code.
 
+pub mod grpc;
 pub mod light;
 pub mod network;
 pub mod node;
 pub mod permit;
 
-pub use light::{LightRefused, LightServer};
+pub use grpc::GrpcTransport;
+pub use light::{validate_light_url, Dialect, LightRefused, LightServer, Transport};
 pub use network::Network;
 pub use node::{backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus};
 pub use permit::{SpendPermit, SpendRefused};

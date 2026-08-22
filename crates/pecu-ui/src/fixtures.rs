@@ -470,17 +470,23 @@ pub fn market_detail(ui: &AppWindow) {
 ///
 /// **This is what the live wallet looks like and no reference image had it.**
 /// The list is what a chain with three hundred currencies on it produces, and
-/// the detail beside a list that long is laid out completely differently from
-/// the detail beside a list of seven — which is how a chart that draws nothing
-/// and a panel that has to be scrolled both got past every picture here.
+/// no picture here had more than seven rows until this existed.
 ///
 /// The rows past the first few are generated: what matters is the *count*, and
 /// forty-nine rows of hand-written fixture would be forty-nine chances to
 /// mistype a number that nothing checks.
 pub fn markets_crowded(ui: &AppWindow) {
+    // Built on `market_moving` for its rows, and then **unselected**.
+    //
+    // The selection used to be harmless: the list and the detail were side by
+    // side, so a picture could show a long list and an open currency at once.
+    // They are two views now, and leaving `market_moving`'s selection in place
+    // would quietly turn this case into a second photograph of the detail — the
+    // long-list case would stop existing and no test would say so.
     market_moving(ui);
 
     let state = ui.global::<MarketState>();
+    state.set_selected(SharedString::new());
     let existing = state.get_rows();
     let mut rows: Vec<MarketRow> = (0..existing.row_count())
         .filter_map(|i| existing.row_data(i))
@@ -502,6 +508,21 @@ pub fn markets_crowded(ui: &AppWindow) {
     // and a fixture that imposed its own would be photographing an arrangement
     // the wallet never produces.
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+/// A chain that prices nothing at all.
+///
+/// Reachable on a young chain, or one whose baskets have all been defined and
+/// none started. It was a blank card in the corner of a split screen and is a
+/// blank *screen* now, so the list grew something to say — and a state the
+/// interface can reach is a state worth a picture of.
+pub fn markets_empty(ui: &AppWindow) {
+    markets(ui);
+    let state = ui.global::<MarketState>();
+    state.set_selected(SharedString::new());
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<MarketRow>::new(),
+    ))));
 }
 
 /// A market whose price actually moved, and therefore has a chart.
@@ -1390,6 +1411,65 @@ pub fn locked_refused(ui: &AppWindow) {
 /// The most common way a payment fails, and the one place the amount field has
 /// something to say. Photographed because a note nobody has seen rendered is a
 /// note that can be the wrong length, the wrong colour, or absent.
+/// Shielding: paying a `zs…` out of the transparent balance.
+///
+/// The state that needs a picture most. Three things only exist together here
+/// — the source selector, a shielded destination, and the sentence naming what
+/// the combination does — and each of them is meaningless without the others.
+/// A dashboard whose wallet has looked at its shielded pool and found some.
+///
+/// Its own fixture rather than a change to `funded`, because the state worth a
+/// picture is the *pair*: a public balance beside a private one. A wallet that
+/// has never scanned shows no shielded column at all, and that is the ordinary
+/// case the other images already cover.
+pub fn funded_with_shielded(ui: &AppWindow) {
+    funded(ui);
+    let wallet = ui.global::<WalletState>();
+    wallet.set_shielded_balance("2.5000 0000".into());
+    // Both, because they are separate questions: whether a scan happened, and
+    // whether it found anything. A picture with only the first would show a
+    // column the wallet does not draw.
+    wallet.set_shielded_any(true);
+}
+
+pub fn shielding(ui: &AppWindow) {
+    sending(ui);
+
+    let send = ui.global::<SendState>();
+    send.set_shielded_available(true);
+    send.set_shielded_balance("2.5000 0000".into());
+    send.set_shielded_scanned(true);
+    send.set_from_shielded(false);
+    send.set_to_draft(SHIELDED_ADDRESS.into());
+    send.set_amount_draft("1.5".into());
+    send.set_to_valid(true);
+    send.set_to_note(Note {
+        code: "address-shielded".into(),
+        ..Default::default()
+    });
+    send.set_amount_valid(true);
+    send.set_ready(true);
+    send.set_route("shield".into());
+}
+
+/// Paying out of the shielded balance to a public address — an unshield.
+///
+/// Worth its own image because it is the route with the sharpest consequence:
+/// the amount and the recipient become public at the moment it lands, and the
+/// sentence has to say so before the button is pressed rather than after.
+pub fn unshielding(ui: &AppWindow) {
+    shielding(ui);
+
+    let send = ui.global::<SendState>();
+    send.set_from_shielded(true);
+    send.set_to_draft(SECOND_ADDRESS.into());
+    send.set_to_note(Note {
+        code: "address-transparent".into(),
+        ..Default::default()
+    });
+    send.set_route("unshield".into());
+}
+
 pub fn sending_too_much(ui: &AppWindow) {
     sending(ui);
     let send = ui.global::<SendState>();

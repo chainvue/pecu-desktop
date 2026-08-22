@@ -17,7 +17,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use pecu_ui::{snapshot, Actions, AppWindow, WalletState};
+use pecu_ui::{snapshot, Actions, AppWindow, MarketState, WalletState};
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, SharedString};
 
@@ -144,4 +144,61 @@ fn the_keyboard_reaches_the_wallet() {
     press(&ui, "l");
     release(&ui, "l");
     assert!(!locked.get(), "an unmodified `l` locked the wallet");
+}
+
+/// Escape leaves an open market, and does not fire when none is open.
+///
+/// The market detail is a **view**, not an overlay: there is no scrim to click
+/// away and the nav rail stays live behind it. So Escape and the breadcrumb are
+/// the whole way back, and if Escape stops reaching it the only route out is a
+/// link somebody has to find with a pointer.
+///
+/// The second half matters as much as the first. Escape falls through a chain
+/// of dismissals in `app.slint` and ends at `EventResult.reject`; a branch that
+/// fired when nothing was open would swallow the key from whatever is added
+/// below it later.
+#[test]
+fn escape_closes_an_open_market() {
+    let window = snapshot::install().expect("offscreen platform");
+    let ui = unlocked_window(&window);
+
+    let asked: Rc<Cell<i32>> = Rc::default();
+    let market = ui.global::<MarketState>();
+    {
+        let asked = asked.clone();
+        let ui = ui.as_weak();
+        market.on_select(move |address| {
+            asked.set(asked.get() + 1);
+            // What `wire_markets` does in the real application: write it
+            // locally, then tell the core. Without the local write the property
+            // never changes and this test would pass on a callback that did
+            // nothing.
+            if let Some(ui) = ui.upgrade() {
+                ui.global::<MarketState>().set_selected(address);
+            }
+        });
+    }
+
+    ui.set_screen("markets".into());
+    market.set_selected("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".into());
+
+    press(&ui, SharedString::from(Key::Escape));
+    release(&ui, SharedString::from(Key::Escape));
+
+    assert_eq!(
+        ui.global::<MarketState>().get_selected(),
+        "",
+        "Escape did not leave the market detail",
+    );
+    assert_eq!(asked.get(), 1, "the core was never told the market closed");
+
+    // Nothing open: Escape must not reach for the callback again.
+    press(&ui, SharedString::from(Key::Escape));
+    release(&ui, SharedString::from(Key::Escape));
+    assert_eq!(
+        asked.get(),
+        1,
+        "Escape fired at a screen with no market open, so it would swallow the \
+         key from anything added to the chain below it",
+    );
 }

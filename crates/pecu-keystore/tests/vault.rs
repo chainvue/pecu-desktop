@@ -590,3 +590,135 @@ fn renaming_needs_an_unlocked_vault() {
         Err(VaultError::Locked),
     ));
 }
+
+// ── Sealed blobs ────────────────────────────────────────────────────────────
+
+#[test]
+fn a_sealed_blob_round_trips_under_the_data_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    let sealed = vault
+        .seal_blob("shielded-scan", b"a scan result")
+        .expect("seal");
+    assert!(
+        !sealed.contains("a scan result"),
+        "the plaintext must not be in the sealed form: {sealed}"
+    );
+
+    let opened = vault.open_blob("shielded-scan", &sealed).expect("open");
+    assert_eq!(&opened[..], b"a scan result");
+}
+
+/// A blob sealed for one purpose must not open as another.
+///
+/// Otherwise two things sealed under one key are interchangeable, and anybody
+/// who can write the file can present one as the other.
+#[test]
+fn a_blob_does_not_open_under_a_different_purpose() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    let sealed = vault
+        .seal_blob("shielded-scan", b"a scan result")
+        .expect("seal");
+
+    assert!(
+        matches!(
+            vault.open_blob("something-else", &sealed),
+            Err(VaultError::WrongPassphrase)
+        ),
+        "a blob opened under the wrong purpose"
+    );
+}
+
+/// The same, between wallets. Two vaults, two data keys, and the AAD carries
+/// the wallet id as well — so this fails twice over, which is the point.
+#[test]
+fn a_blob_cannot_be_moved_between_wallets() {
+    let mine = tempfile::tempdir().expect("tempdir");
+    let theirs = tempfile::tempdir().expect("tempdir");
+    let (mine, _) = new_vault(&mine);
+    let (theirs, _) = new_vault(&theirs);
+
+    let sealed = mine.seal_blob("shielded-scan", b"my notes").expect("seal");
+
+    assert!(
+        matches!(
+            theirs.open_blob("shielded-scan", &sealed),
+            Err(VaultError::WrongPassphrase)
+        ),
+        "another wallet's blob opened"
+    );
+}
+
+/// Locked means locked, in both directions.
+///
+/// Sealing while locked matters as much as opening: a save that quietly wrote
+/// something unencrypted, or panicked, would be worse than one that did not
+/// happen.
+#[test]
+fn a_locked_vault_neither_seals_nor_opens() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, path) = new_vault(&dir);
+    let sealed = vault
+        .seal_blob("shielded-scan", b"a scan result")
+        .expect("seal");
+
+    let reopened = Vault::open(&path).expect("open");
+    assert!(matches!(
+        reopened.seal_blob("shielded-scan", b"anything"),
+        Err(VaultError::Locked)
+    ));
+    assert!(matches!(
+        reopened.open_blob("shielded-scan", &sealed),
+        Err(VaultError::Locked)
+    ));
+
+    reopened.unlock(&Secret::from(PASS)).expect("unlock");
+    assert_eq!(
+        &reopened.open_blob("shielded-scan", &sealed).expect("open")[..],
+        b"a scan result"
+    );
+}
+
+/// An edited ciphertext is a forgery, not a shorter message.
+#[test]
+fn a_tampered_blob_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    let sealed = vault
+        .seal_blob("shielded-scan", b"a scan result")
+        .expect("seal");
+    // Flip one hex digit of the ciphertext.
+    let broken = match sealed.rfind(|c: char| c.is_ascii_hexdigit()) {
+        Some(at) => {
+            let mut bytes = sealed.clone().into_bytes();
+            bytes[at] = if bytes[at] == b'a' { b'b' } else { b'a' };
+            String::from_utf8(bytes).expect("still text")
+        }
+        None => panic!("the sealed form should contain hex"),
+    };
+
+    assert!(
+        matches!(
+            vault.open_blob("shielded-scan", &broken),
+            Err(VaultError::WrongPassphrase)
+        ),
+        "a tampered blob opened"
+    );
+}
+
+/// Nonsense is reported as nonsense rather than as a failed decryption, so a
+/// caller can tell "there was nothing there" from "somebody edited it".
+#[test]
+fn a_blob_that_is_not_a_blob_is_corrupt_rather_than_unauthenticated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    assert!(matches!(
+        vault.open_blob("shielded-scan", "not json at all"),
+        Err(VaultError::Corrupt(_))
+    ));
+}

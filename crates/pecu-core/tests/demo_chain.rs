@@ -315,6 +315,8 @@ async fn resolve(
 ) -> pecu_protocol::DraftValidationVm {
     dispatcher.send(pecu_protocol::Command::ValidateDraft(
         pecu_protocol::SendDraft {
+            // The transparent route, which is what the demo chain scripts.
+            from_pool: pecu_protocol::Pool::Transparent,
             from_label: "main".to_string(),
             to: typed.to_string(),
             amount: "1".to_string(),

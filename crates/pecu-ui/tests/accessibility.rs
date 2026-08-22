@@ -88,7 +88,11 @@ type Screen = (&'static str, fn(&AppWindow));
 const SCREENS: &[Screen] = &[
     ("dashboard", pecu_ui::fixtures::funded),
     ("markets", pecu_ui::fixtures::markets),
+    // The detail is its own view now, and the breadcrumb that leaves it is the
+    // only way back other than Escape. A screen reader that cannot find it is a
+    // screen reader with no way out.
     ("markets", pecu_ui::fixtures::market_detail),
+    ("markets", pecu_ui::fixtures::markets_empty),
     ("convert", pecu_ui::fixtures::converting),
     ("convert", pecu_ui::fixtures::converting_refused),
     ("activity", pecu_ui::fixtures::history),
@@ -157,6 +161,48 @@ fn each_control(mut visit: impl FnMut(&str, &ElementHandle, AccessibleRole)) {
 /// and did nothing when a screen reader pressed it, which is a worse failure
 /// than a nameless button: the nameless one is obviously broken.
 ///
+/// The breadcrumb is a way out, not a label that looks like one.
+///
+/// The market detail is a view rather than an overlay: no scrim to click away,
+/// and the row that opened it is no longer on screen. So there are exactly two
+/// ways back — Escape, which `tests/shortcuts.rs` presses, and this. A
+/// breadcrumb that announces itself and does nothing when activated would leave
+/// somebody driving by screen reader with one route out and no sign that the
+/// other was decoration.
+#[test]
+fn the_breadcrumb_out_of_a_market_can_be_pressed() {
+    i_slint_backend_testing::init_no_event_loop();
+
+    let ui = unlocked();
+    pecu_ui::fixtures::market_detail(&ui);
+    ui.set_screen("markets".into());
+    ui.show().expect("show");
+
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    {
+        let asked = asked.clone();
+        ui.global::<pecu_ui::MarketState>()
+            .on_select(move |address| asked.borrow_mut().push(address.to_string()));
+    }
+
+    let back = ElementQuery::from_root(&ui)
+        .match_descendants()
+        .find_all()
+        .into_iter()
+        .find(|element| element.accessible_label().as_deref() == Some("Back to Markets"))
+        .expect("the breadcrumb is the way out of a market detail");
+
+    back.invoke_accessible_default_action();
+    ui.hide().expect("hide");
+
+    assert_eq!(
+        asked.borrow().as_slice(),
+        [String::new()],
+        "pressing the breadcrumb the way a screen reader does did not ask to \
+         close the market",
+    );
+}
+
 /// Asserted here by pressing the interface's own primary control on the send
 /// screen and checking the wallet was told. The named button is chosen rather
 /// than "any button" because a test that pressed whatever it found first would

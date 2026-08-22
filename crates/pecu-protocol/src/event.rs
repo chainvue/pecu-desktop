@@ -7,12 +7,11 @@
 use crate::error::UiError;
 use crate::models::DraftValidationVm;
 use crate::models::{
-    ChainHaltVm, ChartVm, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm, CurrencyDraftVm, CurrencyVm, EligibleIdentityVm,
-    HistoryRowVm,
-    IdentityDetailVm, IdentityVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm, LaunchReviewVm,
-    ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NoteVm, PendingVm, PortfolioVm,
-    RegistrationVm, SeedWordVm,
-    SearchHitVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
+    ChainHaltVm, ChartVm, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm, CurrencyDraftVm,
+    CurrencyVm, EligibleIdentityVm, HistoryRowVm, IdentityDetailVm, IdentityVm, KnownAddressVm,
+    LaunchDoneVm, LaunchPendingVm, LaunchReviewVm, ListDelta, LockReason, MarketDetailVm,
+    MarketRowVm, NetworkVm, NoteVm, PendingVm, PortfolioVm, RegistrationVm, SearchHitVm,
+    SeedWordVm, SendOutcomeVm, SendReviewVm, TaskKind, TxDetailVm, WalletVm,
 };
 
 #[derive(Clone, Debug, PartialEq)]

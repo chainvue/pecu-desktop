@@ -139,12 +139,7 @@ impl Intent {
     /// This is the opposite of `registration::Reservation::reserve`, which
     /// refuses outright — because there what cannot be written is a salt, and
     /// losing it burns a fee.
-    pub fn begin(
-        &mut self,
-        identity: &str,
-        key_label: &str,
-        draft: pecu_protocol::CurrencyDraft,
-    ) {
+    pub fn begin(&mut self, identity: &str, key_label: &str, draft: pecu_protocol::CurrencyDraft) {
         self.record = Some(Record {
             identity: identity.to_string(),
             key_label: key_label.to_string(),

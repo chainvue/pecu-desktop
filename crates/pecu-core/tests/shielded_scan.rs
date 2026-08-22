@@ -25,7 +25,7 @@
 // that would read as "the server had nothing".
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use pecu_core::shielded::{Shielded, ShieldedError};
+use pecu_core::shielded::{Destination, Shielded, ShieldedError};
 use pecu_keystore::ShieldedView;
 use verus_sdk::light::{LightClient, LightError, LightTransport};
 use verus_sdk::verus_light::HttpResponse;
@@ -41,6 +41,12 @@ const FUNDED_AT: u64 = 1_167_987;
 const SPENT_AT: u64 = 1_167_995;
 /// 5 VRSCTEST, in satoshis.
 const VALUE: u64 = 500_000_000;
+
+/// Somewhere to pay. The SDK's `zaddr` vector and its transparent fixture
+/// address — both real, neither anybody's.
+const TO_SHIELDED: &str =
+    "zs18pytujp8qu73a3fu6g9chl7mfumrr0htyqsh60r3ed4capagqwm8tx2l8f9c5g7w87q4566uph3";
+const TO_TRANSPARENT: &str = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
 
 /// Serves the committed tree state and whichever block-range fixture is named.
 ///
@@ -221,4 +227,118 @@ fn a_malformed_viewing_key_panics_upstream_rather_than_being_refused() {
         address: "zs1-nonsense".to_string(),
         diversifier_index: [0u8; 11],
     });
+}
+
+// ── Planning a spend, which needs no spending key ───────────────────────────
+
+/// A wallet that has not scanned cannot say it has nothing.
+///
+/// The distinction is the whole point: "no funds" is a claim about the chain,
+/// and a wallet that has not looked has not earned it. Reporting one for the
+/// other would tell somebody their money is gone.
+#[test]
+fn planning_before_scanning_says_so_rather_than_claiming_empty() {
+    let shielded = watching();
+
+    assert!(matches!(
+        shielded.plan_spend(TO_SHIELDED, "1"),
+        Err(ShieldedError::NothingScanned),
+    ));
+}
+
+/// A shielded destination is recognised, and costs no transparent output.
+#[test]
+fn a_spend_to_a_shielded_address_is_planned() {
+    let client = LightClient::new(Server("note_blocks_before_spend.bin"));
+    let mut shielded = watching();
+    shielded
+        .sync(&client, FUNDED_AT, SPENT_AT - 1)
+        .expect("scan");
+
+    let planned = shielded.plan_spend(TO_SHIELDED, "1").expect("plan");
+
+    assert!(matches!(planned.to, Destination::Shielded(_)));
+    assert_eq!(planned.amount.to_sat(), 100_000_000);
+    assert_eq!(planned.fee.to_sat(), 10_000, "not the daemon's own floor");
+    assert_eq!(planned.note_count(), 1);
+    // The note is worth five and the payment is one: value cannot be split at
+    // the input, so the whole note is consumed and the rest comes back as a new
+    // one. A review screen that hid this would be hiding where the money went.
+    assert_eq!(planned.notes_worth().to_sat(), VALUE);
+}
+
+/// A transparent destination is recognised too, from the same field.
+#[test]
+fn a_spend_to_a_transparent_address_is_planned() {
+    let client = LightClient::new(Server("note_blocks_before_spend.bin"));
+    let mut shielded = watching();
+    shielded
+        .sync(&client, FUNDED_AT, SPENT_AT - 1)
+        .expect("scan");
+
+    let planned = shielded.plan_spend(TO_TRANSPARENT, "1").expect("plan");
+
+    assert!(matches!(planned.to, Destination::Transparent(_)));
+    // Same floor: the allowance covers a recipient, a native change and a token
+    // change, and this is inside it.
+    assert_eq!(planned.fee.to_sat(), 10_000);
+}
+
+/// More than the notes hold is refused with both numbers.
+///
+/// The balance and what is reachable in one payment are different figures, and
+/// a refusal that gave only one of them would be unanswerable: somebody looking
+/// at a balance they cannot spend needs to be told why, not told again what the
+/// balance is.
+#[test]
+fn spending_more_than_the_notes_hold_names_both_figures() {
+    let client = LightClient::new(Server("note_blocks_before_spend.bin"));
+    let mut shielded = watching();
+    shielded
+        .sync(&client, FUNDED_AT, SPENT_AT - 1)
+        .expect("scan");
+
+    match shielded.plan_spend(TO_SHIELDED, "50") {
+        Err(ShieldedError::NotEnough {
+            held,
+            needed,
+            reachable,
+            notes,
+        }) => {
+            assert_eq!(held, "5");
+            assert_eq!(needed, "50.0001");
+            assert_eq!(reachable, "5");
+            assert_eq!(notes, 1);
+        }
+        other => panic!("wrong outcome for an unaffordable spend: {other:?}"),
+    }
+}
+
+/// Neither kind of address is still neither.
+#[test]
+fn nonsense_is_not_a_destination() {
+    assert!(matches!(
+        Destination::read("not-an-address"),
+        Err(ShieldedError::BadAddress),
+    ));
+    // And a shielded address that fails its checksum is a typo, not a z-address.
+    assert!(matches!(
+        Destination::read("zs1nonsense"),
+        Err(ShieldedError::BadAddress),
+    ));
+}
+
+/// Zero is not an amount, in either direction.
+#[test]
+fn nothing_is_not_a_payment() {
+    let client = LightClient::new(Server("note_blocks_before_spend.bin"));
+    let mut shielded = watching();
+    shielded
+        .sync(&client, FUNDED_AT, SPENT_AT - 1)
+        .expect("scan");
+
+    assert!(matches!(
+        shielded.plan_spend(TO_SHIELDED, "0"),
+        Err(ShieldedError::BadAmount),
+    ));
 }

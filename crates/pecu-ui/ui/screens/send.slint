@@ -54,7 +54,7 @@ export component SendForm inherits HorizontalLayout {
                     interactive: true;
                     clicked => {
                         SendState.to-draft = row.address;
-                        Actions.validate-draft(SendState.to-draft, SendState.amount-draft);
+                        Actions.validate-draft(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
                     }
                 }
             }
@@ -97,6 +97,59 @@ export component SendForm inherits HorizontalLayout {
                     overflow: elide;
                 }
                 KeyPicker {}
+
+                // Which of the key's two balances pays.
+                //
+                // Only when there are two. A key with no shielded account gets
+                // no selector rather than a disabled one — there is nothing to
+                // choose, and a greyed control invites somebody to work out why
+                // it is greyed.
+                //
+                // Never preselected by which balance covers the amount. That
+                // would decide, silently, whether a payment is traceable.
+                if SendState.shielded-available: VerticalLayout {
+                    spacing: Sp.s3;
+
+                    HorizontalLayout {
+                        spacing: Sp.s3;
+
+                        Btn {
+                            text: @tr("Transparent");
+                            // `secondary`, not `ghost`, for the unchosen side.
+                            // A ghost button beside a filled one reads as a
+                            // label rather than a control — the reference image
+                            // showed a screen that appeared to offer no choice
+                            // at all. The key picker above makes the same pair
+                            // the same way.
+                            variant: SendState.from-shielded ? "secondary" : "primary";
+                            horizontal-stretch: 1;
+                            clicked => {
+                                SendState.from-shielded = false;
+                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, false);
+                            }
+                        }
+                        Btn {
+                            text: @tr("Shielded");
+                            variant: SendState.from-shielded ? "primary" : "secondary";
+                            horizontal-stretch: 1;
+                            clicked => {
+                                SendState.from-shielded = true;
+                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, true);
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: !SendState.from-shielded
+                                ? @tr("Amounts and addresses are public")
+                            : !SendState.shielded-scanned
+                                ? @tr("Not scanned — set a shielded server in Settings")
+                            : @tr("{} shielded", SendState.shielded-balance);
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
             }
 
             Rectangle { height: 1px; background: Theme.border-subtle; }
@@ -142,7 +195,19 @@ export component SendForm inherits HorizontalLayout {
                         horizontal-stretch: 1;
                     }
                     Text {
-                        text: @tr("{} spendable", WalletState.spendable);
+                        // Follows the source selector, for the same reason
+                        // the summary line does: with the shielded balance
+                        // paying, the transparent figure here is a number that
+                        // is true about the wallet and false about the payment.
+                        text: !SendState.from-shielded
+                                ? @tr("{} spendable", WalletState.spendable)
+                            // Empty means nothing has been scanned, which is a
+                            // different statement from a balance of zero — and
+                            // the wrong one to make silently on the line
+                            // somebody checks before pressing send.
+                            : !SendState.shielded-scanned
+                                ? @tr("not scanned yet")
+                            : @tr("{} shielded", SendState.shielded-balance);
                         font-family: Typo.mono;
                         font-size: Typo.num-sm;
                         color: Theme.text-tertiary;
@@ -208,11 +273,54 @@ export component SendForm inherits HorizontalLayout {
                     value: WalletState.active-key;
                 }
                 QuoteLine {
-                    label: @tr("Spendable");
-                    value: WalletState.spendable;
+                    // The balance this payment is actually coming out of.
+                    //
+                    // It used to be `WalletState.spendable` unconditionally,
+                    // which is the transparent one. With the shielded source
+                    // selected that line offered a figure this route cannot
+                    // reach — the reference image showed "12 382.42" beside a
+                    // shielded balance of 2.5. A number that is true about the
+                    // wallet and false about the payment is worse on this
+                    // screen than no number.
+                    label: SendState.from-shielded ? @tr("Shielded") : @tr("Spendable");
+                    value: !SendState.from-shielded ? WalletState.spendable
+                        : !SendState.shielded-scanned ? @tr("not scanned")
+                        : SendState.shielded-balance;
                 }
 
                 Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                // What this payment will be, in a sentence, before it is built.
+                //
+                // The route is not a detail: it decides what the chain records
+                // about the payment, and it is decided by two controls that sit
+                // apart from each other — the source selector above and the
+                // address field between them. Somebody who set one and forgot
+                // the other cannot see the combination anywhere else.
+                //
+                // Only for the three that are not ordinary. A transparent
+                // payment needs no explanation on a screen whose every other
+                // word already assumes one.
+                if SendState.route != "transparent": Text {
+                    text: SendState.route == "shield"
+                            ? @tr("This moves coin from your public balance into your shielded one. The amount and where it came from stay visible; where it went does not.")
+                        : SendState.route == "private"
+                            ? @tr("This pays from your shielded balance to a shielded address. Nothing about it is public except that a shielded transaction happened.")
+                        : @tr("This pays from your shielded balance to a public address. The amount and the recipient become visible; you do not.");
+                    font-size: Typo.caption;
+                    color: Theme.accent;
+                    wrap: word-wrap;
+                }
+
+                // Said before the wait, not during it. Proving takes tens of
+                // seconds and the button simply goes quiet; somebody who was not
+                // told reads that as a hang and presses it again.
+                if SendState.route != "transparent": Text {
+                    text: @tr("Shielded payments are proved on this machine, which takes a little while after you press Review.");
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
 
                 Text {
                     text: @tr("The fee and the total appear on the next step. They are read back from the signed transaction, not estimated here.");
@@ -254,12 +362,12 @@ export component SendForm inherits HorizontalLayout {
     }
 
     function check() {
-        Actions.validate-draft(SendState.to-draft, SendState.amount-draft);
+        Actions.validate-draft(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
     }
 
     function review() {
         if (!SendState.ready) { return; }
-        Actions.prepare-send(SendState.to-draft, SendState.amount-draft);
+        Actions.prepare-send(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
     }
 }
 

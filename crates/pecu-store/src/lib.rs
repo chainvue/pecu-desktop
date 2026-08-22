@@ -178,6 +178,22 @@ impl Store {
         }
     }
 
+    /// Remove a setting, as distinct from setting it to nothing.
+    ///
+    /// The difference is load-bearing somewhere already: an empty
+    /// `light_server` means "somebody pressed Forget it" and must not be
+    /// overridden by the shipped default, while an absent one means nobody has
+    /// chosen. Anything that wants to say "no value at all" needs this rather
+    /// than an empty string.
+    pub fn forget_setting(&self, key: &str) {
+        if let Err(error) = self
+            .wallet
+            .execute("DELETE FROM setting WHERE key = ?1", [key])
+        {
+            tracing::warn!(%error, key, "a setting could not be removed");
+        }
+    }
+
     // ── Nodes the user added: durable ───────────────────────────────────────
 
     /// Every endpoint the user configured, oldest first.
@@ -514,6 +530,51 @@ impl Store {
             rusqlite::params![portfolio, history, now],
         ) {
             tracing::warn!(%error, "the dashboard snapshot could not be cached");
+        }
+    }
+
+    // ── What the last shielded scan found ───────────────────────────────────
+
+    /// The sealed shielded scan, if one was kept.
+    ///
+    /// Opaque here, and deliberately so: this layer holds no key and can say
+    /// nothing about what is inside. It hands the string back and the caller —
+    /// which has the vault — decides whether it opens and whether it belongs to
+    /// the account now loaded.
+    pub fn shielded_scan(&self) -> Option<String> {
+        self.cache
+            .query_row("SELECT sealed FROM shielded_scan WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .ok()
+    }
+
+    /// Keep a sealed shielded scan for the next launch.
+    ///
+    /// `sealed` must already be ciphertext. Nothing checks that here, because
+    /// nothing here could: a string is a string. The guarantee lives at the
+    /// call site, which is the only place that has the data key — and
+    /// `no_plaintext_shielded_data_reaches_the_cache` asserts it end to end.
+    pub fn save_shielded_scan(&self, sealed: &str, now: i64) {
+        if let Err(error) = self.cache.execute(
+            "INSERT INTO shielded_scan (id, sealed, saved_at) VALUES (1, ?1, ?2)
+             ON CONFLICT (id) DO UPDATE SET
+                 sealed   = excluded.sealed,
+                 saved_at = excluded.saved_at",
+            rusqlite::params![sealed, now],
+        ) {
+            tracing::warn!(%error, "the shielded scan could not be cached");
+        }
+    }
+
+    /// Throw the kept scan away.
+    ///
+    /// Called when the thing it describes is no longer trusted — the light
+    /// server it came from was removed, or it turned out to belong to a
+    /// different account. Not an error path: the next scan rebuilds it.
+    pub fn forget_shielded_scan(&self) {
+        if let Err(error) = self.cache.execute("DELETE FROM shielded_scan", []) {
+            tracing::warn!(%error, "the shielded scan could not be forgotten");
         }
     }
 

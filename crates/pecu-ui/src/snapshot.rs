@@ -174,6 +174,11 @@ pub const CASES: &[Case] = &[
     ("dashboard", "dashboard-funded", crate::fixtures::funded),
     (
         "dashboard",
+        "dashboard-shielded",
+        crate::fixtures::funded_with_shielded,
+    ),
+    (
+        "dashboard",
         "chart-young-wallet",
         crate::fixtures::young_wallet,
     ),
@@ -193,6 +198,7 @@ pub const CASES: &[Case] = &[
     ("markets", "market-detail", crate::fixtures::market_detail),
     ("markets", "market-moving", crate::fixtures::market_moving),
     ("markets", "markets-crowded", crate::fixtures::markets_crowded),
+    ("markets", "markets-empty", crate::fixtures::markets_empty),
     ("convert", "convert", crate::fixtures::converting),
     ("convert", "convert-thin", crate::fixtures::converting_thin),
     (
@@ -235,6 +241,8 @@ pub const CASES: &[Case] = &[
     ("activity", "activity", crate::fixtures::funded),
     ("activity", "tx-detail", crate::fixtures::tx_detail),
     ("send", "send-form", crate::fixtures::sending),
+    ("send", "send-shielding", crate::fixtures::shielding),
+    ("send", "send-unshielding", crate::fixtures::unshielding),
     ("send", "send-too-much", crate::fixtures::sending_too_much),
     ("send", "send-review", crate::fixtures::reviewing),
     (

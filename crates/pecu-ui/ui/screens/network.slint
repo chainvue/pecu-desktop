@@ -79,6 +79,65 @@ export component NodesScreen inherits VerticalLayout {
         }
     }
 
+    // Where shielded notes come from.
+    //
+    // Its own card, below the nodes, because it is not one of them: an RPC node
+    // answers about transparent addresses over JSON-RPC, and this streams
+    // compact blocks over gRPC so a wallet can trial-decrypt them without
+    // telling anyone which notes are its own. A wallet can have a healthy node
+    // and no shielded server, which is the ordinary state.
+    Eyebrow { text: @tr("SHIELDED"); }
+
+    Card {
+        VerticalLayout {
+            padding: Sp.s5;
+            spacing: Sp.s4;
+
+            Text {
+                text: NetworkState.light-server == ""
+                    ? @tr("Without one, this wallet cannot look for shielded notes — so it says nothing about the balance rather than reporting zero.")
+                    : @tr("Shielded notes are read from here. Nothing about which notes are yours is sent to it.");
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            lightserver := Field {
+                mono: true;
+                placeholder: @tr("http://127.0.0.1:9067");
+                text: NetworkState.light-server;
+            }
+
+            HorizontalLayout {
+                spacing: Sp.s4;
+                // Sized to their words. Without this a single button stretches
+                // to the card's full width and reads as a banner rather than
+                // something to press.
+                alignment: start;
+                Btn {
+                    text: @tr("Use this server");
+                    variant: "primary";
+                    clicked => { Actions.set-light-server(lightserver.text); }
+                }
+                if NetworkState.light-server != "": Btn {
+                    text: @tr("Forget it");
+                    variant: "secondary";
+                    clicked => {
+                        lightserver.text = "";
+                        Actions.set-light-server("");
+                    }
+                }
+            }
+
+            Text {
+                text: @tr("It sees which blocks are asked for, and from where — never which of them hold your notes, and never a key. Testnet defaults to Verus' own server; a lightwalletd of your own works here too.");
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+    }
+
     Card {
         VerticalLayout {
             padding: Sp.s3;

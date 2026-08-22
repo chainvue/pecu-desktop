@@ -28,12 +28,12 @@
 use std::collections::BTreeMap;
 
 use pecu_chain::Chain;
+use pecu_protocol::NoteVm;
 use pecu_protocol::{AssetVm, BalanceVm, HistoryRowVm, PortfolioVm, TxDirection};
 use verus_sdk::currency::CurrencyId;
 use verus_sdk::money::Amount;
 use verus_sdk::network::{self, FlowError, HistoryEntry, SignedAmount};
 use verus_sdk::verus_keys::{Address, AddressKind};
-use pecu_protocol::NoteVm;
 
 /// How many transactions the dashboard's "recent" list shows. The Activity
 /// screen gets everything fetched so far.
@@ -816,8 +816,14 @@ mod tests {
 
         assert_eq!(said(0).0, "when-pending");
         assert_eq!(said(now).0, "when-just-now");
-        assert_eq!(said(now - 60), ("when-minutes".to_string(), "1".to_string()));
-        assert_eq!(said(now - 7_200), ("when-hours".to_string(), "2".to_string()));
+        assert_eq!(
+            said(now - 60),
+            ("when-minutes".to_string(), "1".to_string())
+        );
+        assert_eq!(
+            said(now - 7_200),
+            ("when-hours".to_string(), "2".to_string())
+        );
         assert_eq!(said(now - 90_000).0, "when-yesterday");
         assert_eq!(
             said(now - 86_400 * 5),

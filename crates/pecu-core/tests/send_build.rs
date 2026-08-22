@@ -57,7 +57,12 @@ fn a_payment_is_built_signed_and_read_back_without_being_sent() {
     let prepared = send::Prepared {
         to: to.clone(),
         amount,
-        unsent,
+        // Wrapped in the route enum: signing is where the four routes stop
+        // differing, and everything downstream of it is shared.
+        signed: pecu_core::send::Signed::Transparent(unsent),
+        route: pecu_protocol::Route::Transparent,
+        // A transparent payment publishes no nullifiers.
+        spends: Vec::new(),
         // Typed out as an address, not resolved from a name.
         name: String::new(),
     };

@@ -73,6 +73,54 @@ pub enum KeyOrigin {
     ImportedWif,
 }
 
+/// What a wallet knows about its shielded pool, which is three things and not
+/// two.
+///
+/// * **Absent** — this key can have no shielded account, or the wallet is
+///   locked. Nothing to show and nothing to explain.
+/// * **Unscanned** — there is an account and nobody has looked in it. Saying
+///   "0" here would be a claim about somebody's money that no scan supports.
+/// * **Scanned** — a figure, which may legitimately be zero.
+///
+/// The distinction is not pedantry. "You have nothing" and "I have not looked"
+/// send a person to different places, and a wallet that conflates them tells
+/// somebody their money is gone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShieldedFunds {
+    #[default]
+    Absent,
+    Unscanned,
+    /// The balance, formatted in coins.
+    Scanned(String),
+}
+
+impl ShieldedFunds {
+    /// The figure, or empty when there is none to give.
+    pub fn balance(&self) -> &str {
+        match self {
+            Self::Scanned(coins) => coins,
+            _ => "",
+        }
+    }
+
+    /// Whether a scan has happened.
+    pub fn scanned(&self) -> bool {
+        matches!(self, Self::Scanned(_))
+    }
+
+    /// Whether there is anything in the pool worth its own line.
+    ///
+    /// A zero beside real numbers is not neutral — it is the wallet stating
+    /// that none of your coins are private, in the weight of a fact. So this is
+    /// false for a scanned zero as well as for an unscanned account.
+    pub fn any(&self) -> bool {
+        match self {
+            Self::Scanned(coins) => coins.chars().any(|c| ('1'..='9').contains(&c)),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalletVm {
     pub name: String,
@@ -102,6 +150,20 @@ pub struct WalletVm {
     /// be handed out. What is *not* here is the viewing key it was derived
     /// from, which stays in `pecu-keystore` and never reaches this layer.
     pub shielded_address: String,
+
+    /// What is known about the shielded pool.
+    ///
+    /// One value rather than a balance and two flags beside it. The three
+    /// states are genuinely different and were being carried as a string that
+    /// might be empty plus a pair of booleans that had to agree with it —
+    /// which is three states encoded in eight, five of them meaningless.
+    pub shielded_funds: ShieldedFunds,
+
+    /// How far a scan in flight has got, as a percentage, or `None`.
+    ///
+    /// A first scan with no birthday covers the chain from Sapling activation —
+    /// minutes rather than seconds. Silence for that long reads as a hang.
+    pub shielded_scan: Option<u32>,
 
     /// Why this key has no shielded address, when it cannot have one.
     ///
@@ -203,6 +265,12 @@ pub struct NetworkVm {
     pub tip: Option<u32>,
     pub syncing: bool,
     pub allow_mainnet_spend: bool,
+    /// The lightwalletd shielded notes are read through, or empty.
+    ///
+    /// Empty on a chain that ships no address — mainnet, today — and there the
+    /// wallet says it cannot look for notes rather than reporting a balance of
+    /// zero, which would be a claim it has not earned.
+    pub light_server: String,
     /// True when the app is running against the mock chain, so the UI can say
     /// so loudly and permanently.
     pub mock_mode: bool,
@@ -971,6 +1039,71 @@ pub struct SendDraft {
     pub to: String,
     /// As typed, in coins. Core parses it with `Amount::from_coins_str`.
     pub amount: String,
+    /// Which of this key's two balances the money comes out of.
+    ///
+    /// **Never inferred.** A wallet holding both could pick the one that covers
+    /// the amount, and that would be choosing, on somebody's behalf and without
+    /// telling them, whether this payment is traceable. The two pools are not
+    /// interchangeable and the interface asks.
+    pub from_pool: Pool,
+}
+
+/// Which balance a payment is drawn from.
+///
+/// The wallet has two, and they are the same coin with different visibility.
+/// Which one pays decides what the chain records, so this is a decision rather
+/// than an optimisation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pool {
+    /// The `R` address. Amounts and addresses are public.
+    #[default]
+    Transparent,
+    /// The `zs` address. Nothing is public except that a shielded transaction
+    /// happened — and, if the recipient is transparent, what it delivered.
+    Shielded,
+}
+
+/// What a payment does, once its source and destination are both known.
+///
+/// Named by the core because it is the core that knows: the interface has an
+/// address in a text field and no business deciding what kind of transaction
+/// that becomes. It exists so the review step can say, in words, which of the
+/// four things is about to happen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Route {
+    /// `R → R`. Everything public, and the only route that existed before.
+    #[default]
+    Transparent,
+    /// `R → z`. Value enters the shielded pool. The sender is visible, the
+    /// amount is visible, and where it went is not.
+    Shield,
+    /// `z → z`. Nothing visible but that a shielded transaction happened.
+    Private,
+    /// `z → R`. Value leaves the pool. The recipient and amount become public;
+    /// the sender does not.
+    Unshield,
+}
+
+impl Route {
+    /// Work out the route from where the money is and where it is going.
+    pub fn of(from: Pool, to_shielded: bool) -> Self {
+        match (from, to_shielded) {
+            (Pool::Transparent, false) => Self::Transparent,
+            (Pool::Transparent, true) => Self::Shield,
+            (Pool::Shielded, true) => Self::Private,
+            (Pool::Shielded, false) => Self::Unshield,
+        }
+    }
+
+    /// Whether this route needs the Groth16 prover, and therefore the ~50 MB of
+    /// Sapling parameters and tens of seconds of work.
+    ///
+    /// Every route that touches the shielded pool does, `Shield` included: a
+    /// Sapling *output* needs a proof just as a spend does, so having a
+    /// transparent balance does not avoid it.
+    pub fn needs_proving(self) -> bool {
+        !matches!(self, Self::Transparent)
+    }
 }
 
 /// A sentence the **interface** writes, named by the core.
@@ -1049,6 +1182,11 @@ pub struct DraftValidationVm {
     pub to_label: String,
     /// Everything checks out and Review may be pressed.
     pub ready: bool,
+    /// What this payment would be, given the source and the destination.
+    ///
+    /// Shown before Review is pressed, because the route decides both what
+    /// becomes public and how long the button will appear to hang.
+    pub route: Route,
 }
 
 /// The review step, built by decoding the transaction that was actually

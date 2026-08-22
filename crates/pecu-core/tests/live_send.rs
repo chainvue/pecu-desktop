@@ -138,6 +138,8 @@ fn a_payment_built_by_this_wallet_is_accepted_by_the_network() {
 
     // Paying itself, deliberately — see the module docs.
     let draft = pecu_protocol::SendDraft {
+        // The transparent route, which is what this test has always exercised.
+        from_pool: pecu_protocol::Pool::Transparent,
         from_label: LABEL.to_string(),
         to: address.clone(),
         amount: Amount::from_sat(AMOUNT_SATS).to_coins_string(),

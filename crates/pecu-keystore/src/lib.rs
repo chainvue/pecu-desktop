@@ -41,7 +41,7 @@ mod shielded;
 mod vault;
 
 pub use envelope::{Kdf, KeyEntry, Origin, Sealed, VaultDoc, VAULT_VERSION};
-pub use shielded::{ShieldedError, ShieldedView};
+pub use shielded::{with_spending_key, ShieldedError, ShieldedView};
 pub use vault::{KeyRef, NewKey, Vault, VaultError};
 
 use zeroize::Zeroizing;

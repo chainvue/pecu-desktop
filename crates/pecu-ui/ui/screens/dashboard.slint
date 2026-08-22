@@ -595,6 +595,52 @@ export component DashboardScreen inherits VerticalLayout {
                     // payment can be made at all, spendable, was the least
                     // prominent number on a screen headed by a total that
                     // includes money nobody can spend.
+                    // The shielded pool, on its own row.
+                    //
+                    // It was inside the breakdown below, and that was wrong
+                    // twice. The breakdown appears only when something is
+                    // maturing or in flight — so a private balance vanished
+                    // because none of the *public* coins were immature, which
+                    // is not a relationship. And it is not a part of the total
+                    // above the way spendable and maturing are: it is a second
+                    // pool, the same coin with different visibility.
+                    //
+                    // Shown only when there is something in it. `shielded-any`
+                    // rather than a string test, because a zero here would be
+                    // the wallet stating that none of your coins are private,
+                    // in the weight of a fact — and that is not what having
+                    // nothing shielded means.
+                    // A scan under way, before there is anything to report.
+                    //
+                    // Its own line rather than a spinner beside the balance: at
+                    // this point there is no balance, and the honest thing to
+                    // show is what the wallet is doing about that.
+                    if WalletState.shielded-scanning && !WalletState.shielded-any: Text {
+                        text: @tr("Looking for shielded funds… {}%", WalletState.shielded-scan-percent);
+                        font-size: Typo.caption;
+                        color: Theme.accent;
+                    }
+
+                    if !WalletState.loading && WalletState.shielded-any: HorizontalLayout {
+                        spacing: Sp.s9;
+                        alignment: start;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: WalletState.shielded-balance;
+                                font-family: Typo.mono;
+                                font-size: Typo.num;
+                                color: Theme.accent;
+                            }
+                            Text {
+                                text: @tr("shielded");
+                                font-size: Typo.micro;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+                    }
+
                     if !WalletState.loading && WalletState.has-breakdown: HorizontalLayout {
                         spacing: Sp.s9;
                         alignment: start;

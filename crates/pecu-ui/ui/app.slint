@@ -430,6 +430,19 @@ export component AppWindow inherits Window {
                     SendState.step = "form";
                     return EventResult.accept;
                 }
+                // A market detail is a view rather than an overlay, so it sits
+                // here with `SendState` rather than up among the sheets — and
+                // below all of them, because a sheet opened from anywhere is
+                // over the top of it and has to close first.
+                //
+                // `select` writes the empty string and dispatches
+                // `OpenMarket("")`, which is the same route the breadcrumb
+                // takes. Nothing here knows which screen is showing: reaching
+                // this line at all means a market is open.
+                if (MarketState.selected != "") {
+                    MarketState.select("");
+                    return EventResult.accept;
+                }
             }
 
             return EventResult.reject;

@@ -3,22 +3,47 @@
 import { ListView } from "std-widgets.slint";
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Card, EmptyState, Eyebrow, StatusPill } from "../components/base.slint";
+import { Breadcrumb, Card, EmptyState, Eyebrow, StatusPill } from "../components/base.slint";
+import { Icon } from "../components/icons.slint";
 import { MarketRow } from "../vm/structs.slint";
 import { MarketState } from "../vm/state.slint";
-import { NoteText, NoticeTitle } from "../components/note.slint";
+import { NoteText } from "../components/note.slint";
+
+// The table's column widths, in one place.
+//
+// The headings and the rows are separate components and have to agree to the
+// pixel, or every number sits beside the wrong word. They used to agree by
+// having the same literals typed twice.
+//
+// The three numeric columns keep their widths as the screen widens, so the
+// slack all goes to `Name` and the figures stay together as one block at the
+// right edge. Spreading them evenly across a thousand pixels would turn one
+// glance into four.
+global MarketCols {
+    out property <length> price: 74px;
+    out property <length> change: 62px;
+    out property <length> pooled: 72px;
+    // The chevron, which is what says a row opens something rather than
+    // selecting it. Sized here so the headings can leave room for it.
+    out property <length> chevron: 16px;
+    // One row, which the list card needs in order to be only as tall as its
+    // rows when there are few of them.
+    out property <length> row-height: 46px;
+}
 
 // One row of the markets table.
+//
+// No `selected` state, and that is a consequence of the screen rather than an
+// omission: the list and the detail are two views, so the list is only ever on
+// screen while nothing is open. A highlight for the row you are reading would
+// be a highlight nobody can see.
 export component MarketRowItem inherits Rectangle {
     in property <MarketRow> entry;
-    in property <bool> selected;
     callback picked();
 
-    height: 46px;
+    height: MarketCols.row-height;
     border-radius: R.md;
-    background: root.selected ? Theme.accent-soft
-        : touch.has-hover ? Theme.bg-hover
-        : transparent;
+    background: touch.has-hover ? Theme.bg-hover : transparent;
     animate background { duration: Motion.fast; enabled: Motion.enabled; }
 
     HorizontalLayout {
@@ -43,7 +68,7 @@ export component MarketRowItem inherits Rectangle {
             color: Theme.text-primary;
             vertical-alignment: center;
             horizontal-alignment: right;
-            width: 74px;
+            width: MarketCols.price;
         }
         Text {
             text: root.entry.change;
@@ -56,7 +81,7 @@ export component MarketRowItem inherits Rectangle {
                 : Theme.text-tertiary;
             vertical-alignment: center;
             horizontal-alignment: right;
-            width: 62px;
+            width: MarketCols.change;
         }
         // The size of the market, and what the rows are ordered by. Drawn a
         // shade brighter than `Exit @2%` beside it: one of the two decides
@@ -68,7 +93,23 @@ export component MarketRowItem inherits Rectangle {
             color: Theme.text-secondary;
             vertical-alignment: center;
             horizontal-alignment: right;
-            width: 72px;
+            width: MarketCols.pooled;
+        }
+
+        // The row opens a page now rather than filling a panel beside it, and
+        // a row that navigates should say so before it is clicked.
+        //
+        // An icon and not a `›`: that character is in neither bundled face, so
+        // it draws nothing or falls through to whatever the host has. See the
+        // top of `icons.slint`, which was written after that happened four
+        // times.
+        Rectangle {
+            width: MarketCols.chevron;
+            Icon {
+                name: "chevron";
+                size: 14px;
+                tone: touch.has-hover ? Theme.text-secondary : Theme.text-disabled;
+            }
         }
         // `Exit @2%` is **not** a column here, and that is a decision rather
         // than a shortage of room.
@@ -103,125 +144,158 @@ export component MarketRowItem inherits Rectangle {
 // to fill them: the 24-hour change, because the SDK cannot ask for a price at a
 // past height, and a price chart, for the same reason. Both show `—`, which is
 // what the convention line at the bottom of the table is there to explain.
-export component MarketsScreen inherits HorizontalLayout {
-    // Its own page padding and width cap, because this screen has left the
-    // shared scroller — the same move `ActivityScreen` made and for the same
-    // reason. See the `for` below.
-    padding: Sp.screen-pad;
-    max-width: Sp.content-max;
-    spacing: Sp.s7;
+// Every currency, full width.
+component MarketList inherits VerticalLayout {
+    spacing: Sp.s4;
 
-    // ── The table ───────────────────────────────────────────────────────
-    VerticalLayout {
+    Eyebrow {
+        text: MarketState.quote == ""
+            ? @tr("ALL CURRENCIES")
+            : @tr("ALL CURRENCIES · PRICED IN {}", MarketState.quote);
+    }
+
+    // The column headings, outside the card, so a long list scrolls under
+    // them rather than taking them with it.
+    //
+    // Gone entirely when there is nothing to head. Four column names over an
+    // empty table describe a shape rather than any data, and the empty state
+    // underneath already says what is going on.
+    if MarketState.rows.length > 0: HorizontalLayout {
+        padding-left: Sp.s4;
+        padding-right: Sp.s4;
         spacing: Sp.s4;
-        width: 46%;
-
-        Eyebrow {
-            text: MarketState.quote == ""
-                ? @tr("ALL CURRENCIES")
-                : @tr("ALL CURRENCIES · PRICED IN {}", MarketState.quote);
+        Text {
+            text: @tr("Name");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            horizontal-stretch: 1;
         }
-
-        // The column headings, outside the card, so a long list scrolls under
-        // them rather than taking them with it.
-        HorizontalLayout {
-            padding-left: Sp.s4;
-            padding-right: Sp.s4;
-            spacing: Sp.s4;
-            Text {
-                text: @tr("Name");
-                font-size: Typo.micro;
-                color: Theme.text-tertiary;
-                horizontal-stretch: 1;
-            }
-            Text {
-                // The unit is named above, where there is room for it — at this
-                // width "Price · DAI.vETH" is "Price · DAI.vET".
-                text: @tr("Price");
-                font-size: Typo.micro;
-                color: Theme.text-tertiary;
-                horizontal-alignment: right;
-                width: 74px;
-            }
-            Text {
-                // Thirty days, not a day: the series is sampled daily, and a
-                // column headed 24h filled from two daily samples is a figure
-                // that looks precise and is not. See `Book::change_over_window`.
-                text: @tr("30d");
-                font-size: Typo.micro;
-                color: Theme.text-tertiary;
-                horizontal-alignment: right;
-                width: 62px;
-            }
-            Text {
-                // What the table is ordered by, so the order is legible rather
-                // than arbitrary. Comparable between rows, which `Exit @2%`
-                // beside it is not.
-                text: @tr("Pooled");
-                font-size: Typo.micro;
-                color: Theme.text-tertiary;
-                horizontal-alignment: right;
-                width: 72px;
-            }
-
+        Text {
+            // The unit is named above, where there is room for it. There is
+            // room here now too, and it still is not repeated: a column head
+            // that restates the line above it is noise on every row it sits
+            // over.
+            text: @tr("Price");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            horizontal-alignment: right;
+            width: MarketCols.price;
         }
+        Text {
+            // Thirty days, not a day: the series is sampled daily, and a
+            // column headed 24h filled from two daily samples is a figure
+            // that looks precise and is not. See `Book::change_over_window`.
+            text: @tr("30d");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            horizontal-alignment: right;
+            width: MarketCols.change;
+        }
+        Text {
+            // What the table is ordered by, so the order is legible rather
+            // than arbitrary. Comparable between rows, which `Exit @2%`
+            // beside it is not.
+            text: @tr("Pooled");
+            font-size: Typo.micro;
+            color: Theme.text-tertiary;
+            horizontal-alignment: right;
+            width: MarketCols.pooled;
+        }
+        // Nothing to head the chevron with, and the headings still have to
+        // leave its width or every figure sits one column too far right.
+        Rectangle { width: MarketCols.chevron; }
+    }
 
-        // A `ListView`, and the whole screen changes shape because of it.
-        //
-        // The heading above says "so a long list scrolls under them", and until
-        // now nothing scrolled: the rows were a plain layout inside the shared
-        // page scroller, so forty-nine currencies made the *page* two thousand
-        // pixels tall. Everything beside the list went with it — the detail's
-        // figures, its venues, its route, all below the fold — and the chart
-        // card, which stretches, swallowed the slack and drew nothing.
-        //
-        // Seven currencies fitted. VRSCTEST has three hundred, and no reference
-        // image had more than seven until `markets_crowded`.
-        Card {
-            // Takes what the footnote leaves. A `ListView` cannot size to its
-            // content — laying out what nobody can see is the thing it exists
-            // to avoid — so it is given a pane instead of asked for a height.
-            vertical-stretch: 1;
-            VerticalLayout {
-                padding: Sp.s3;
-                ListView {
-                    for row in MarketState.rows: MarketRowItem {
-                        entry: row;
-                        selected: MarketState.selected == row.address;
-                        picked => { MarketState.select(row.address); }
-                    }
+    // A `ListView`, and the whole screen changes shape because of it.
+    //
+    // The heading above says "so a long list scrolls under them", and until
+    // now nothing scrolled: the rows were a plain layout inside the shared
+    // page scroller, so forty-nine currencies made the *page* two thousand
+    // pixels tall.
+    //
+    // Seven currencies fitted. VRSCTEST has three hundred, and no reference
+    // image had more than seven until `markets_crowded`.
+    Card {
+        // Takes what the footnote leaves. A `ListView` cannot size to its
+        // content — laying out what nobody can see is the thing it exists
+        // to avoid — so it is given a pane instead of asked for a height.
+        vertical-stretch: 1000;
+        // …but no taller than the rows it holds. Stretching unconditionally
+        // was fine at 46% of the window and is not at 100%: six currencies
+        // under a card six hundred pixels tall is mostly a picture of an empty
+        // box. With more rows than fit, the stretch wins and this never binds.
+        max-height: MarketState.rows.length * MarketCols.row-height + Sp.s3 * 2;
+        VerticalLayout {
+            padding: Sp.s3;
+
+            // A currency with no price still has a row. **No** rows at all is
+            // a different thing, and at 46% width it was a small blank card
+            // nobody had to explain. Full width it is a blank screen, so it
+            // says what it is.
+            if MarketState.rows.length == 0: EmptyState {
+                glyph: "⊙";
+                title: @tr("No currencies to price");
+                body: @tr("Nothing this node knows of trades in a pool yet. This fills in as baskets are started.");
+            }
+
+            if MarketState.rows.length > 0: ListView {
+                for row in MarketState.rows: MarketRowItem {
+                    entry: row;
+                    picked => { MarketState.select(row.address); }
                 }
             }
         }
-
-        // The convention, said once, where the dashes are.
-        Text {
-            text: MarketState.quote == ""
-                ? @tr("Ordered by what the baskets hold. — means unknown, not zero.")
-                : @tr("Ordered by what the baskets hold, in {}. — means unknown, not zero.",
-                      MarketState.quote);
-            font-size: Typo.micro;
-            color: Theme.text-tertiary;
-            wrap: word-wrap;
-        }
-
-        // No stretch absorber here any more. The list is what should grow —
-        // with one, the two of them split the column and the list showed seven
-        // rows above an equal expanse of nothing.
     }
 
-    // ── The detail ──────────────────────────────────────────────────────
-    VerticalLayout {
-        spacing: Sp.s5;
-        horizontal-stretch: 1;
+    // The convention, said once, where the dashes are — and only where there
+    // are dashes. "Ordered by what the baskets hold" under nothing at all is
+    // an explanation of an order that does not exist.
+    if MarketState.rows.length > 0: Text {
+        text: MarketState.quote == ""
+            ? @tr("Ordered by what the baskets hold. — means unknown, not zero.")
+            : @tr("Ordered by what the baskets hold, in {}. — means unknown, not zero.",
+                  MarketState.quote);
+        font-size: Typo.micro;
+        color: Theme.text-tertiary;
+        wrap: word-wrap;
+    }
 
-        if MarketState.selected == "": EmptyState {
-            glyph: "⊙";
-            title: @tr("Pick a currency");
-            body: @tr("Its price, where it trades, and how deep those pools are.");
-        }
+    // Where the slack goes when the card has hit its cap — and only then.
+    //
+    // The weight is what makes that "only then". Slint shares leftover height
+    // between stretching children in proportion, so an absorber weighted the
+    // same as the card took half the pane and the crowded list was back to
+    // showing seven rows above an expanse of nothing — the exact fault the card
+    // was given the whole pane to fix. A thousand to one means the card grows
+    // until its cap binds, and this catches whatever is left after that.
+    //
+    // There deliberately was no absorber here at all before the cap existed.
+    // With the card free to grow forever it did not need one; capped, it does,
+    // or the leftover is shared out between the eyebrow, the headings and the
+    // footnote and pushes them apart into floating fragments.
+    Rectangle { vertical-stretch: 0.001; }
+}
 
-        if MarketState.selected != "": VerticalLayout {
+// One currency, full width.
+component MarketDetail inherits VerticalLayout {
+    spacing: Sp.s5;
+
+    Breadcrumb {
+        root-text: @tr("Markets");
+        leaf-text: MarketState.detail-name;
+        // The same empty string the scrim of every sheet writes, and the same
+        // one Escape writes. `select` dispatches `OpenMarket("")`, which the
+        // core answers with `MarketDetail(None)`.
+        back => { MarketState.select(""); }
+    }
+
+    // A scroller of its own, which the pane version never had. It did not need
+    // one while it was half a window beside a list that owned the height; on
+    // its own it is a page, and a narrow window used to clip the route off the
+    // bottom with no way to reach it.
+    Flickable {
+        vertical-stretch: 1;
+        VerticalLayout {
             spacing: Sp.s5;
 
             // Name, what it is, and the price.
@@ -273,9 +347,9 @@ export component MarketsScreen inherits HorizontalLayout {
             // balance chart on the dashboard is the one built to be read.
             Card {
                 // Its content's height and not a share of whatever is left. A
-                // `Card` is a `Rectangle` and stretches by default, so beside a
-                // long list this grew to six hundred pixels and pushed the
-                // figures under it off the window.
+                // `Card` is a `Rectangle` and stretches by default, so without
+                // this it swallowed the whole viewport and drew a 150px line
+                // inside three hundred pixels of nothing.
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: Sp.s5;
@@ -298,8 +372,11 @@ export component MarketsScreen inherits HorizontalLayout {
                         }
                     }
 
+                    // Taller than the 96px it had in the pane. The line is now
+                    // three times as wide, and a series drawn that wide and that
+                    // short flattens every move in it to a wobble.
                     if MarketState.has-series: Rectangle {
-                        height: 96px;
+                        height: 150px;
                         spark := Path {
                             width: parent.width;
                             height: parent.height;
@@ -434,8 +511,61 @@ export component MarketsScreen inherits HorizontalLayout {
                     }
                 }
             }
-        }
 
-        Rectangle { vertical-stretch: 1; }
+            // Where the leftover height goes when the content is shorter than
+            // the window. Without it every card above shares the slack and the
+            // page becomes a set of stretched boxes.
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+// Markets: the whole book, and then one currency in full.
+//
+// # Two views, not two panes
+//
+// This was a split — the table on the left at 46%, one currency on the right —
+// and it served neither half. Before anything was picked the right half was a
+// placeholder taking more than half the window; after something was picked,
+// four numeric columns were crowded into 450px while the detail was squeezed
+// into 550px, where the price-discovery route wrapped over three lines and both
+// halves left an expanse of nothing below.
+//
+// So the list is one view and the detail is another, and `MarketState.selected`
+// decides which is on screen. No new state: it is the same string that decided
+// which currency the right-hand pane described, and it is already the flag the
+// transaction sheet works the same way with (`TxState.txid`).
+//
+// # Why not a sheet, when every other detail here is one
+//
+// `TxSheet` and `IdentitySheet` are sheets because what they show is short and
+// self-contained — a detour you come back from without deciding where you were.
+// A market is a chart, five figures, a venue table and a route. That is a place,
+// not a detour, and it wants the width.
+//
+// # Every figure here is derived
+//
+// The prices come from reserve state the chain publishes, divided out in
+// `pecu-core`'s `market` module and checked against the node's own conversion
+// estimate. Nothing on this screen is drawn.
+//
+// Two things are honestly absent, and the screen is built to say so rather than
+// to fill them: the 24-hour change, because the SDK cannot ask for a price at a
+// past height, and a price chart, for the same reason. Both show `—`, which is
+// what the convention line at the bottom of the table is there to explain.
+export component MarketsScreen inherits VerticalLayout {
+    // Its own page padding and width cap, because this screen has left the
+    // shared scroller — the same move `ActivityScreen` made and for the same
+    // reason. Each view below brings its own scroller, and only one of them
+    // exists at a time, so the two-scrollers-fighting-over-the-wheel problem
+    // `app.slint` warns about cannot arise here.
+    padding: Sp.screen-pad;
+    max-width: Sp.content-max;
+
+    if MarketState.selected == "": MarketList {
+        vertical-stretch: 1;
+    }
+    if MarketState.selected != "": MarketDetail {
+        vertical-stretch: 1;
     }
 }

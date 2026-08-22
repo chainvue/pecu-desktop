@@ -226,35 +226,56 @@ impl Network {
     /// `None` is **not** "nothing is switched off". It is "there is nowhere to
     /// ask", which is a third state the caller has to keep apart from a clear
     /// answer and from a failed one — see `pecu_core::upgrade`.
-    /// The lightwalletd server this chain's shielded notes are read from.
+    /// The grpc-web endpoint this chain's shielded notes are read from.
     ///
     /// A **different server from the RPC node**, speaking a different protocol
     /// for a different purpose: the node answers about transparent addresses,
-    /// and lightwalletd streams compact blocks so a wallet can trial-decrypt
-    /// them without telling anyone which notes are its own.
+    /// and this streams compact blocks so a wallet can trial-decrypt them
+    /// without telling anyone which notes are its own.
     ///
-    /// `None` is the honest answer for every chain but testnet. Verus runs one
-    /// public lightwalletd, on VRSCTEST, and this wallet will not guess a
-    /// hostname for the others — a shielded balance read from the wrong server
-    /// is not a smaller version of a right one, it is a number with no meaning.
-    /// Where this is `None` the interface says the chain has no shielded
-    /// support here yet, which is true, rather than failing to connect to
-    /// something that was never there.
+    /// # Why this is lightwalletd's own address
     ///
-    /// `https` is not a preference. `GrpcWebTransport` refuses plaintext to any
-    /// non-loopback host, because a light client leaks which blocks it asks
-    /// for.
+    /// It was not always. `verus-light` speaks grpc-web over HTTP/1.1 and
+    /// lightwalletd speaks native gRPC over HTTP/2, so for a while this had to
+    /// name a translating proxy — which meant naming *somebody's* proxy, and
+    /// routing every user's block requests through whoever ran it. What was
+    /// shipped here was chainvue's own, which is a poor default for a privacy
+    /// feature: it concentrated the one thing a light client leaks onto a box
+    /// belonging to the people who wrote the wallet.
+    ///
+    /// [`crate::grpc::GrpcTransport`] removed the need. This is now Verus'
+    /// public testnet lightwalletd, reached directly, with nobody in between —
+    /// and a private proxy remains perfectly usable, because
+    /// [`crate::LightServer::connect`] probes both dialects rather than
+    /// assuming one.
+    ///
+    /// Naming an endpoint is still not the same as being able to reach it:
+    /// this wallet has shipped an unreachable address once, with two
+    /// independent faults (the wrong protocol, and a certificate that expired
+    /// on 2026-08-11) each hiding the other.
+    /// `crates/pecu-chain/tests/live_light.rs` connects to whatever is named
+    /// here before it is believed.
+    ///
+    /// # What the server learns
+    ///
+    /// Which block ranges are asked for, and from where. Not which notes are
+    /// yours — trial decryption happens on this machine and nothing about it
+    /// leaves. Nor which transactions are yours: this wallet broadcasts through
+    /// the **RPC node**, never through the light server, so the sharpest link —
+    /// "the address that scanned is the address that then published a
+    /// transaction" — is not available to it.
+    ///
+    /// It is still a real disclosure, and the interface says so where the
+    /// address is shown rather than burying it here.
     pub fn light_server(&self) -> Option<&'static str> {
         match self {
-            // Verus's public testnet lightwalletd, and at the time of writing
-            // the only one that exists.
+            // Verus' own, reached over native gRPC. Operated by the project
+            // rather than by anyone who worked on this wallet, which is the
+            // property that matters for a default.
             Self::Testnet => Some("https://lightwalletd.verustest.net:8125"),
-            // Deliberately absent, for mainnet and for every PBaaS chain
-            // alike. There is a mainnet server somewhere or there is not; this
-            // wallet has not measured one, and inventing the name would
-            // produce a wallet that looks shielded-capable on VRSC and cannot
-            // be. One arm rather than two because the answer and the reason
-            // are the same for both.
+            // Nothing measured. A shielded balance read from a guessed server
+            // is not a smaller version of a right one, it is a number with no
+            // meaning.
             Self::Mainnet | Self::Other(_) => None,
         }
     }
@@ -299,8 +320,18 @@ mod tests {
     /// balance on VRSC and cannot deliver one — and a shielded balance read
     /// from the wrong server is not a smaller version of a right one, it is a
     /// number with no meaning.
+    /// Testnet has one; nothing else does.
+    ///
+    /// An address shipped here is a promise that it can be reached, and this
+    /// wallet has broken that promise once already — it named lightwalletd
+    /// directly at a time when the transport could not speak its protocol, and
+    /// behind a certificate that had expired. Both faults are gone (the second
+    /// was fixed by its operator, the first by `crate::grpc`), and the address
+    /// is back — but the rule that came out of it stands: the live test in
+    /// `tests/live_light.rs` **connects** to whatever is named here, and
+    /// nothing goes in this function until it has.
     #[test]
-    fn only_testnet_has_a_light_server() {
+    fn only_testnet_names_a_light_server() {
         assert_eq!(
             Network::Testnet.light_server(),
             Some("https://lightwalletd.verustest.net:8125"),

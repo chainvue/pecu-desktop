@@ -22,7 +22,7 @@ const WALLET_VERSION: i64 = 6;
 
 /// Bumped when a cached table changes shape. Cheap to raise: an unrecognised
 /// cache is deleted, not migrated.
-const CACHE_VERSION: i64 = 1;
+const CACHE_VERSION: i64 = 2;
 
 /// Durable schema. A version from the future is refused.
 ///
@@ -178,7 +178,8 @@ pub fn cache(connection: &Connection) -> Result<(), StoreError> {
         connection.execute_batch(
             "DROP TABLE IF EXISTS kv;
              DROP TABLE IF EXISTS currency_name;
-             DROP TABLE IF EXISTS snapshot;",
+             DROP TABLE IF EXISTS snapshot;
+             DROP TABLE IF EXISTS shielded_scan;",
         )?;
         set_version(connection, 0)?;
     }
@@ -204,6 +205,28 @@ pub fn cache(connection: &Connection) -> Result<(), StoreError> {
              portfolio TEXT NOT NULL,
              history   TEXT NOT NULL,
              saved_at  INTEGER NOT NULL
+         );
+
+         -- Exactly one row: what the last shielded scan found, sealed under the
+         -- vault's data key.
+         --
+         -- Here rather than in the durable database, and the reasoning is worth
+         -- writing down because it looks like the wrong choice. A scan costs
+         -- minutes, so losing it hurts — but it is *derived*: every byte can be
+         -- recomputed by asking a light server again, which is exactly the
+         -- contract of this database. The durable one is for things nothing
+         -- can reconstruct, and the birthday of a wallet (which cannot) lives
+         -- there as a setting.
+         --
+         -- Only `sealed` carries anything. Which account it belongs to is
+         -- inside the ciphertext, not in a column, so a row here says that a
+         -- shielded scan exists and nothing else — no address, no balance, no
+         -- height. The one leak left is that the wallet has a shielded account
+         -- at all, which the vault already shows.
+         CREATE TABLE IF NOT EXISTS shielded_scan (
+             id       INTEGER PRIMARY KEY CHECK (id = 1),
+             sealed   TEXT NOT NULL,
+             saved_at INTEGER NOT NULL
          );",
     )?;
 

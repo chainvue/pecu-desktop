@@ -501,6 +501,14 @@ impl Wallet {
             .map(|k| k.address)
     }
 
+    /// The active key's shielded account, while the wallet is open.
+    ///
+    /// The cached one — deriving it again would mean opening the sealed phrase
+    /// on every call, and this is read whenever wallet state is published.
+    pub fn shielded_view(&self) -> Option<ShieldedView> {
+        self.shielded.clone()
+    }
+
     pub fn view(&self) -> WalletVm {
         let keys: Vec<KeyVm> = self
             .vault
@@ -550,6 +558,14 @@ impl Wallet {
                 .map(|view| view.address.clone())
                 .unwrap_or_default(),
             shielded_note: self.shielded_note.clone(),
+            // Filled in by the core, which is the side that has scanned. The
+            // wallet knows which account it is; it does not know what is in it.
+            // Filled in by the core, which is the side that has scanned. The
+            // wallet knows which account is active; it does not know what is
+            // in it.
+            shielded_funds: pecu_protocol::ShieldedFunds::Absent,
+            // The core fills this in while a scan is under way.
+            shielded_scan: None,
         }
     }
 }

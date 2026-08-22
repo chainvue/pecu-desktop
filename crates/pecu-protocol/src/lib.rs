@@ -35,21 +35,15 @@ pub use error::{Severity, UiAction, UiError};
 pub use event::Event;
 pub use format::{coins, coins_u64};
 pub use models::{
-    AssetVm, BalanceVm, ChartPointVm, ChartVm, ContentEntryVm, ContentValueVm, CurrencyChoicesVm,
-    ConvertDraft, ConvertQuoteVm, CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm,
-    ChainChoiceVm,
-    ChainHaltVm,
-    ConvertReviewVm,
-    CurrencyProblemVm,
+    AssetVm, BalanceVm, ChainChoiceVm, ChainHaltVm, ChartPointVm, ChartVm, ContentEntryVm,
+    ContentValueVm, ConvertDraft, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm,
+    CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm, CurrencyProblemVm,
     CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
     IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
-    LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm,
-    NoteVm,
-    PendingVm, PortfolioVm,
-    PreallocationDraft, Reachability, RegistrationVm, ReserveDraft, ReviewOutputVm, ScreenId,
-    SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm, SendReviewVm, StatVm, TaskKind,
-    TxDetailVm, TxDirection, VenueVm,
-    WalletVm,
+    LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm, NoteVm,
+    PendingVm, Pool, PortfolioVm, PreallocationDraft, Reachability, RegistrationVm, ReserveDraft,
+    ReviewOutputVm, Route, ScreenId, SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm,
+    SendReviewVm, ShieldedFunds, StatVm, TaskKind, TxDetailVm, TxDirection, VenueVm, WalletVm,
 };
 pub use secret::Secret;
 

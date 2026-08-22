@@ -73,6 +73,19 @@ impl Paths {
         &self.dir
     }
 
+    /// Where downloaded Sapling proving parameters are kept.
+    ///
+    /// At the **home** level, not under a chain: the parameters are the stock
+    /// Zcash ceremony files and are identical on every network, so a copy per
+    /// chain would be fifty megabytes duplicated for nothing. Switching from
+    /// VRSCTEST to VRSC must not mean downloading them again.
+    ///
+    /// This is only the fallback location. `pecu_core::params` looks where a
+    /// `verusd` or `zcashd` install already put them first.
+    pub fn sapling_params(&self) -> PathBuf {
+        self.home.join("sapling-params")
+    }
+
     /// The wallet file. Opened if present; not created until somebody asks for
     /// a wallet.
     pub fn vault(&self) -> PathBuf {

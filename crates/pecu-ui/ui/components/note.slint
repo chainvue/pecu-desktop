@@ -57,6 +57,29 @@ export component NoteText inherits Text {
         : root.note.code == "address-script" ? @tr("Script address")
         : root.note.code == "address-unparsable"
             ? @tr("Not a Verus address. They start with R for a key, or i for a VerusID.")
+        : root.note.code == "address-shielded" ? @tr("Shielded address")
+
+        // ── Paying into or out of the shielded pool ─────────────────────
+        : root.note.code == "shielded-params-missing"
+            ? @tr("The proving files this needs are not on this machine")
+        : root.note.code == "shielded-none"
+            ? @tr("This key has no shielded balance to pay from")
+        : root.note.code == "shielded-not-scanned"
+            ? @tr("This wallet has not looked for shielded funds yet")
+        : root.note.code == "shielded-not-enough"
+            ? @tr("{0} shielded, but only {1} can go in one payment", root.note.args[0], root.note.args[1])
+        : root.note.code == "shielded-server-behind"
+            ? @tr("The shielded server is behind this wallet — try again shortly")
+        : root.note.code == "shielded-build-failed"
+            ? @tr("The shielded payment could not be built")
+        : root.note.code == "light-server-unusable"
+            ? @tr("That is not an address this wallet can read shielded notes from")
+        : root.note.code == "shielded-scan-failed"
+            ? @tr("Could not read shielded notes just now")
+        : root.note.code == "shielded-scan-restarting"
+            ? @tr("The chain changed too far back — reading the shielded balance again")
+        : root.note.code == "shielded-not-configured"
+            ? @tr("No shielded server is set, so this wallet has not looked")
 
         // ── What a node said about a name ───────────────────────────────
         : root.note.code == "verusid-resolving" ? @tr("Looking this VerusID up…")
@@ -471,6 +494,22 @@ export component NoticeTitle inherits Text {
         : root.note.code == "key-change-failed" ? @tr("Could not change that key")
 
         // ── Shielded ────────────────────────────────────────────────────
+        //
+        // These reach a **notice**, which renders through this component and
+        // not through `NoteText`. They had sentences only in that one, so the
+        // toast printed the bare code — `shielded-scan-failed (2×)` — which is
+        // the failure `note.slint` is deliberately built to make ugly rather
+        // than invisible. It worked; it was just ugly in front of somebody.
+        : root.note.code == "shielded-scan-failed"
+            ? @tr("Could not read the shielded balance")
+        : root.note.code == "shielded-scan-restarting"
+            ? @tr("Reading the shielded balance from the beginning")
+        : root.note.code == "light-server-unusable"
+            ? @tr("That is not a usable shielded server")
+        : root.note.code == "shielded-not-configured"
+            ? @tr("No shielded server is set")
+
+        // ── Shielded ────────────────────────────────────────────────────
         // Both are permanent facts about how the key arrived rather than
         // failures to retry, so the headline states what is true and the body
         // says why, instead of either one reading as an error.
@@ -600,7 +639,19 @@ export component NoticeTitle inherits Text {
 export component NoticeBody inherits Text {
     in property <Note> note;
 
-    text: root.note.code == "shielded-needs-a-phrase"
+    text: root.note.code == "light-server-unusable"
+            ? @tr("It has to be an https address, or http on this machine. A lightwalletd works directly, and so does a grpc-web proxy in front of one.")
+        : root.note.code == "shielded-not-configured"
+            ? @tr("A shielded balance has to be read from a server that serves compact blocks. Until one is set in Settings, this wallet cannot say what is in the pool — which is not the same as saying it is empty.")
+        : root.note.code == "shielded-params-missing"
+            ? @tr("Building a shielded payment needs the Sapling proving files — about 50 MB. They are the ordinary Zcash ones, so a machine running a Verus node already has them; otherwise this wallet can fetch them.")
+        : root.note.code == "shielded-not-enough"
+            ? @tr("Shielded value moves in whole notes, and one payment can carry only a limited number of them. Sending a smaller amount, or more than once, works.")
+        : root.note.code == "shielded-not-scanned"
+            ? @tr("A shielded balance has to be found by reading the chain. That has not happened yet, so this wallet cannot say what is there.")
+        : root.note.code == "shielded-scan-restarting"
+            ? @tr("The chain was rewritten further back than what this wallet had already read could be checked against. Rather than trust it, the wallet is reading again from the start. Nothing is lost — it takes a few minutes.")
+        : root.note.code == "shielded-needs-a-phrase"
             ? @tr("It was imported as a private key, and a shielded address is derived from a recovery phrase. Those words never existed for this key, so there is nothing to derive from — a key that arrived as a phrase has both addresses.")
         : root.note.code == "shielded-not-bip39"
             ? @tr("A shielded address comes from a BIP-39 phrase, and this key's phrase is not one. That is not a fault: the transparent address accepts any text, so a phrase can be perfectly good for it and still not be a mnemonic.")
