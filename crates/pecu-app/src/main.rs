@@ -546,10 +546,12 @@ fn wire_settings(ui: &AppWindow, dispatcher: &Dispatcher) {
 
     {
         let dispatcher = dispatcher.clone();
-        actions.on_set_mainnet_spend(move |on, typed| {
+        actions.on_set_spending(move |on, typed| {
             // The typed word is passed straight through. Checking it here would
-            // put the guard in the layer that is easiest to bypass.
-            dispatcher.send(Command::SetAllowMainnetSpend {
+            // put the guard in the layer that is easiest to bypass — and the
+            // word differs per chain, so there is not even a literal to check
+            // against.
+            dispatcher.send(Command::SetAllowSpending {
                 on,
                 typed_confirmation: typed.to_string(),
             });

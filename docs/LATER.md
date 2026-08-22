@@ -91,9 +91,14 @@ the name out, and a node whose two claims disagree is `Unidentified` — not rea
 from, not spent through. That covers VRSC and VRSCTEST.
 
 It does not cover vARRR, CHIPS or vDEX, and those are the awkward three. They
-carry real coins. They are `Network::Other`, so `is_mainnet` is false for them
-and no typed opt-in stands in front of a spend. And they are now also the only
-shipped chains whose identity is taken entirely on the node's word.
+carry real coins, and they are now the only shipped chains whose identity is
+taken entirely on the node's word.
+
+What is missing here is corroboration, not consent. The spending guard asks
+`Network::may_be_real_money`, which is true for every chain but VRSCTEST, so all
+three sit behind the same typed confirmation VRSC does and the word it asks for
+is the chain's own name. The gap this entry is about is narrower and harder: a
+wallet on one of these three has nothing to hold a node's answer against.
 
 **Why they cannot simply be derived.** A root chain's currency id *is* the id of
 its own name — `hash160(sha256d(lowercase(name)))`, which

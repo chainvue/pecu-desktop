@@ -77,9 +77,13 @@ Two kinds of literal are exempt and both are recognised rather than tolerated:
   sentence, it would take the wrong branch — quietly. The scan drops every
   literal that follows a `==` or `!=`.
 - **The listed exceptions**, in `ALLOWED`, each with the reason beside it.
-  Glyphs, the product name, an example URL, a font licence, and `mainnet` —
-  which the *core* compares the typed confirmation against, so a translated one
-  would ask for a word the wallet then refuses.
+  Glyphs, the product name, an example URL, a font licence, and a BIP-39 example
+  phrase — whose wordlist is English by specification, so a translated hint would
+  show input the field then refuses.
+
+  The word somebody types to arm spending is not on that list and no longer
+  could be: it is the chain's own name, bound from `NetworkState.requested-name`,
+  so there is no literal in the interface for the scan to see.
 
 ## The core builds no sentences any more
 

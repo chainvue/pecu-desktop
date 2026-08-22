@@ -1168,15 +1168,21 @@ fn apply_network(ui: &AppWindow, vm: &pecu_protocol::NetworkVm) {
         })
         .collect();
     state.set_chains(slint::ModelRc::new(slint::VecModel::from(chains)));
-    // The chooser follows the wallet, never the other way round, so a switch
-    // the core refused puts the selection back. Only mainnet moves it: anything
-    // else — testnet, or a PBaaS chain this build has no button for — leaves it
-    // on the first option rather than claiming to be mainnet.
-    state.set_chain_index(i32::from(vm.requested == "Mainnet"));
+    // The chooser follows the wallet, never the other way round: it marks the
+    // button whose name matches `requested_name`, so a switch the core refused
+    // leaves the highlight where it was. Matched on the name rather than on a
+    // position or a display label, because those two describe a fixed number of
+    // chains and this build already offers five.
+    state.set_requested_name(vm.requested_name.clone().into());
+    state.set_chain_title(vm.chain_title.clone().into());
     state.set_effective(vm.effective.clone().unwrap_or_default().into());
     state.set_tip(vm.tip.map(thousands).unwrap_or_default().into());
     state.set_syncing(vm.syncing);
-    state.set_allow_mainnet_spend(vm.allow_mainnet_spend);
+    // One enum in, two flags out. The interface needs to answer two questions
+    // separately — draw the block at all, and which half of it — and the third
+    // combination is unreachable by construction here.
+    state.set_spend_needs_opt_in(vm.spend_gate != pecu_protocol::SpendGate::NotNeeded);
+    state.set_allow_spending(vm.spend_gate == pecu_protocol::SpendGate::Open);
     state.set_light_server(vm.light_server.clone().into());
     state.set_mock_mode(vm.mock_mode);
 

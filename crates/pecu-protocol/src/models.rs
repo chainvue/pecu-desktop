@@ -238,20 +238,62 @@ pub struct NodeVm {
 ///
 /// Two strings and not one, because they answer different questions: `name` is
 /// what the chain calls itself and what every guard compares against, and
-/// `title` is what a person recognises. `VARRR` is the first; "Pirate Chain" is
+/// `title` is what a person recognises. `vARRR` is the first; "Pirate Chain" is
 /// the second.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainChoiceVm {
-    /// The chain's own name — `VRSCTEST`, `VRSC`, `VARRR`. What goes back in
+    /// The chain's own name — `VRSCTEST`, `VRSC`, `vARRR`. What goes back in
     /// `SetRequestedNetwork`, and never the title.
     pub name: String,
     pub title: String,
 }
 
+/// What the spending guard is doing on the chain the wallet is set to.
+///
+/// Three states in one field rather than a pair of bools, because "there is no
+/// gate on this chain" and "the gate is shut" are different things to draw, and
+/// two flags can spell a fourth combination that means nothing. Decided in the
+/// core: whether a chain could cost real money is
+/// `pecu_chain::Network::may_be_real_money`, and deriving it in the interface
+/// would put a money decision in the layer this project keeps writing down as
+/// the easiest to bypass — the same reason the typed confirmation is checked in
+/// the core and not on the screen that asks for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpendGate {
+    /// Testnet, where coins come out of a faucet. No confirmation is asked for
+    /// and the control is not drawn at all — a greyed-out money switch on a
+    /// worthless chain is the kind of decoration that teaches people to click
+    /// through the real one.
+    #[default]
+    NotNeeded,
+    /// Real money, and spending has not been armed. The state at every start,
+    /// and again after every chain switch.
+    Closed,
+    /// Real money, armed for this session on this chain. Never persisted.
+    Open,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkVm {
-    /// What the user asked for.
+    /// What the user asked for, for reading — `Testnet`, `Mainnet`, `vARRR`.
+    ///
+    /// For reading only. The chain's own name is [`NetworkVm::requested_name`],
+    /// and that is what goes back in `SetRequestedNetwork` and what every guard
+    /// compares against.
     pub requested: String,
+    /// The requested chain's own name — `VRSCTEST`, `VRSC`, `vARRR`.
+    ///
+    /// The same string as the matching [`ChainChoiceVm::name`], so the
+    /// interface can mark the chosen chain without comparing display text; and
+    /// the word the core requires typed before spending is armed, so the
+    /// screen asks for exactly what the core will accept.
+    pub requested_name: String,
+    /// The requested chain as a person recognises it — "Verus", "Pirate Chain".
+    ///
+    /// Computed in the core rather than derived in the interface, for the same
+    /// reason as its neighbour [`NetworkVm::spend_gate`]: it is the name inside
+    /// a sentence about spending real coins.
+    pub chain_title: String,
     /// Every chain this build ships, in the order they are offered.
     ///
     /// Sent rather than hardcoded in the interface: which chains exist is chain
@@ -264,7 +306,8 @@ pub struct NetworkVm {
     pub active_node: Option<u32>,
     pub tip: Option<u32>,
     pub syncing: bool,
-    pub allow_mainnet_spend: bool,
+    /// What the spending guard is doing on the requested chain.
+    pub spend_gate: SpendGate,
     /// The lightwalletd shielded notes are read through, or empty.
     ///
     /// Empty on a chain that ships no address — mainnet, today — and there the

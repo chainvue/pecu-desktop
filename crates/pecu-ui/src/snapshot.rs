@@ -262,6 +262,9 @@ pub const CASES: &[Case] = &[
     ("settings", "keys", crate::fixtures::keys),
     ("settings", "addresses", crate::fixtures::addresses),
     ("settings", "general", crate::fixtures::general_settings),
+    // The same tab on a chain that costs real money, which is the only place
+    // the spending control is drawn.
+    ("settings", "spending-arm", crate::fixtures::spending_arm),
     ("settings", "keys-renaming", crate::fixtures::renaming_key),
     // Under `settings`, because that is where this screen lives now — a fifth
     // tab rather than a rail entry. The fixture sets the tab; the case has to

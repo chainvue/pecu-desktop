@@ -17,9 +17,10 @@
 //! # The exceptions are listed, not inferred
 //!
 //! Some literals must **not** be translated, and "it looks short" is not the
-//! rule — `Lock` is short and must be translated, `mainnet` is longer and must
-//! not. Each one is named below with the reason, so adding to this list is a
-//! decision somebody writes down rather than a regex somebody widens.
+//! rule — `Lock` is short and must be translated, `abandon abandon abandon …`
+//! is longer and must not. Each one is named below with the reason, so adding
+//! to this list is a decision somebody writes down rather than a regex somebody
+//! widens.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -94,11 +95,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "abandon abandon abandon …",
         "a BIP-39 example. The wordlist is English by specification, so a \
          translated hint would show input the field refuses",
-    ),
-    (
-        "mainnet",
-        "the word the CORE compares the typed confirmation against. Translated, \
-         the wallet would be asking for a word it will then refuse",
     ),
     // Vocabulary the code branches on is not listed here at all — see
     // `without_comparisons`, which recognises it by shape rather than by name.

@@ -321,7 +321,20 @@ pub struct NodeManager {
     nodes: Vec<Node>,
     active: Option<u32>,
     requested: Option<Network>,
-    allow_mainnet_spend: bool,
+    /// One flag for every chain, and not a map from chain to flag.
+    ///
+    /// It can only ever authorise the chain this manager was built for: the
+    /// typed word is that chain's own name, and `permit::evaluate` refuses a
+    /// spend whose effective chain is not the requested one.
+    ///
+    /// That makes one bool safe for five chains, but only while every route to
+    /// a different chain clears it — otherwise a word typed for VRSCTEST would
+    /// still be standing when the wallet arrives on vARRR. Two routes exist and
+    /// both clear it: `pecu_core` switches chains by throwing this manager away
+    /// and building another with this `false`, and `set_requested` clears it
+    /// for anyone who changes the chain in place. This is the argument for
+    /// both; they carry a pointer here rather than repeating it.
+    allow_spending: bool,
 }
 
 impl NodeManager {
@@ -331,7 +344,7 @@ impl NodeManager {
             nodes,
             active,
             requested: Some(requested),
-            allow_mainnet_spend: false,
+            allow_spending: false,
         }
     }
 
@@ -428,25 +441,58 @@ impl NodeManager {
         self.requested.as_ref()
     }
 
+    /// Point the manager at another chain, and disarm spending.
+    ///
+    /// The disarm is the point, and the reason is on the `allow_spending`
+    /// field: an arm belongs to the chain it was made on. `pecu_core` happens
+    /// to switch chains by building a fresh manager, so this is the second of
+    /// the two routes rather than the live one — which is exactly why it is
+    /// written down here instead of being left to whichever way the switch is
+    /// implemented next.
     pub fn set_requested(&mut self, network: Network) {
+        if self.requested.as_ref() != Some(&network) {
+            self.allow_spending = false;
+        }
         self.requested = Some(network);
     }
 
-    /// Turn mainnet spending on or off.
+    /// Turn spending on or off for the chain this manager is set to.
     ///
     /// The typed confirmation is checked **here**, not in the UI. A
     /// confirmation the interface could skip is decoration; this is the only
     /// place that decides.
-    pub fn set_allow_mainnet_spend(&mut self, on: bool, typed: &str) -> bool {
-        if on && !typed.trim().eq_ignore_ascii_case("mainnet") {
-            return false;
+    ///
+    /// The word is the chain's own name — `VRSC`, `vARRR`, or whatever an
+    /// unknown chain calls itself — rather than a fixed `mainnet`. Asking
+    /// somebody to type "mainnet" before spending their ARRR is a sentence that
+    /// means nothing, and a confirmation that means nothing is one people learn
+    /// to type through. Spelling the chain also makes the word the single piece
+    /// of evidence that the person knew *which* chain they were arming: it does
+    /// not carry over by muscle memory from the last one.
+    ///
+    /// Compared against `requested` rather than against what a node reports,
+    /// because arming happens on a settings screen where no node need have
+    /// answered yet. The two are the same by the time it matters:
+    /// `permit::evaluate` refuses any spend where they differ.
+    ///
+    /// Refused outright when there is no chain to name, and when the chain
+    /// names itself with an empty string. `Network::Other(String::new())` is
+    /// constructible — `from_chain_name("")` produces it — and an expected word
+    /// of `""` would be matched by an untouched box, so the guard would arm
+    /// itself on exactly the chain nobody can vouch for.
+    pub fn set_allow_spending(&mut self, on: bool, typed: &str) -> bool {
+        if on {
+            let expected = self.requested.as_ref().map_or("", Network::chain_name);
+            if expected.is_empty() || !typed.trim().eq_ignore_ascii_case(expected) {
+                return false;
+            }
         }
-        self.allow_mainnet_spend = on;
+        self.allow_spending = on;
         true
     }
 
-    pub fn allow_mainnet_spend(&self) -> bool {
-        self.allow_mainnet_spend
+    pub fn allow_spending(&self) -> bool {
+        self.allow_spending
     }
 
     /// Mint a permit, or explain why not.
@@ -458,7 +504,7 @@ impl NodeManager {
             .requested
             .as_ref()
             .ok_or(SpendRefused::NetworkUnknown)?;
-        permit::evaluate(self.active(), requested, self.allow_mainnet_spend)
+        permit::evaluate(self.active(), requested, self.allow_spending)
     }
 }
 
@@ -665,18 +711,39 @@ mod tests {
     /// field.
     #[test]
     fn a_pbaas_node_is_still_believed_because_no_id_is_pinned_for_it() {
-        let varrr = Network::Other("VARRR".to_string());
+        let varrr = Network::from_chain_name("vARRR");
         assert_eq!(varrr.chain_id(), None);
 
         let mut node = Node::builtin(0, "n", "https://example.invalid");
         node.record_success(
-            &claiming("VARRR", "iSomethingOnlyThatChainKnows"),
+            &claiming("vARRR", "iSomethingOnlyThatChainKnows"),
             Duration::from_millis(10),
             &varrr,
         );
 
         assert_eq!(node.status, NodeStatus::Online);
         assert_eq!(node.network, Some(varrr));
+    }
+
+    /// The spelling a node uses is not the spelling a button sends, and the
+    /// wallet has to survive the difference.
+    ///
+    /// `vapi.piratechain.com` answers `"name":"vARRR"`. A wallet set to that
+    /// chain by any other capitalisation must still see the node come `Online`:
+    /// [`Network::Other`] compares by exact string, so without the
+    /// canonicalisation in [`Network::from_chain_name`] this node would be
+    /// `WrongNetwork` forever, and vARRR would read no balance and refuse every
+    /// spend while looking like a misconfigured endpoint.
+    #[test]
+    fn a_node_that_shouts_its_own_name_is_still_the_chain_that_was_asked_for() {
+        let mut node = Node::builtin(0, "n", "https://example.invalid");
+        node.record_success(
+            &claiming("vARRR", "iSomethingOnlyThatChainKnows"),
+            Duration::from_millis(10),
+            &Network::from_chain_name("VARRR"),
+        );
+
+        assert_eq!(node.status, NodeStatus::Online);
     }
 
     /// The SDK says `-32601` can mean "not at this arity" rather than "down".
@@ -704,26 +771,115 @@ mod tests {
         assert_eq!(node.retry_after, Some(Duration::from_secs(10)));
     }
 
-    /// Enabling mainnet spending requires the word, and the check lives here
-    /// rather than in the interface.
+    /// Enabling spending requires the chain's own name, and the check lives
+    /// here rather than in the interface.
+    ///
+    /// Driven on vARRR rather than on VRSC, because a PBaaS chain is where the
+    /// word does the most work: it carries real coins, it is not the chain
+    /// anybody assumes a money guard is about, and the confirmation is the only
+    /// evidence the person knew which of the five they were arming.
     #[test]
-    fn the_mainnet_opt_in_needs_the_typed_word() {
+    fn the_spending_opt_in_needs_the_chains_own_name() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "n", "https://example.invalid")],
+            Network::from_chain_name("vARRR"),
+        );
+
+        assert!(!manager.set_allow_spending(true, ""));
+        assert!(!manager.set_allow_spending(true, "yes"));
+        // The old fixed word, which now means nothing here.
+        assert!(!manager.set_allow_spending(true, "mainnet"));
+        // And no other chain's name arms this one. This is the property the
+        // chain-specific word exists for: the confirmation is evidence about
+        // WHICH chain, and nothing else would pin that.
+        assert!(!manager.set_allow_spending(true, "VRSC"));
+        assert!(!manager.allow_spending());
+
+        assert!(manager.set_allow_spending(true, "vARRR"));
+        assert!(manager.allow_spending());
+
+        // Turning it back off needs no confirmation — refusing to spend is
+        // never the dangerous direction.
+        assert!(manager.set_allow_spending(false, ""));
+        assert!(!manager.allow_spending());
+
+        // Case and surrounding space are forgiven. Somebody typing their own
+        // chain's name in lowercase has demonstrated everything the word is
+        // there to demonstrate.
+        assert!(manager.set_allow_spending(true, "  varrr  "));
+        assert!(manager.allow_spending());
+    }
+
+    /// An empty box must not arm a chain that calls itself nothing.
+    ///
+    /// `Network::Other(String::new())` is constructible — a node answering with
+    /// an empty name produces it — and its `chain_name` is `""`. Comparing the
+    /// typed text against that would make the untouched field the correct
+    /// answer, on the one chain the wallet knows least about.
+    #[test]
+    fn a_chain_with_no_name_cannot_be_armed_at_all() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "n", "https://example.invalid")],
+            Network::from_chain_name(""),
+        );
+
+        assert!(!manager.set_allow_spending(true, ""));
+        assert!(!manager.set_allow_spending(true, "   "));
+        assert!(!manager.allow_spending());
+    }
+
+    /// An arm belongs to the chain it was made on — see the `allow_spending`
+    /// field for why one flag can serve five chains only while that holds.
+    /// Pinned here because in the running application it is true by
+    /// construction, and construction is a thing that gets changed.
+    #[test]
+    fn changing_chains_disarms_spending() {
         let mut manager = NodeManager::new(
             vec![Node::builtin(0, "n", "https://example.invalid")],
             Network::Mainnet,
         );
+        assert!(manager.set_allow_spending(true, "VRSC"));
 
-        assert!(!manager.set_allow_mainnet_spend(true, ""));
-        assert!(!manager.set_allow_mainnet_spend(true, "yes"));
-        assert!(!manager.allow_mainnet_spend());
+        manager.set_requested(Network::from_chain_name("vARRR"));
+        assert!(!manager.allow_spending(), "the arm followed the wallet");
+    }
 
-        assert!(manager.set_allow_mainnet_spend(true, "mainnet"));
-        assert!(manager.allow_mainnet_spend());
+    /// A permit already issued outlives the switch that authorised it.
+    ///
+    /// Not a defect and not fixable here: the seal is what makes the guard
+    /// unskippable, and a sealed value is still a value — once minted, nothing
+    /// in this crate can reach back and revoke it. It is pinned because the
+    /// consequence belongs to the callers. `pecu_core` holds signed bytes for a
+    /// review that stays on screen as long as somebody leaves it there, and a
+    /// permit stored beside them would still authorise a broadcast after the
+    /// person turned spending off, or changed chains. So the rule the callers
+    /// follow is that a permit is taken at the moment of broadcast and never
+    /// carried alongside the bytes; this is the fact that rule exists for.
+    #[test]
+    fn a_permit_already_issued_is_not_reached_by_turning_spending_off() {
+        let mut manager = NodeManager::new(
+            vec![Node::builtin(0, "n", "https://example.invalid")],
+            Network::Mainnet,
+        );
+        manager
+            .get_mut(0)
+            .expect("the node just added")
+            .record_success(
+                &info(1_000, 1_000, "VRSC"),
+                Duration::from_millis(10),
+                &Network::Mainnet,
+            );
+        assert!(manager.set_allow_spending(true, "VRSC"));
 
-        // Turning it back off needs no confirmation — refusing to spend is
-        // never the dangerous direction.
-        assert!(manager.set_allow_mainnet_spend(false, ""));
-        assert!(!manager.allow_mainnet_spend());
+        let held = manager.spend_permit().expect("the guard is satisfied");
+
+        assert!(manager.set_allow_spending(false, ""));
+        assert!(
+            manager.spend_permit().is_err(),
+            "the off switch did not shut the gate",
+        );
+        // And the one taken beforehand is untouched, which is the point.
+        assert_eq!(held.network(), &Network::Mainnet);
     }
 
     /// The check that stands between a user-added endpoint and every address

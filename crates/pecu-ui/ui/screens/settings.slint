@@ -36,21 +36,25 @@ export component Section inherits VerticalLayout {
 
 // The typing-the-word half, separate so its field is addressable — an input
 // declared inside an `if` cannot be reached from outside it.
-export component MainnetArm inherits HorizontalLayout {
+export component SpendArm inherits HorizontalLayout {
     spacing: Sp.s4;
 
     confirm := Field {
         horizontal-stretch: 1;
         mono: true;
-        // Not translated, and not translatable: the core compares the typed
-        // text against this exact word.
-        placeholder: "mainnet";
+        // Bound rather than written out, and not translated either way: the
+        // core compares the typed text against this exact word, which is the
+        // chain's own name as the daemon spells it. It used to be the literal
+        // "mainnet", which is a nonsense thing to ask of somebody spending
+        // ARRR — and a confirmation that means nothing is one people learn to
+        // type through.
+        placeholder: NetworkState.requested-name;
         accepted => { root.arm(); }
     }
     Btn {
         // The word is checked in the CORE, not here. A confirmation the UI
         // could skip would be theatre.
-        text: @tr("Type {} to enable", "mainnet");
+        text: @tr("Type {} to enable", NetworkState.requested-name);
         enabled: confirm.text != "";
         y: (parent.height - self.height) / 2;
         clicked => { root.arm(); }
@@ -58,13 +62,17 @@ export component MainnetArm inherits HorizontalLayout {
 
     function arm() {
         if (confirm.text == "") { return; }
-        Actions.set-mainnet-spend(true, confirm.text);
+        Actions.set-spending(true, confirm.text);
         confirm.text = "";
     }
 }
 
 // Turning on the one thing that can lose real money.
-export component MainnetToggle inherits VerticalLayout {
+//
+// Named for what it does rather than for one chain: it stands in front of every
+// chain but testnet, and a name that said "mainnet" while rendering "Type vARRR
+// to enable" would be the same category error this control exists to fix.
+export component SpendToggle inherits VerticalLayout {
     spacing: Sp.s4;
 
     HorizontalLayout {
@@ -73,30 +81,33 @@ export component MainnetToggle inherits VerticalLayout {
             horizontal-stretch: 1;
             spacing: 2px;
             Text {
-                text: NetworkState.allow-mainnet-spend
-                    ? @tr("Spending on mainnet is ON")
-                    : @tr("Spending on mainnet is off");
+                // The chain a person recognises — "Verus", "Pirate Chain" —
+                // and not the name they have to type. The two differ on vARRR,
+                // which is why the core sends both.
+                text: NetworkState.allow-spending
+                    ? @tr("Spending on {} is ON", NetworkState.chain-title)
+                    : @tr("Spending on {} is off", NetworkState.chain-title);
                 font-size: Typo.body;
                 font-weight: Typo.w-medium;
-                color: NetworkState.allow-mainnet-spend ? Theme.warning : Theme.text-primary;
+                color: NetworkState.allow-spending ? Theme.warning : Theme.text-primary;
             }
             Text {
-                text: @tr("Reading a mainnet balance is always allowed. This is only about signing away real coins, and it turns itself off again every time Pecu starts.");
+                text: @tr("Reading a balance is always allowed. This is only about signing away real coins. It turns itself off again every time Pecu starts, and every time you change chains.");
                 font-size: Typo.caption;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
         }
 
-        if NetworkState.allow-mainnet-spend: Btn {
+        if NetworkState.allow-spending: Btn {
             text: @tr("Turn off");
             variant: "destructive";
             y: (parent.height - self.height) / 2;
-            clicked => { Actions.set-mainnet-spend(false, ""); }
+            clicked => { Actions.set-spending(false, ""); }
         }
     }
 
-    if !NetworkState.allow-mainnet-spend: MainnetArm {}
+    if !NetworkState.allow-spending: SpendArm {}
 }
 
 // Replacing the passphrase. Costs two key derivations and re-seals 32 bytes —
@@ -658,9 +669,15 @@ export component SettingsScreen inherits VerticalLayout {
         }
     }
 
-    if root.tab == 3: Section {
+    // Not drawn on a chain where a spend cannot cost anything. There is no
+    // sentence this block could say truthfully on testnet, and a money switch
+    // sitting greyed out on a worthless chain is the kind of decoration that
+    // teaches people to click through the real one. The core decides: it sends
+    // `NetworkVm::spend_gate`, a three-state `SpendGate`, which `apply_network`
+    // in `bridge.rs` splits into this property and `allow-spending`.
+    if root.tab == 3 && NetworkState.spend-needs-opt-in: Section {
         title: @tr("NETWORK");
-        MainnetToggle {}
+        SpendToggle {}
     }
 
     if root.tab == 3: Section {
