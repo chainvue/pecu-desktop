@@ -197,8 +197,9 @@ Binding it while the layout sat behind an `if` did **not** work.
 
 ### Sending is built too — all three directions
 
-`prover` and `multicore` are on, and the send form routes on the pair
-(source pool, destination kind):
+`prover` and `multicore` are on, so a shielded spend is compiled in and live;
+`pecu_chain::light` carries what that costs in trust. The send form routes on
+the pair (source pool, destination kind):
 
 | Route | Where it lives | Proven live? |
 |---|---|---|

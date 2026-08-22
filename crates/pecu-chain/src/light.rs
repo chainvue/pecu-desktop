@@ -45,12 +45,23 @@
 //! cost of the second dialect is one extra round trip on connect, and only for
 //! the servers that need it.
 //!
-//! # What this deliberately cannot do
+//! # A spend is built from what this server says
 //!
-//! Spend. The workspace takes the SDK's `light` feature and not `prover`, so
-//! `verus_flows::shielded::prepare_spend` does not exist in this build. That is
-//! not discipline, it is the dependency graph: the code to build a shielded
-//! transaction was never compiled in.
+//! The manifest takes the SDK's `prover` feature as well as `light`, so the
+//! spending path is compiled in and live: `pecu_core::send::prepare_shielded`
+//! reaches `verus_sdk::light::prepare_spend`, which builds and signs against
+//! notes, witnesses and an anchor a light server supplied. So the caveat above
+//! is not only about a number on a screen. A shielded spend is no sounder than
+//! the server that described the chain it spends against, and the only thing
+//! that server was held to is its own name.
+//!
+//! Two things narrow it today, neither of them a guard. A spend goes through
+//! [`LightServer::shipped`] — the address the chain itself ships — and only
+//! testnet ships one ([`Network::light_server`]), so no real coins are
+//! reachable this way in this build. The shielded *balance* is read from
+//! whatever address the user set instead, which is the wider of the two
+//! exposures and the reason the disclosure is written on the screen that takes
+//! that address.
 
 use verus_sdk::light::{GrpcWebTransport, LightClient, LightError, LightTransport};
 use verus_sdk::verus_light::HttpResponse;
