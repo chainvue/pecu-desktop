@@ -193,6 +193,18 @@ jobs:
       # only the parent orphans an in-flight `sleep` or `df` that still holds
       # this step's stdout, and the runner reads that pipe until EOF — so every
       # job would idle up to thirty seconds after the checks had finished.
+      #
+      # Every command in it is `|| true`, and that is load-bearing rather than
+      # belt and braces. Actions runs this with `bash -e`, `set -e` applies
+      # inside a trap, and `pkill -P` exits 1 when it matches nothing — which
+      # is the ordinary case whenever the sampler is caught between two
+      # `sleep`s rather than inside one. The trap then aborts before its own
+      # final `true` and the step fails with exit 1 after the checks have
+      # already passed, which is what happened on the fourth run of this
+      # workflow: `Finished dev profile in 4m 31s`, no warnings, then
+      # `Terminated` and a red cross. A cleanup that can fail the thing it is
+      # cleaning up after teaches people to re-run red builds until they go
+      # green, which is the habit that makes a check worthless.
       - name: Checks
         run: |
           ( while sleep 30; do
@@ -204,7 +216,7 @@ jobs:
                 "$(df -h --output=avail / | tail -1 | tr -d ' ')"
             done ) &
           sampler=$!
-          trap 'pkill -P "$sampler" 2>/dev/null; kill "$sampler" 2>/dev/null; true' EXIT
+          trap 'pkill -P "$sampler" 2>/dev/null || true; kill "$sampler" 2>/dev/null || true' EXIT
           bash scripts/check.sh ${{ matrix.half }}
 
       - name: Headroom left
