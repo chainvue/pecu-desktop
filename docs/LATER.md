@@ -80,6 +80,39 @@ long before any of this, so the safety half was never the missing part.
 
 ---
 
+## 1b. The three shipped chains whose identity is never cross-checked
+
+**Status:** built for two chains of five. The other three need a value nobody
+in this tree has.
+
+`Node::record_success` no longer believes a node on its reported chain name
+alone: where `Network::chain_id` pins an id, `ChainInfo::chain_id` has to bear
+the name out, and a node whose two claims disagree is `Unidentified` — not read
+from, not spent through. That covers VRSC and VRSCTEST.
+
+It does not cover vARRR, CHIPS or vDEX, and those are the awkward three. They
+carry real coins. They are `Network::Other`, so `is_mainnet` is false for them
+and no typed opt-in stands in front of a spend. And they are now also the only
+shipped chains whose identity is taken entirely on the node's word.
+
+**Why they cannot simply be derived.** A root chain's currency id *is* the id of
+its own name — `hash160(sha256d(lowercase(name)))`, which
+`verus_sdk::vdxf::root_namespace` does offline and which
+`the_pinned_chain_ids_are_the_ones_the_derivation_produces` holds the two
+existing pins to. A PBaaS chain is not a root chain: vARRR is registered under
+VRSC, so its id is `identity_id("vARRR", VRSC)`. Deriving it from its own name
+here would produce a value no node ever sends and would reject every honest
+vARRR endpoint.
+
+**First move.** Read each id from that chain's own `getinfo`, against the
+endpoint `Network::builtin_nodes` already ships for it, and record where it came
+from the way the oracle constants in `network.rs` do. Not a value derived
+off-machine and typed in from memory: one wrong character in a pin is not a
+weaker guard, it is an outage that refuses every honest node on that chain, and
+it would look exactly like the chain being down.
+
+---
+
 ## 2. Shielded — receiving, then sending
 
 **Status:** the reading half is built and tested offline. The half that needs a
@@ -97,10 +130,12 @@ live server is blocked on somebody else's certificate.
   separately and compares, so it cannot pass by agreeing with itself.
 * `pecu_chain::light` — `LightServer`, which cannot be constructed without
   having asked the server which chain it serves and having been told the right
-  one. Same `Network::from_chain_name` the node health check uses. The guard
-  matters more here than there: a transparent balance from the wrong chain is
-  visibly wrong because the addresses do not match, and a shielded balance is
-  one number with nothing on screen to contradict it.
+  one. Same `Network::from_chain_name` the node health check reads a name with —
+  though the node check no longer stops at the name, and holds it against the
+  chain's own id (see 1b); `GetLightdInfo` carries no second statement to do
+  that with. The guard matters more here than there: a transparent balance from
+  the wrong chain is visibly wrong because the addresses do not match, and a
+  shielded balance is one number with nothing on screen to contradict it.
 * `pecu_core::shielded` — holds the viewing key and the `ScanResult`, folds in
   each tail with `absorb`, tells a lagging server apart from a reorg, and rolls
   back to the oldest *verifiable* checkpoint when the chain really did move.

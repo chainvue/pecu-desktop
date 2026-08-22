@@ -18,6 +18,16 @@
 //! chain is visibly wrong, because the addresses do not match. A shielded
 //! balance is a single number with nothing on screen to contradict it.
 //!
+//! A node's name is now also held against the chain's own currency id
+//! ([`Network::chain_id`]), and there is nothing here to hold anything to:
+//! `GetLightdInfo` answers with a `ServerInfo` carrying a chain name and
+//! nothing else that names the chain, so there is no second statement to check
+//! the first against. Be exact about which guard that costs: against a
+//! middlebox relabelling a name on its way past and leaving the id alone, the
+//! node's pair genuinely is the stronger check and this one would not notice.
+//! Against a hostile server the two are worth the same — the paragraph below
+//! and [`crate::network::Network`] both say why.
+//!
 //! Note what the guard is worth. `chain_name` is a string the server chooses to
 //! send. It defeats a misconfiguration — the overwhelmingly likely case — and
 //! it does not make a hostile server safe. Nothing here can: lightwalletd's

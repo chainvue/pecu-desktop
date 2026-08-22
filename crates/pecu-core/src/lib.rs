@@ -971,12 +971,73 @@ fn node_note(status: &pecu_chain::NodeStatus) -> NoteVm {
         NodeStatus::WrongNetwork { reported } => {
             NoteVm::with("node-other-chain", [reported.to_string()])
         }
+        // Both of the node's own strings are carried through rather than
+        // summarised, for the same reason the offline reason is: which two
+        // things disagreed is the whole of what a person can act on here.
+        NodeStatus::Unidentified { name, chain_id } => {
+            NoteVm::with("node-unidentified", [name.clone(), chain_id.clone()])
+        }
         NodeStatus::MethodRefused { method } => {
             NoteVm::with("node-refused-method", [method.clone()])
         }
         NodeStatus::Offline { reason } => NoteVm::with("node-offline", [reason.clone()]),
         NodeStatus::Unknown | NodeStatus::Probing | NodeStatus::Online => NoteVm::none(),
     }
+}
+
+/// Why the active node must not be read from, if it must not be.
+///
+/// # Two refusals, because a person can act on the difference
+///
+/// A node on another chain is fixed by switching chain or switching node, and
+/// the note names the chain it is actually on. A node whose own two claims
+/// about its identity disagree is not on a chain the wallet could switch to at
+/// all, and the only useful thing to say is which two claims those were.
+///
+/// # Identity is asked about first, and that ordering is the guard
+///
+/// The disagreement test below reads `node.network`, and `None` there means
+/// "read anyway": not knowing is not the same as disagreeing, and refusing
+/// before the first probe would leave a cold start blank for no reason. That
+/// reasoning was written when a cold start was the only way to have no network.
+/// It no longer is — `Node::record_success` leaves `network` unset for a node
+/// whose name and chain id contradict each other — so asking about the network
+/// first would read that silence as a cold start and let the refresh straight
+/// through to balances, history and quotes from the one class of endpoint the
+/// cross-check exists to distrust. The check would have cost this wallet a
+/// refusal it already had rather than bought it one.
+///
+/// A free function rather than a method because the rule is worth testing on
+/// its own and `Core` is only reachable through the actor. It takes the manager
+/// the actor holds, so a test exercises this and not a copy of it.
+///
+/// The `&'static str` is the code the notice is filed and logged under, and the
+/// two refusals do not share one: `code=wrong_chain reason=read-unidentified`
+/// would send whoever reads that line looking for a chain mismatch that never
+/// happened.
+fn reading_refused(nodes: &NodeManager) -> Option<(&'static str, NoteVm)> {
+    use pecu_chain::NodeStatus;
+
+    let active = nodes.active()?;
+
+    if let NodeStatus::Unidentified { name, chain_id } = &active.status {
+        return Some((
+            "unidentified_node",
+            NoteVm::with("read-unidentified", [name.clone(), chain_id.clone()]),
+        ));
+    }
+
+    let reported = active.network.as_ref()?;
+    let requested = nodes.requested()?;
+    (reported != requested).then(|| {
+        (
+            "wrong_chain",
+            NoteVm::with(
+                "read-wrong-chain",
+                [reported.to_string(), requested.to_string()],
+            ),
+        )
+    })
 }
 
 /// The name a currency is known by, or its i-address when it is not.
@@ -1420,13 +1481,10 @@ impl Core {
         // failed while a cached list sat on screen looking current.
         //
         // Zero is a claim about somebody's money. It is not one to make from a
-        // node that was never asked about this chain.
-        if let Some(wrong) = self.reading_the_wrong_chain() {
-            self.notice_warning(
-                "wrong_chain",
-                NoteVm::with("read-wrong-chain", [wrong, self.requested_name()]),
-                "",
-            );
+        // node that was never asked about this chain — nor from one that was
+        // asked and could not answer consistently. See `reading_refused`.
+        if let Some((code, refusal)) = reading_refused(&self.nodes) {
+            self.notice_warning(code, refusal, "");
             return;
         }
 
@@ -1464,23 +1522,6 @@ impl Core {
         if self.markets == Markets::Unasked {
             self.refresh_markets();
         }
-    }
-
-    /// The chain the active node reports, when it is not the one asked for.
-    ///
-    /// `None` while no node has answered yet: not knowing is not the same as
-    /// disagreeing, and refusing to read before the first probe would leave a
-    /// cold start blank for no reason.
-    fn reading_the_wrong_chain(&self) -> Option<String> {
-        let reported = self.nodes.active()?.network.as_ref()?;
-        let requested = self.nodes.requested()?;
-        (reported != requested).then(|| reported.to_string())
-    }
-
-    fn requested_name(&self) -> String {
-        self.nodes
-            .requested()
-            .map_or_else(|| "the requested chain".to_string(), ToString::to_string)
     }
 
     fn finish_work(&mut self, work: Work) {
@@ -7208,6 +7249,12 @@ fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
     match refused {
         SpendRefused::NoNode => NoteVm::plain("spend-no-node"),
         SpendRefused::NetworkUnknown => NoteVm::plain("spend-chain-unknown"),
+        // Both claims, for the same reason the read refusal carries them: there
+        // is no chain to switch to and nothing to wait for, so which two
+        // statements disagreed is the whole of what a person can act on.
+        SpendRefused::Unidentified { name, chain_id } => {
+            NoteVm::with("spend-unidentified", [name.clone(), chain_id.clone()])
+        }
         SpendRefused::NetworkMismatch {
             requested,
             effective,
@@ -8392,48 +8439,111 @@ mod tests {
     /// not, on the reasoning that a balance from elsewhere is harmless. It is
     /// not — these addresses do not exist over there, so the node answers
     /// honestly with nothing and the wallet renders that as your balance.
-    #[tokio::test]
-    async fn a_node_on_another_chain_is_not_read_from() {
-        use pecu_chain::NodeStatus;
-
-        let mut nodes = NodeManager::new(
-            vec![Node::builtin(0, "one", "https://example.invalid")],
-            Network::Testnet,
-        );
+    #[test]
+    fn a_node_on_another_chain_is_not_read_from() {
+        let mut nodes = nodes_for_a_testnet_wallet();
 
         // Nothing has answered yet: not knowing is not disagreeing, and a cold
         // start must not refuse to read.
         assert!(reading_refused(&nodes).is_none());
 
-        if let Some(node) = nodes.get_mut(0) {
-            node.status = NodeStatus::Online;
-            node.network = Some(Network::Testnet);
-        }
+        answered(&mut nodes, "VRSCTEST", testnet_id());
         assert!(
             reading_refused(&nodes).is_none(),
             "a node on the requested chain was refused",
         );
 
-        if let Some(node) = nodes.get_mut(0) {
-            node.network = Some(Network::Other("CHIPS".to_string()));
-        }
-        assert_eq!(reading_refused(&nodes).as_deref(), Some("CHIPS"));
+        answered(&mut nodes, "CHIPS", "iWhateverChipsCallsItself");
+        refuses(
+            &nodes,
+            "wrong_chain",
+            "read-wrong-chain",
+            &["CHIPS", "Testnet"],
+        );
 
         // Mainnet against a testnet wallet is the same refusal, and the one
         // that would matter most.
-        if let Some(node) = nodes.get_mut(0) {
-            node.network = Some(Network::Mainnet);
-        }
-        assert_eq!(reading_refused(&nodes).as_deref(), Some("Mainnet"));
+        answered(&mut nodes, "VRSC", mainnet_id());
+        refuses(
+            &nodes,
+            "wrong_chain",
+            "read-wrong-chain",
+            &["Mainnet", "Testnet"],
+        );
     }
 
-    /// The same decision `Core::reading_the_wrong_chain` makes, over a manager
-    /// a test can arrange — the core itself is only reachable through the
-    /// actor, and this is the rule rather than the plumbing.
-    fn reading_refused(nodes: &NodeManager) -> Option<String> {
-        let reported = nodes.active()?.network.as_ref()?;
-        let requested = nodes.requested()?;
-        (reported != requested).then(|| reported.to_string())
+    /// A node that answered and still left the wallet unable to say which chain
+    /// it is on is not read from either.
+    ///
+    /// This is what holds the ordering `reading_refused` argues for. The
+    /// wrong-chain question reads `node.network`, which is `None` here, and a
+    /// gate that asked it first would read that silence as a cold start and let
+    /// balances, history, UTXOs and quotes through unwarned.
+    #[test]
+    fn a_node_that_cannot_say_which_chain_it_is_on_is_not_read_from() {
+        let mut nodes = nodes_for_a_testnet_wallet();
+
+        // The shape that matters: mainnet's own id under testnet's name.
+        answered(&mut nodes, "VRSCTEST", mainnet_id());
+
+        assert_eq!(
+            nodes.active().and_then(|node| node.network.as_ref()),
+            None,
+            "the contradicted name must not have been believed",
+        );
+        refuses(
+            &nodes,
+            "unidentified_node",
+            "read-unidentified",
+            &["VRSCTEST", mainnet_id()],
+        );
+    }
+
+    fn nodes_for_a_testnet_wallet() -> NodeManager {
+        NodeManager::new(
+            vec![Node::builtin(0, "one", "https://example.invalid")],
+            Network::Testnet,
+        )
+    }
+
+    fn mainnet_id() -> &'static str {
+        Network::Mainnet.chain_id().expect("mainnet pins an id")
+    }
+
+    fn testnet_id() -> &'static str {
+        Network::Testnet.chain_id().expect("testnet pins an id")
+    }
+
+    /// What the active node answered, fed through `record_success` rather than
+    /// written into the node by hand.
+    ///
+    /// Assigning `network` directly would test a state the derivation cannot
+    /// produce and miss the one it can: the answer that leaves `network` unset
+    /// is exactly the case this rule is about.
+    fn answered(nodes: &mut NodeManager, name: &str, chain_id: &str) {
+        let requested = nodes.requested().cloned().expect("a requested chain");
+        let info = verus_sdk::network::ChainInfo {
+            name: name.to_string(),
+            chain_id: chain_id.to_string(),
+            blocks: 1_000,
+            longest_chain: 1_000,
+            version: "test".to_string(),
+        };
+        nodes.get_mut(0).expect("a node to answer").record_success(
+            &info,
+            std::time::Duration::from_millis(10),
+            &requested,
+        );
+    }
+
+    /// The refusal the screen would be handed: what it is filed under, the note
+    /// it renders, and the words in it.
+    #[track_caller]
+    fn refuses(nodes: &NodeManager, filed_as: &str, code: &str, args: &[&str]) {
+        let (filed, note) = reading_refused(nodes).expect("reading was allowed");
+        assert_eq!(filed, filed_as);
+        assert_eq!(note.code, code);
+        assert_eq!(note.args, args);
     }
 
     /// A continuation asks about the end of the chain it is on, not the start.

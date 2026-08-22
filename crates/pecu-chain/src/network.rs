@@ -5,14 +5,33 @@
 /// # This is derived from what the node says, never from the URL
 ///
 /// A URL containing "test" proves nothing: an endpoint can be renamed,
-/// misconfigured, or proxied. The only trustworthy statement about which chain
-/// you are talking to is `ChainInfo::name`, which the daemon reports about
-/// itself — so [`Network::from_chain_name`] is the only constructor that
-/// matters, and nothing in this crate parses a hostname.
+/// misconfigured, or proxied. So the chain is read from what the daemon reports
+/// about itself, through [`Network::from_chain_name`], and nothing in this
+/// crate parses a hostname.
 ///
 /// Getting this wrong is not cosmetic. A wallet that believes it is on testnet
 /// while pointed at mainnet would sign a real transaction believing it was
-/// worthless.
+/// worthless — the same key controls the same address on both chains, and
+/// Verus has no branch-id-based network separation, so a signature made "for
+/// testnet" is valid on mainnet as it stands.
+///
+/// # The name is cross-checked against the chain id, and what that buys
+///
+/// For the two chains this build pins an id for, the reported name alone is
+/// not accepted: `Node::record_success` requires `ChainInfo::chain_id` to be
+/// [`Network::chain_id`] as well, and refuses to believe a node whose two
+/// statements about its own identity disagree.
+///
+/// Note what that pair is worth. It defeats a middlebox that relabels the name
+/// on its way past and leaves the id alone, and a hand-rolled RPC shim that
+/// answers with one chain's name beside another's id. It does **not** make a
+/// hostile endpoint safe, and nothing written here could: both halves arrive in
+/// the same `getinfo` reply, so a node willing to rewrite one is willing to
+/// rewrite both. A wallet cannot establish which chain it is on from a single
+/// untrusted source — a source cannot corroborate itself, and the node is the
+/// only thing this crate has to ask. Raising that bar needs a second,
+/// independently configured source, which is the same admission
+/// [`crate::light`] makes about lightwalletd.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Network {
     Mainnet,
@@ -84,6 +103,44 @@ impl Network {
                     cleaned
                 }
             }
+        }
+    }
+
+    /// The chain's own currency id, for the two chains this build pins one for.
+    ///
+    /// A root chain's currency id *is* the id of its name —
+    /// `hash160(sha256d(lowercase(name)))`, the derivation
+    /// [`verus_sdk::vdxf::root_namespace`] does offline and the one
+    /// `verus_flows::balances::native_currency` already relies on. These are
+    /// pinned as literals rather than derived at each call because a chain id
+    /// is a constant a reviewer should be able to read straight off the page;
+    /// `the_pinned_chain_ids_are_the_ones_the_derivation_produces` holds the
+    /// literals to that derivation, so they are checkable facts rather than two
+    /// magic strings nobody can audit.
+    ///
+    /// `None` for [`Network::Other`], and deriving one there would be wrong
+    /// rather than merely missing: a PBaaS chain is not a root chain. `vARRR`
+    /// is registered under VRSC, so its id is `identity_id("vARRR", VRSC)` and
+    /// not `root_namespace("vARRR")` — deriving it here would reject every
+    /// PBaaS node this build ships an endpoint for.
+    ///
+    /// # Two of the five shipped chains, and not the awkward three
+    ///
+    /// Say the coverage out loud, because it is the other half of what this
+    /// check is worth. [`Network::shipped`] offers five chains and this pins
+    /// ids for two of them. VARRR, CHIPS and VDEX carry real coins, are
+    /// [`Network::Other`] so [`Network::is_mainnet`] is false for them and no
+    /// typed opt-in stands in front of a spend, and now they are also the three
+    /// whose identity is never cross-checked at all. That is the worst of the
+    /// three positions and it is where this change leaves them, because the
+    /// alternative was pinning ids nobody in this tree has. Pinning them is
+    /// possible and is worth doing; `docs/LATER.md` §1b says why they cannot be
+    /// derived from a name here and where the real values have to come from.
+    pub fn chain_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Mainnet => Some("i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV"),
+            Self::Testnet => Some("iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq"),
+            Self::Other(_) => None,
         }
     }
 
@@ -312,6 +369,8 @@ impl core::fmt::Display for Network {
 
 #[cfg(test)]
 mod tests {
+    use verus_sdk::verus_keys::{Address, AddressKind};
+
     use super::*;
 
     /// Only testnet ships a lightwalletd, and mainnet must not pretend to.
@@ -353,6 +412,41 @@ mod tests {
                     network.chain_name(),
                 );
             }
+        }
+    }
+
+    /// The two pinned ids, held to the derivation they came from.
+    ///
+    /// A root chain's currency id *is* the id of its own name, so these are not
+    /// arbitrary strings and nobody has to take them on trust: the same
+    /// `root_namespace` the SDK derives a chain's native currency with produces
+    /// them here, offline, at test time. Without this the pins would be two
+    /// i-addresses copied from somewhere, and a single wrong character in one
+    /// would quietly turn the cross-check for that chain into a check that
+    /// rejects every honest node — a failure that looks like an outage.
+    ///
+    /// The comparison is between whole strings, not between the 20 bytes
+    /// underneath them, because the string is what production compares: the pin
+    /// is held against `ChainInfo::chain_id` verbatim. Parsing the pin and
+    /// checking only its hash would accept a pin written with the wrong version
+    /// byte — the same 20 bytes spelled `R…` instead of `i…` is a valid address
+    /// and a chain id no daemon ever sends — which is the outage this test is
+    /// here to make impossible.
+    ///
+    /// [`Network::Other`] is left out because it pins nothing, which is its own
+    /// deliberate decision and is tested by
+    /// `a_pbaas_node_is_still_believed_because_no_id_is_pinned_for_it`.
+    #[test]
+    fn the_pinned_chain_ids_are_the_ones_the_derivation_produces() {
+        for chain in [Network::Mainnet, Network::Testnet] {
+            let derived = verus_sdk::vdxf::root_namespace(chain.chain_name())
+                .expect("a chain name is a root name");
+
+            assert_eq!(
+                Address::new(AddressKind::Identity, derived.to_bytes()).to_string(),
+                chain.chain_id().expect("both named chains pin an id"),
+                "{chain}",
+            );
         }
     }
 
