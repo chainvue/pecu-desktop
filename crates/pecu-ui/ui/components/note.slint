@@ -545,7 +545,8 @@ export component NoticeTitle inherits Text {
         : root.note.code == "markets-unreadable" ? @tr("Could not read what things are worth")
 
         // ── Spending ────────────────────────────────────────────────────
-        : root.note.code == "mainnet-confirm" ? @tr("Type the word mainnet to turn this on")
+        : root.note.code == "spend-confirm-word"
+            ? @tr("Type {0} to turn this on", root.note.args[0])
         : root.note.code == "spend-no-node" ? @tr("No node is selected")
         : root.note.code == "spend-chain-unknown"
             ? @tr("The node has not said which chain it is on yet")
@@ -554,7 +555,8 @@ export component NoticeTitle inherits Text {
         : root.note.code == "spend-wrong-chain"
             ? @tr("This node is on {0}, but the wallet is set to {1}",
                   root.note.args[0], root.note.args[1])
-        : root.note.code == "spend-mainnet-off" ? @tr("Spending on mainnet is turned off")
+        : root.note.code == "spend-not-enabled"
+            ? @tr("Spending on {0} is turned off", root.note.args[0])
         : root.note.code == "spend-node-syncing"
             ? @tr("The node is still catching up — {0} of {1} blocks",
                   root.note.args[0], root.note.args[1])
@@ -683,8 +685,13 @@ export component NoticeBody inherits Text {
             ? @tr("It calls itself {0} and reports chain id {1}, and those two do not go together. Pecu is not reading balances from it: a node that contradicts itself about which chain it is on could be answering about any of them. Choose another node.", root.note.args[0], root.note.args[1])
         : root.note.code == "chain-switch-busy"
             ? @tr("Wait for it to finish before changing chains.")
-        : root.note.code == "mainnet-confirm"
+        : root.note.code == "spend-confirm-word"
             ? @tr("Spending real coins is off by default, and turning it on is deliberately a little awkward.")
+        : root.note.code == "spend-not-enabled"
+            // The General tab, which is where the switch is — Settings also has
+            // a Network tab, and sending the highest-consequence refusal in the
+            // wallet to the wrong one of the two is worse than saying nothing.
+            ? @tr("Turn it on in Settings, under General. It is off again every time Pecu starts.")
         : root.note.code == "spend-wrong-chain"
             ? @tr("Pecu will not sign against a chain you did not choose.")
         : root.note.code == "spend-unidentified"

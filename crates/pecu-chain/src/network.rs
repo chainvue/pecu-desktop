@@ -43,13 +43,53 @@ pub enum Network {
     Other(String),
 }
 
+/// The three PBaaS chains this build ships, spelled the way their own daemons
+/// spell them.
+///
+/// Read off live `getinfo` replies rather than chosen: `vapi.piratechain.com`
+/// answers `"name":"vARRR"`, `api.vdex.to` answers `"name":"vDEX"`, and
+/// `api.chips.cash` answers `"name":"CHIPS"`. One list, so that the spelling a
+/// button offers and the spelling a node reports cannot drift apart —
+/// [`Network::Other`] compares by exact string, and two spellings of one chain
+/// are two chains.
+const SHIPPED_PBAAS: [&str; 3] = ["vARRR", "CHIPS", "vDEX"];
+
 impl Network {
     /// Read a network from `ChainInfo::name`.
+    ///
+    /// # The shipped PBaaS names are canonicalised here, and nowhere else
+    ///
+    /// [`Network::Other`] compares by exact string, so a wallet set to a chain
+    /// spelled one way and a node reporting it spelled another are, to every
+    /// comparison in this crate, on different chains: `Node::record_success`
+    /// would mark such a node `WrongNetwork`, it would never reach `Online`,
+    /// and the chain would read no balance and refuse every spend — while
+    /// looking, on screen, like an endpoint that is simply serving the wrong
+    /// thing. The three chains this build ships a button and an endpoint for
+    /// are exactly the three where that would be a shipped fault rather than a
+    /// user's typo, so their spelling is settled at the boundary and the rest
+    /// of this file has one answer to match against.
+    ///
+    /// Case-insensitively, because a PBaaS chain's name comes from a currency
+    /// definition rather than from a constant in the daemon, and Verus compares
+    /// currency and identity names lowercased anyway — so a node that spells it
+    /// differently from `getinfo` is still talking about the same chain.
+    ///
+    /// `VRSC` and `VRSCTEST` are matched exactly, and deliberately: those two
+    /// are compile-time constants of the daemon, and anything else — `vrsc`
+    /// from a hand-rolled shim, say — is a chain this build cannot vouch for
+    /// and is carried as [`Network::Other`], which is the guarded answer.
     pub fn from_chain_name(name: &str) -> Self {
         match name {
             "VRSC" => Self::Mainnet,
             "VRSCTEST" => Self::Testnet,
-            other => Self::Other(other.to_string()),
+            other => Self::Other(
+                SHIPPED_PBAAS
+                    .into_iter()
+                    .find(|shipped| other.eq_ignore_ascii_case(shipped))
+                    .unwrap_or(other)
+                    .to_string(),
+            ),
         }
     }
 
@@ -128,14 +168,17 @@ impl Network {
     ///
     /// Say the coverage out loud, because it is the other half of what this
     /// check is worth. [`Network::shipped`] offers five chains and this pins
-    /// ids for two of them. VARRR, CHIPS and VDEX carry real coins, are
-    /// [`Network::Other`] so [`Network::is_mainnet`] is false for them and no
-    /// typed opt-in stands in front of a spend, and now they are also the three
-    /// whose identity is never cross-checked at all. That is the worst of the
-    /// three positions and it is where this change leaves them, because the
+    /// ids for two of them. vARRR, CHIPS and vDEX carry real coins and are the
+    /// three whose identity is never cross-checked at all, because the
     /// alternative was pinning ids nobody in this tree has. Pinning them is
     /// possible and is worth doing; `docs/LATER.md` §1b says why they cannot be
     /// derived from a name here and where the real values have to come from.
+    ///
+    /// What that gap is not is a gap in the spending guard.
+    /// [`Network::may_be_real_money`] is true for all three, so the typed
+    /// opt-in stands in front of a spend on each of them. What is missing here
+    /// is corroboration of what a node says it is, not the confirmation the
+    /// person gives.
     pub fn chain_id(&self) -> Option<&'static str> {
         match self {
             Self::Mainnet => Some("i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV"),
@@ -144,9 +187,47 @@ impl Network {
         }
     }
 
-    /// Whether this is the chain where mistakes cost real money.
-    pub fn is_mainnet(&self) -> bool {
-        matches!(self, Self::Mainnet)
+    /// Whether a spend here could cost somebody real money.
+    ///
+    /// True for everything except the one chain this build can positively say
+    /// is worthless. That is the wrong way round from how it reads and it is
+    /// deliberate: the question a spending guard has to answer is not "is this
+    /// VRSC" but "could this signature move value", and only one of those two
+    /// has a safe default. VRSCTEST coins come out of a faucet. Everything else
+    /// is either known to carry real coins — vARRR, CHIPS and vDEX do, and this
+    /// build ships an endpoint pointing at each of them, which is an invitation
+    /// — or is a chain nobody here can vouch for, and those two deserve the
+    /// same answer.
+    ///
+    /// # Why the rule is not "is this VRSC"
+    ///
+    /// "This chain is VRSC" is a true statement and the wrong question for a
+    /// wallet: it reads "not VRSC" as "not real", which leaves the three PBaaS
+    /// chains behind no confirmation at all while VRSC sits behind one. Nothing
+    /// about vARRR makes a mistake there cheaper.
+    ///
+    /// The alternative rule considered was "gate every [`Network::Other`] chain
+    /// this build ships an endpoint for, plus VRSC" — which keys a money guard
+    /// on a packaging decision. Tidying an endpoint out of
+    /// [`Network::builtin_nodes`] would then silently open the gate on that
+    /// chain, and a hand-added endpoint for a chain this build has never heard
+    /// of — the case where corroboration is weakest — would be the one case
+    /// left ungated. This rule needs no re-audit when the shipped list changes.
+    ///
+    /// Matched arm by arm rather than written as `!= Testnet`, so that a second
+    /// valueless chain — a private regtest, if one is ever shipped — is a line
+    /// added here by somebody who thought about it, and a new variant is a
+    /// compile error rather than a silent answer.
+    ///
+    /// The cost of being wrong in this direction is a developer on their own
+    /// regtest chain typing one word, once per session, on a chain that turned
+    /// out not to matter. The cost of being wrong in the other is somebody's
+    /// money.
+    pub fn may_be_real_money(&self) -> bool {
+        match self {
+            Self::Testnet => false,
+            Self::Mainnet | Self::Other(_) => true,
+        }
     }
 
     /// How to write it in a UI.
@@ -206,31 +287,37 @@ impl Network {
     /// The three after mainnet are PBaaS chains, each its own chain with its
     /// own coins, its own history and its own node — not endpoints for VRSC.
     /// They are `Other`, which is the variant that has always carried a chain
-    /// this enum does not name, and every guard that matters keys on
-    /// [`Network::is_mainnet`] rather than on the variant.
+    /// this enum does not name. The spending guard keys on neither the variant
+    /// nor on the chain being VRSC: it asks [`Network::may_be_real_money`],
+    /// which is true for all three of these, because all three carry real coins
+    /// and this build puts an endpoint for each of them on the node screen.
+    ///
+    /// Their names come from the private `SHIPPED_PBAAS` list rather than being
+    /// written out again here, so a button can never offer a spelling
+    /// [`Network::from_chain_name`] would not produce from the node's own
+    /// answer — which would be a chain that is permanently `WrongNetwork`.
     pub fn shipped() -> Vec<Self> {
-        vec![
-            Self::Testnet,
-            Self::Mainnet,
-            Self::Other("VARRR".to_string()),
-            Self::Other("CHIPS".to_string()),
-            Self::Other("VDEX".to_string()),
-        ]
+        let mut chains = vec![Self::Testnet, Self::Mainnet];
+        chains.extend(SHIPPED_PBAAS.map(|name| Self::Other(name.to_string())));
+        chains
     }
 
     /// What this chain is called on a button.
     ///
     /// [`Network::label`] answers with the chain's own name — `VRSCTEST`,
-    /// `VARRR` — which is what a node reports and what has to be compared
+    /// `vARRR` — which is what a node reports and what has to be compared
     /// against. This is what a person recognises.
     pub fn title(&self) -> &str {
         match self {
             Self::Mainnet => "Verus",
             Self::Testnet => "Testnet",
+            // One arm per chain, in the spelling `from_chain_name`
+            // canonicalises to. A second spelling here would be a second answer
+            // to a question that has one.
             Self::Other(name) => match name.as_str() {
-                "VARRR" | "vARRR" => "Pirate Chain",
+                "vARRR" => "Pirate Chain",
                 "CHIPS" => "CHIPS",
-                "VDEX" | "vDEX" => "vDEX",
+                "vDEX" => "vDEX",
                 other => other,
             },
         }
@@ -250,9 +337,9 @@ impl Network {
             Self::Mainnet => &[("VRSC (public)", "https://api.verus.services")],
             Self::Testnet => &[("VRSCTEST (public)", "https://api.verustest.net")],
             Self::Other(name) => match name.as_str() {
-                "VARRR" | "vARRR" => &[("vARRR (public)", "https://vapi.piratechain.com/")],
+                "vARRR" => &[("vARRR (public)", "https://vapi.piratechain.com/")],
                 "CHIPS" => &[("CHIPS (public)", "https://api.chips.cash/")],
-                "VDEX" | "vDEX" => &[("vDEX (public)", "https://api.vdex.to/")],
+                "vDEX" => &[("vDEX (public)", "https://api.vdex.to/")],
                 _ => &[],
             },
         }
@@ -352,9 +439,9 @@ impl Network {
             // wallet, not about the chain, and is why it is reported as its own
             // state rather than as silence.
             Self::Other(name) => match name.as_str() {
-                "VARRR" | "vARRR" => oracle("vARRR@", "i8XmQTLRRvffV9XaNV1asxXduQMSypKksT"),
+                "vARRR" => oracle("vARRR@", "i8XmQTLRRvffV9XaNV1asxXduQMSypKksT"),
                 "CHIPS" => oracle("CHIPS@", "iCgYC8eJm7raNJ2o6zYmfe8a2zeUF4e7tZ"),
-                "VDEX" | "vDEX" => oracle("vDEX@", "iCNqwtiqG1ZgfrJcsPK92N8P9wVEnQVVus"),
+                "vDEX" => oracle("vDEX@", "iCNqwtiqG1ZgfrJcsPK92N8P9wVEnQVVus"),
                 _ => None,
             },
         }
@@ -396,7 +483,7 @@ mod tests {
             Some("https://lightwalletd.verustest.net:8125"),
         );
         assert_eq!(Network::Mainnet.light_server(), None);
-        assert_eq!(Network::Other("VARRR".into()).light_server(), None);
+        assert_eq!(Network::Other("vARRR".into()).light_server(), None);
     }
 
     /// Plaintext would leak which blocks are being fetched, and the SDK's
@@ -450,12 +537,81 @@ mod tests {
         }
     }
 
+    /// The two named chains map to variants of their own, and so can never
+    /// arrive as an unknown one.
+    ///
+    /// Worth stating as well as the equality, because the spending rule turns
+    /// on the variant and `Other` is reachable from any string: a node calling
+    /// itself `VRSCTEST` is judged as testnet, which is the whole reason the
+    /// name/chain-id cross-check stands in front of this.
     #[test]
     fn the_two_known_chains_are_recognised() {
         assert_eq!(Network::from_chain_name("VRSC"), Network::Mainnet);
         assert_eq!(Network::from_chain_name("VRSCTEST"), Network::Testnet);
-        assert!(Network::from_chain_name("VRSC").is_mainnet());
-        assert!(!Network::from_chain_name("VRSCTEST").is_mainnet());
+        assert!(!matches!(
+            Network::from_chain_name("VRSC"),
+            Network::Other(_)
+        ));
+        assert!(!matches!(
+            Network::from_chain_name("VRSCTEST"),
+            Network::Other(_)
+        ));
+    }
+
+    /// Every name a button can send survives the round trip through the
+    /// function that reads a node's answer.
+    ///
+    /// The invariant, rather than the specific spelling: the two lists are one
+    /// list today, and this is what fails if they are ever separated again.
+    /// `Other` compares by exact string, so a button offering one spelling
+    /// while the parser produces another is a chain that is `WrongNetwork`
+    /// forever — never `Online`, so no balance and no spend, on a chain this
+    /// build ships an endpoint for. The spelling itself is pinned by the
+    /// sibling below, against what the daemons actually answer.
+    #[test]
+    fn every_shipped_chain_survives_the_round_trip_through_its_own_name() {
+        for chain in Network::shipped() {
+            assert_eq!(
+                Network::from_chain_name(chain.chain_name()),
+                chain,
+                "{chain} is offered under a name that parses back as something else",
+            );
+        }
+    }
+
+    /// The daemons spell the PBaaS chains with a lowercase leading `v`, and
+    /// this build has to accept whatever case one of them uses.
+    ///
+    /// The three spellings on the left are live `getinfo` answers, captured
+    /// 2026-08-22. The rest are the same names shouted and muttered: the name
+    /// is a currency definition rather than a constant in the daemon, and Verus
+    /// compares such names lowercased, so a node spelling it differently is
+    /// still talking about the same chain and must not be refused as another
+    /// one.
+    #[test]
+    fn a_shipped_pbaas_chain_is_recognised_however_it_spells_itself() {
+        for (reported, canonical) in [
+            ("vARRR", "vARRR"),
+            ("VARRR", "vARRR"),
+            ("varrr", "vARRR"),
+            ("CHIPS", "CHIPS"),
+            ("chips", "CHIPS"),
+            ("vDEX", "vDEX"),
+            ("VDEX", "vDEX"),
+        ] {
+            assert_eq!(
+                Network::from_chain_name(reported),
+                Network::Other(canonical.to_string()),
+                "a node reporting `{reported}` was read as a different chain",
+            );
+        }
+
+        // Only the shipped three. A chain nobody here can vouch for is carried
+        // exactly as it spelled itself — there is no canonical form to know.
+        assert_eq!(
+            Network::from_chain_name("SomePbaas"),
+            Network::Other("SomePbaas".to_string()),
+        );
     }
 
     /// Every shipped chain has an endpoint, an oracle and a name of its own.
@@ -484,16 +640,24 @@ mod tests {
         }
     }
 
-    /// Only Verus is mainnet. The PBaaS chains carry real coins and are not
-    /// behind the mainnet spending guard, which is a decision worth seeing in a
-    /// test rather than discovering.
+    /// The rule the spending guard applies, in one place a reader can check it.
+    ///
+    /// Testnet is the only chain this build can positively say is worthless, so
+    /// it is the only one a spend passes through untouched. vARRR, CHIPS and
+    /// vDEX carry real coins and this build ships an endpoint for each; a chain
+    /// nobody here has heard of gets the same answer, because "we cannot vouch
+    /// for it" is not the same as "it is worthless". The argument for the rule
+    /// lives on [`Network::may_be_real_money`], where the decision is made.
     #[test]
-    fn only_verus_itself_is_mainnet() {
-        for chain in Network::shipped() {
+    fn only_testnet_is_free_of_the_spending_guard() {
+        let mut chains = Network::shipped();
+        chains.push(Network::Other("SOMEPBAAS".to_string()));
+
+        for chain in chains {
             assert_eq!(
-                chain.is_mainnet(),
-                chain == Network::Mainnet,
-                "{chain} disagrees about being mainnet",
+                chain.may_be_real_money(),
+                chain != Network::Testnet,
+                "{chain} disagrees about whether a spend on it could cost money",
             );
         }
     }
@@ -514,17 +678,9 @@ mod tests {
     /// else's record parsed as an upgrade descriptor.
     #[test]
     fn no_two_chains_share_an_oracle_key() {
-        let chains = [
-            Network::Mainnet,
-            Network::Testnet,
-            Network::Other("VARRR".to_string()),
-            Network::Other("CHIPS".to_string()),
-            Network::Other("VDEX".to_string()),
-        ];
-
         let mut keys = std::collections::BTreeSet::new();
         let mut identities = std::collections::BTreeSet::new();
-        for chain in &chains {
+        for chain in &Network::shipped() {
             let oracle = chain
                 .oracle()
                 .unwrap_or_else(|| panic!("{chain} has no oracle"));
@@ -547,13 +703,15 @@ mod tests {
         assert_eq!(Network::Other("SOMEPBAAS".to_string()).oracle(), None);
     }
 
-    /// A chain this build does not know is carried, not rejected — and is not
-    /// mainnet, so it cannot inherit mainnet's guard by accident.
+    /// A chain this build does not know is carried, not rejected — and it
+    /// inherits the spending guard on purpose. Being unable to vouch for a
+    /// chain is the strongest reason to ask for the confirmation, not a reason
+    /// to skip it.
     #[test]
-    fn an_unknown_chain_is_carried_and_is_not_mainnet() {
+    fn an_unknown_chain_is_carried_and_is_still_guarded() {
         let other = Network::from_chain_name("SOMEPBAAS");
         assert_eq!(other, Network::Other("SOMEPBAAS".to_string()));
-        assert!(!other.is_mainnet());
+        assert!(other.may_be_real_money());
         assert_eq!(other.label(), "SOMEPBAAS");
     }
 

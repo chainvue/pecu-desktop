@@ -523,14 +523,21 @@ export global NetworkState {
     // `"VRSC"` and `"VRSCTEST"` as literals in a ternary, which could only ever
     // have described two.
     in property <[ChainChoice]> chains: [];
+    // For reading: "Testnet", "Mainnet", "Pirate Chain"'s own label. Never
+    // compared against anything and never sent back.
     in property <string> requested: "Testnet";
-    // The same answer as `requested`, as the index of the chain chooser.
+    // The requested chain's own name — "VRSCTEST", "VRSC", "vARRR".
     //
-    // Two-way bound, so the control follows the wallet rather than the other
-    // way round: a switch the core refuses — there is a payment in flight —
-    // puts the selection back where it was, instead of leaving a chooser
-    // pointing at a chain nobody is on.
-    in-out property <int> chain-index: 0;
+    // What the core compares against, so it is what the chain buttons match on
+    // and what the spending confirmation asks to be typed. Kept apart from the
+    // label above because the two differ on the chains that have a display
+    // name: sending the label back would ask the core to switch to a chain
+    // called "Mainnet", which no node answers to.
+    in property <string> requested-name: "VRSCTEST";
+    // The requested chain as a person recognises it — "Verus", "Pirate Chain".
+    // Used in the sentence about spending real coins; the name above is what
+    // that sentence asks them to type.
+    in property <string> chain-title: "Testnet";
     // What the active node actually reported. Only this decides anything —
     // never the URL.
     in property <string> effective: "";
@@ -539,7 +546,13 @@ export global NetworkState {
     in property <string> latency: "";
     in property <string> endpoint: "not configured";
     in property <bool> mock-mode: false;
-    in property <bool> allow-mainnet-spend: false;
+    // Whether spending on this chain needs the typed confirmation at all.
+    // Decided in the core by `Network::may_be_real_money` — false only on
+    // testnet, where the control is not drawn because it has nothing true to
+    // say. Not derived here from the chain's name: that would put a money
+    // decision in the layer easiest to bypass.
+    in property <bool> spend-needs-opt-in: false;
+    in property <bool> allow-spending: false;
     // Where shielded notes are read from, or empty. A different server from the
     // RPC node, speaking a different protocol — see `pecu_chain::light`.
     in property <string> light-server: "";
@@ -945,7 +958,9 @@ export global Actions {
     // secret-bearing call — counted in the block above.
     callback change-passphrase(string, string);
     callback set-auto-lock(int);
-    callback set-mainnet-spend(bool, string);
+    // On carries the typed word, which the CORE checks. Off carries nothing:
+    // refusing to spend is never the dangerous direction.
+    callback set-spending(bool, string);
 
     // Keys. None of these carries a secret — a label is a name, and adding a
     // key needs the wallet open rather than the passphrase again.

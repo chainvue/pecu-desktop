@@ -7,7 +7,7 @@ use crate::models::NoteVm;
 /// How loudly to say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Severity {
-    /// A fact, not a problem. "Spending on mainnet is turned off."
+    /// A fact, not a problem. "Now on Verus. The wallet is locked."
     Info,
     /// Something did not work and probably will later. A node timed out.
     Warning,

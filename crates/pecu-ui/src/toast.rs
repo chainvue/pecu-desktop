@@ -6,7 +6,7 @@
 //! screen of its own fell through to one rendered only on the unlock form. So
 //! while the wallet was open, these happened in complete silence:
 //!
-//! * a spend refused because mainnet spending is off, or the node is on another
+//! * a spend refused because spending is off, or the node is on another
 //!   chain — you press Send and nothing at all occurs;
 //! * a payment that could not be written to the pending ledger, and was
 //!   therefore not sent;

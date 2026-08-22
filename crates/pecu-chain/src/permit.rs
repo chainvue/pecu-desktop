@@ -74,8 +74,12 @@ pub enum SpendRefused {
         effective: Network,
     },
 
-    #[error("spending on mainnet is turned off")]
-    MainnetNotEnabled,
+    /// Carries the chain, because this is the half that reaches the logs and a
+    /// refusal reading "spending on mainnet is turned off" while a vARRR spend
+    /// is being refused would be a lie. It is also the only thing
+    /// `pecu_core::refusal_note` has to name the chain with.
+    #[error("spending on {network} is turned off")]
+    SpendingNotEnabled { network: Network },
 
     #[error("the node is still catching up ({blocks} of {longest} blocks)")]
     Syncing { blocks: u32, longest: u32 },
@@ -91,21 +95,28 @@ pub enum SpendRefused {
 /// 1. **A believable identity.** A node whose reported name and reported chain
 ///    id do not go together has said nothing this gate can use — see
 ///    [`crate::network::Network`] for what that pair is and is not worth.
-/// 2. **The mainnet opt-in.** Off by default. Enabling it is a persisted
-///    setting that requires typing the word `mainnet`, and that check happens
-///    in the core rather than in the UI — a confirmation the UI could skip
-///    would be decoration.
-/// 3. **Network agreement.** The chain the user chose must be the chain the
-///    node reports. A testnet-configured wallet pointed at a mainnet node is
-///    refused rather than allowed to sign something real.
-/// 4. **Node readiness.** Not syncing, not degraded. This one is easy to
+/// 2. **Node readiness.** Not syncing, not degraded. This one is easy to
 ///    dismiss as pedantry and is not: `verus_flows::spendable` decides coin
 ///    maturity against the tip, so a stale tip builds a transaction the network
 ///    rejects — after the work is done.
+/// 3. **Network agreement.** The chain the user chose must be the chain the
+///    node reports. A testnet-configured wallet pointed at a mainnet node is
+///    refused rather than allowed to sign something real.
+/// 4. **The spending opt-in.** Off by default on every chain except testnet —
+///    see [`Network::may_be_real_money`] for why the exception is that narrow
+///    and not "everything but VRSC". Enabling it requires typing the chain's
+///    own name, and that check happens in the core rather than in the UI, since
+///    a confirmation the UI could skip would be decoration. It is **not**
+///    persisted: it is a field on `NodeManager`, so it is off again at the next
+///    start and off again after a chain switch, which rebuilds the manager.
+///
+/// Listed in the order `evaluate` asks them, which is also the order of most
+/// specific first: a person on the wrong chain is better told that than told to
+/// arm spending on a chain they did not mean to be on.
 pub(crate) fn evaluate(
     active: Option<&Node>,
     requested: &Network,
-    allow_mainnet_spend: bool,
+    allow_spending: bool,
 ) -> Result<SpendPermit, SpendRefused> {
     let node = active.ok_or(SpendRefused::NoNode)?;
 
@@ -147,8 +158,12 @@ pub(crate) fn evaluate(
         });
     }
 
-    if effective.is_mainnet() && !allow_mainnet_spend {
-        return Err(SpendRefused::MainnetNotEnabled);
+    // Keyed on what the NODE reports, never on what the user asked for:
+    // `requested` is the weaker of the two claims. The mismatch check above
+    // makes them equal in the success path, so this reads as a distinction
+    // without a difference until somebody removes that check.
+    if effective.may_be_real_money() && !allow_spending {
+        return Err(SpendRefused::SpendingNotEnabled { network: effective });
     }
 
     Ok(SpendPermit::issue(
@@ -177,12 +192,50 @@ mod tests {
 
     /// The highest-value test in the repository: a wallet that has not been
     /// told it may spend real money must not spend real money.
+    ///
+    /// It needs the two siblings below to mean what it says: on its own this
+    /// pins the claim for VRSC, and the sentence above is about every chain
+    /// where a signature moves value.
     #[test]
     fn mainnet_is_refused_without_the_opt_in() {
         let mainnet = node(Network::Mainnet, NodeStatus::Online);
         assert_eq!(
             evaluate(Some(&mainnet), &Network::Mainnet, false).unwrap_err(),
-            SpendRefused::MainnetNotEnabled
+            SpendRefused::SpendingNotEnabled {
+                network: Network::Mainnet
+            }
+        );
+    }
+
+    /// The refusal this whole change exists for.
+    ///
+    /// vARRR carries real coins and this build ships an endpoint for it, so it
+    /// is the easiest real-money spend in the wallet to reach: it is
+    /// [`Network::Other`], the variant a guard written around "is this VRSC"
+    /// answers `false` for.
+    #[test]
+    fn varrr_is_refused_without_the_opt_in() {
+        let varrr = Network::from_chain_name("vARRR");
+        let node = node(varrr.clone(), NodeStatus::Online);
+        assert_eq!(
+            evaluate(Some(&node), &varrr, false).unwrap_err(),
+            SpendRefused::SpendingNotEnabled {
+                network: varrr.clone()
+            }
+        );
+    }
+
+    /// A chain nobody here can vouch for is the case where the confirmation is
+    /// worth the most, not the least.
+    #[test]
+    fn an_unknown_chain_is_refused_without_the_opt_in() {
+        let unknown = Network::Other("SOMEPBAAS".to_string());
+        let node = node(unknown.clone(), NodeStatus::Online);
+        assert_eq!(
+            evaluate(Some(&node), &unknown, false).unwrap_err(),
+            SpendRefused::SpendingNotEnabled {
+                network: unknown.clone()
+            }
         );
     }
 
@@ -190,11 +243,14 @@ mod tests {
     fn mainnet_is_allowed_once_the_opt_in_is_set() {
         let mainnet = node(Network::Mainnet, NodeStatus::Online);
         let permit = evaluate(Some(&mainnet), &Network::Mainnet, true).expect("permit");
-        assert!(permit.network().is_mainnet());
+        assert_eq!(permit.network(), &Network::Mainnet);
         assert_eq!(permit.tip(), 1_000);
     }
 
-    /// Testnet never needs the opt-in — the guard exists for real money.
+    /// Testnet never needs the opt-in — the guard exists for real money, and
+    /// testnet is now the only chain that is free of it. That used to be an
+    /// aside; it is the definition of the rule. See
+    /// [`Network::may_be_real_money`].
     #[test]
     fn testnet_needs_no_opt_in() {
         let testnet = node(Network::Testnet, NodeStatus::Online);
@@ -202,7 +258,7 @@ mod tests {
     }
 
     /// A testnet-configured wallet pointed at a mainnet node. Refused before
-    /// the mainnet opt-in is even consulted, because the mismatch is the more
+    /// the spending opt-in is even consulted, because the mismatch is the more
     /// specific problem and the more useful message.
     #[test]
     fn a_network_mismatch_is_refused_even_with_the_opt_in_set() {
@@ -254,7 +310,7 @@ mod tests {
     /// the real derivation instead of a `Node` literal.
     ///
     /// A node serving mainnet while calling itself VRSCTEST never reaches
-    /// [`SpendRefused::MainnetNotEnabled`], because that guard keys on the
+    /// [`SpendRefused::SpendingNotEnabled`], because that guard keys on the
     /// chain the node said it was on. Whatever the wallet then signed would be
     /// consensus-valid on mainnet, so the money would be real and gone. The
     /// name/chain-id cross-check in `record_success` stops such a node before

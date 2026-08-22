@@ -728,13 +728,45 @@ pub fn addresses(ui: &AppWindow) {
         ]))));
 }
 
-/// The General tab: theme, mainnet spending, and where the files are.
+/// The General tab: theme, auto-lock, and where the files are.
 ///
-/// Its own image because it holds the mainnet switch — the one control in
-/// Settings that changes what this wallet is allowed to do with real money.
+/// Photographed on testnet, like every other settings shot, and on testnet the
+/// spending block is not drawn — a spend there cannot cost anything, so there
+/// is no true sentence for it to say. The one control in Settings that changes
+/// what this wallet may do with real money therefore has its own case:
+/// `spending_arm`, below.
 pub fn general_settings(ui: &AppWindow) {
     settings(ui);
     ui.set_settings_tab(3);
+}
+
+/// The same tab on a chain where a spend costs real money.
+///
+/// Its own case because the general tab is photographed on testnet, and on
+/// testnet the spending block is not drawn at all — there is no true sentence
+/// for it to say. That left the highest-consequence control in the wallet with
+/// no picture of it anywhere. Verus rather than vARRR: the two words in the
+/// block differ on either, and "Verus"/`VRSC` is the pair most people will see.
+pub fn spending_arm(ui: &AppWindow) {
+    general_settings(ui);
+
+    let net = ui.global::<NetworkState>();
+    net.set_requested("Mainnet".into());
+    net.set_requested_name("VRSC".into());
+    net.set_chain_title("Verus".into());
+    net.set_effective("Mainnet".into());
+    net.set_endpoint("https://api.verus.services".into());
+    net.set_node_state("online".into());
+    net.set_spend_needs_opt_in(true);
+
+    // The About block sits directly below the spending one and names both
+    // paths, and a picture of a mainnet wallet reading `…/testnet/vault.json`
+    // is a picture of a state the application cannot be in.
+    ui.global::<WalletState>().set_vault_path(
+        "~/Library/Application Support/com.pecu.wallet/mainnet/vault.json".into(),
+    );
+    ui.global::<AppInfo>()
+        .set_log_path("~/Library/Application Support/com.pecu.wallet/mainnet/logs".into());
 }
 
 /// The keys section with a rename in progress, which is where the form and the
@@ -868,7 +900,9 @@ pub fn unconfirmed(ui: &AppWindow) {
         }]))));
 }
 
-/// Settings, with the mainnet guard in its default state: off.
+/// Settings on testnet, where a spend needs no confirmation and the spending
+/// block is therefore not drawn. `spending_arm` is the same tab on a chain that
+/// costs real money.
 pub fn settings(ui: &AppWindow) {
     unlocked(ui);
     ui.set_screen("settings".into());
@@ -1522,7 +1556,9 @@ pub fn network_trouble(ui: &AppWindow) {
         builtin: true,
         active: true,
     }]))));
-    net.set_requested("VRSCTEST".into());
+    net.set_requested("Testnet".into());
+    net.set_requested_name("VRSCTEST".into());
+    net.set_chain_title("Testnet".into());
     net.set_effective("Testnet".into());
     net.set_syncing(true);
     net.set_endpoint("https://api.verustest.net".into());
@@ -2287,7 +2323,7 @@ pub fn identity_change_review(ui: &AppWindow) {
 /// The revocation review — the one change nobody can undo from here.
 ///
 /// Worth its own reference image because it is the only place in this
-/// application, besides the mainnet switch, where a word has to be typed. If
+/// application, besides the spending switch, where a word has to be typed. If
 /// that ever renders as an ordinary confirmation, the picture says so.
 pub fn identity_revoke_review(ui: &AppWindow) {
     identity_detail(ui);
@@ -2379,7 +2415,13 @@ fn nodes(ui: &AppWindow) {
 
     let net = ui.global::<NetworkState>();
     net.set_nodes(ModelRc::from(Rc::new(VecModel::from(nodes))));
-    net.set_requested("VRSCTEST".into());
+    // Two strings for one chain, as the core sends them: the label a person
+    // reads and the name every comparison is made against. This fixture used to
+    // put "VRSCTEST" in the first, which is what the sentence at the top of the
+    // screen then showed — a string production never puts there.
+    net.set_requested("Testnet".into());
+    net.set_requested_name("VRSCTEST".into());
+    net.set_chain_title("Testnet".into());
     net.set_endpoint("https://api.verustest.net".into());
 
     // The chains the core offers. Names and titles both, because the button
@@ -2387,9 +2429,11 @@ fn nodes(ui: &AppWindow) {
     let chains: Vec<ChainChoice> = [
         ("VRSCTEST", "Testnet"),
         ("VRSC", "Verus"),
-        ("VARRR", "Pirate Chain"),
+        // Spelled the way the chains' own daemons spell them, because the name
+        // is what goes back to the core and is compared there by exact string.
+        ("vARRR", "Pirate Chain"),
         ("CHIPS", "CHIPS"),
-        ("VDEX", "vDEX"),
+        ("vDEX", "vDEX"),
     ]
     .into_iter()
     .map(|(name, title)| ChainChoice {

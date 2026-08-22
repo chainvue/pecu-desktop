@@ -43,7 +43,8 @@ pub use models::{
     LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm, NoteVm,
     PendingVm, Pool, PortfolioVm, PreallocationDraft, Reachability, RegistrationVm, ReserveDraft,
     ReviewOutputVm, Route, ScreenId, SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm,
-    SendReviewVm, ShieldedFunds, StatVm, TaskKind, TxDetailVm, TxDirection, VenueVm, WalletVm,
+    SendReviewVm, ShieldedFunds, SpendGate, StatVm, TaskKind, TxDetailVm, TxDirection, VenueVm,
+    WalletVm,
 };
 pub use secret::Secret;
 
@@ -70,7 +71,7 @@ pub const SATS_PER_COIN: i64 = 100_000_000;
 
 /// The word somebody has to type before a revocation is sent.
 ///
-/// The same shape the mainnet spending switch uses, and for the same reason: a
+/// The same shape the spending switch uses, and for the same reason: a
 /// revocation cannot be undone without the recovery authority, and an identity
 /// that is its own recovery authority cannot be recovered at all. A button that
 /// only needs to be clicked is one that gets clicked.

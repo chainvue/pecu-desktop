@@ -346,9 +346,9 @@ struct Core {
     pending_currency_search: Option<(String, Vec<String>)>,
     /// Launches built and signed, by ticket. Same shape as `prepared` and
     /// `identity_changes`: the bytes stay here and the interface holds a
-    /// number. The permit rides along because it was taken before the
-    /// signature.
-    launches: std::collections::HashMap<u64, (currency::Prepared, pecu_chain::SpendPermit)>,
+    /// number, and the authorisation is taken again at the moment of broadcast
+    /// rather than kept here beside them — see `confirm_launch`.
+    launches: std::collections::HashMap<u64, currency::Prepared>,
     /// A currency somebody decided to make, held across the identity
     /// registration it is waiting on. See `launch::Intent`.
     intent: launch::Intent,
@@ -847,13 +847,11 @@ enum Work {
     Identities(
         Box<Result<Vec<verus_sdk::network::IdentityAtAddress>, verus_sdk::network::RpcError>>,
     ),
-    /// A launch built and signed, with the permit that was taken before the
-    /// signature. **The bytes never leave here** — the interface holds a ticket
-    /// and a decoded summary.
+    /// A launch built and signed. **The bytes never leave here** — the
+    /// interface holds a ticket and a decoded summary.
     LaunchPrepared {
         ticket: u64,
-        #[allow(clippy::type_complexity)]
-        result: Box<Result<(Box<currency::Prepared>, Box<pecu_chain::SpendPermit>), String>>,
+        result: Box<Result<Box<currency::Prepared>, String>>,
     },
     /// It was handed to a node, one way or another.
     LaunchSent(Box<Result<currency::Launch, String>>),
@@ -1931,10 +1929,10 @@ impl Core {
                 reduce_motion,
             } => self.set_appearance(dark, reduce_motion),
             Command::SetLightServer(url) => self.set_light_server(&url),
-            Command::SetAllowMainnetSpend {
+            Command::SetAllowSpending {
                 on,
                 typed_confirmation,
-            } => self.set_mainnet_spend(on, &typed_confirmation),
+            } => self.set_allow_spending(on, &typed_confirmation),
             Command::SetRequestedNetwork(name) => self.switch_network(&name),
             Command::ResolvePending { id, action } => self.resolve_pending(id, action),
             Command::ScreenEntered(screen) => self.enter_screen(screen),
@@ -2691,6 +2689,9 @@ impl Core {
         // Back to the shipped endpoints. `restore` adds this chain's saved ones
         // below; without the reset the previous chain's would stay, and a wallet
         // on VRSC would be offered a list of nodes it then refuses to read from.
+        // A fresh manager is also what disarms spending: the opt-in is a field
+        // on it, so the arm cannot follow somebody onto another chain. See
+        // `NodeManager`'s `allow_spending` for why that has to stay true.
         self.nodes = NodeManager::new(shipped_nodes(&network, self.mock), network);
 
         // Everything the old chain answered. A figure kept here is a figure
@@ -3480,8 +3481,8 @@ impl Core {
     /// Putting it in the UI would make it a decoration: the screen that asks
     /// for the word is the layer easiest to bypass, and this is the guard that
     /// stands between a half-finished wallet and real coins.
-    fn set_mainnet_spend(&mut self, on: bool, typed: &str) {
-        if self.nodes.set_allow_mainnet_spend(on, typed) {
+    fn set_allow_spending(&mut self, on: bool, typed: &str) {
+        if self.nodes.set_allow_spending(on, typed) {
             self.emit_network();
             return;
         }
@@ -3489,11 +3490,47 @@ impl Core {
         let _ = self
             .events
             .send(Event::Notice(pecu_protocol::UiError::simple(
-                "mainnet_confirmation",
-                NoteVm::plain("mainnet-confirm"),
+                "spend_confirmation",
+                // The word that was expected, named in the refusal. It differs
+                // per chain, so "that was not the word" without saying which
+                // word would leave somebody guessing.
+                NoteVm::with("spend-confirm-word", [self.confirm_word()]),
                 String::new(),
                 pecu_protocol::Severity::Warning,
             )));
+    }
+
+    /// What the spending guard is doing on the chain the wallet is set to.
+    ///
+    /// Decided here rather than sent as two flags, so the interface cannot draw
+    /// the fourth combination — "no gate, and it is open" — that a pair of
+    /// bools would allow.
+    fn spend_gate(&self) -> pecu_protocol::SpendGate {
+        use pecu_protocol::SpendGate;
+
+        match self.nodes.requested() {
+            Some(network) if network.may_be_real_money() => {
+                if self.nodes.allow_spending() {
+                    SpendGate::Open
+                } else {
+                    SpendGate::Closed
+                }
+            }
+            // No chain chosen is not a chain that costs nothing — but there is
+            // also nothing to name in a confirmation, and `set_allow_spending`
+            // refuses outright in that state, so the control has nothing to do.
+            _ => SpendGate::NotNeeded,
+        }
+    }
+
+    /// The word the core will accept to arm spending: the requested chain's own
+    /// name. Empty when no chain has been chosen, which `set_allow_spending`
+    /// refuses outright.
+    fn confirm_word(&self) -> String {
+        self.nodes
+            .requested()
+            .map(|network| network.chain_name().to_string())
+            .unwrap_or_default()
     }
 
     // ── Send ────────────────────────────────────────────────────────────────
@@ -4311,7 +4348,7 @@ const SCAN_ATTEMPTS: u32 = 3;
     /// Send it. The permit is the same gate every other write goes through.
     fn confirm_identity_change(&mut self, ticket: u64, typed: &str) {
         // The typed word, checked here rather than in the interface — for the
-        // same reason the mainnet switch is checked here. A guard the UI owns
+        // same reason the spending switch is checked here. A guard the UI owns
         // is a guard a different UI does not have.
         if self.identity_confirms.contains(&ticket)
             && !typed
@@ -5400,8 +5437,8 @@ const SCAN_ATTEMPTS: u32 = 3;
         let permit = match self.nodes.spend_permit() {
             Ok(permit) => permit,
             Err(refused) => {
-                // Put it back: the user may turn mainnet spending on and try
-                // again, and rebuilding would select different coins.
+                // Put it back: the user may turn spending on and try again, and
+                // rebuilding would select different coins.
                 self.conversions.insert(ticket, prepared);
                 self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
@@ -5817,9 +5854,11 @@ const SCAN_ATTEMPTS: u32 = 3;
 
     /// Build and sign a launch. Nothing is sent.
     ///
-    /// The permit is taken **before** the work, the way registration does it: a
-    /// launch that could not be broadcast should refuse before it costs a
-    /// signature, not after.
+    /// The permit is asked for **before** the work, the way registration does
+    /// it: a launch that could not be broadcast should refuse before it costs a
+    /// signature, not after. It is asked for again at the broadcast and not
+    /// carried across — see `confirm_launch` for why the two are different
+    /// questions.
     fn prepare_launch(&mut self, draft: &pecu_protocol::CurrencyDraft) {
         let tip = self.nodes.active().and_then(|node| node.tip).unwrap_or(0);
         if currency::problems(draft, tip).iter().any(|p| p.blocking) {
@@ -5880,13 +5919,15 @@ const SCAN_ATTEMPTS: u32 = 3;
         let Some(chain) = self.chain() else {
             return;
         };
-        let permit = match self.nodes.spend_permit() {
-            Ok(permit) => permit,
-            Err(refused) => {
-                self.notice_warning("spend_refused", refusal_note(&refused), "");
-                return;
-            }
-        };
+        // Checked, not kept. A launch that could not be broadcast should refuse
+        // before it costs a signature — but the permit that answers *now* is
+        // not the authorisation the broadcast runs under. That one is taken
+        // again in `confirm_launch`, against whatever the wallet is set to by
+        // the time somebody presses the button.
+        if let Err(refused) = self.nodes.spend_permit() {
+            self.notice_warning("spend_refused", refusal_note(&refused), "");
+            return;
+        }
 
         // The bare name: the identity is `demo.VRSCTEST@` and the currency is
         // `demo` under the chain's own currency. Splitting rather than trimming
@@ -5933,8 +5974,7 @@ const SCAN_ATTEMPTS: u32 = 3;
                 Work::LaunchPrepared {
                     ticket,
                     result: Box::new(
-                        currency::prepare(&chain, &vault, &label, &identity, &built)
-                            .map(|prepared| (Box::new(prepared), Box::new(permit))),
+                        currency::prepare(&chain, &vault, &label, &identity, &built).map(Box::new),
                     ),
                 }
             },
@@ -5942,16 +5982,15 @@ const SCAN_ATTEMPTS: u32 = 3;
         );
     }
 
-    #[allow(clippy::type_complexity)]
     fn finish_launch_prepared(
         &mut self,
         ticket: u64,
-        result: Result<(Box<currency::Prepared>, Box<pecu_chain::SpendPermit>), String>,
+        result: Result<Box<currency::Prepared>, String>,
     ) {
         self.busy(TaskKind::PreparingSend, false);
 
         match result {
-            Ok((prepared, permit)) => {
+            Ok(prepared) => {
                 let fee = prepared.launch_fee();
                 let split = currency::cost(fee);
                 let view = pecu_protocol::LaunchReviewVm {
@@ -5969,7 +6008,7 @@ const SCAN_ATTEMPTS: u32 = 3;
                     // when it begins.
                     start_block: currency::thousands(prepared.start_block()),
                 };
-                self.launches.insert(ticket, (*prepared, *permit));
+                self.launches.insert(ticket, *prepared);
                 let _ = self
                     .events
                     .send(Event::LaunchPrepared(Some(Box::new(view))));
@@ -5984,17 +6023,36 @@ const SCAN_ATTEMPTS: u32 = 3;
         }
     }
 
-    /// Send it. The permit was taken before the signature and is carried
-    /// through rather than re-taken — one that has since lapsed should not
-    /// silently become a different one.
+    /// Send it.
+    ///
+    /// The permit is taken **here**, not carried from `prepare_launch_under`,
+    /// and the distinction is the whole guard rather than tidiness. A review
+    /// stays on screen for as long as somebody leaves it there, and in that
+    /// time they can turn spending off in Settings or change chains — a permit
+    /// minted before either would still authorise a broadcast afterwards, and
+    /// on the chain switch it would authorise one against a node on a chain the
+    /// permit was never about. The signed bytes are kept; the authorisation to
+    /// send them is asked for again. `confirm_send` and `confirm_conversion` do
+    /// the same, for the same reason.
     fn confirm_launch(&mut self, ticket: u64) {
-        let Some((prepared, permit)) = self.launches.remove(&ticket) else {
+        let Some(prepared) = self.launches.remove(&ticket) else {
             return;
         };
+
+        let permit = match self.nodes.spend_permit() {
+            Ok(permit) => permit,
+            Err(refused) => {
+                // Put it back: the user may turn spending on and try again, and
+                // rebuilding would produce different bytes — the ones already
+                // signed are the only ones anybody agreed to.
+                self.launches.insert(ticket, prepared);
+                self.notice("spend_refused", refusal_note(&refused), &refused);
+                return;
+            }
+        };
+
         let Some(chain) = self.chain() else {
-            // Put it back. Rebuilding would produce different bytes, and the
-            // ones already signed are the only ones anybody agreed to.
-            self.launches.insert(ticket, (prepared, permit));
+            self.launches.insert(ticket, prepared);
             return;
         };
 
@@ -6770,8 +6828,8 @@ const SCAN_ATTEMPTS: u32 = 3;
         let permit = match self.nodes.spend_permit() {
             Ok(permit) => permit,
             Err(refused) => {
-                // Put it back: the user may turn mainnet spending on and try
-                // again, and rebuilding would pick different coins.
+                // Put it back: the user may turn spending on and try again, and
+                // rebuilding would pick different coins.
                 self.prepared.insert(ticket, prepared);
                 self.notice("spend_refused", refusal_note(&refused), &refused);
                 return;
@@ -7091,7 +7149,13 @@ const SCAN_ATTEMPTS: u32 = 3;
             chains: pecu_chain::Network::shipped()
                 .into_iter()
                 .map(|chain| pecu_protocol::ChainChoiceVm {
-                    name: chain.label().to_string(),
+                    // `chain_name()` and never `label()`. The two differ on the
+                    // two chains that have one: `label()` answers "Mainnet",
+                    // which comes back through `SetRequestedNetwork` and parses
+                    // as `Other("Mainnet")` — a chain with no endpoints that
+                    // every real node then disagrees with. Held by
+                    // `the_chain_buttons_offer_names_a_node_could_report`.
+                    name: chain.chain_name().to_string(),
                     title: chain.title().to_string(),
                 })
                 .collect(),
@@ -7108,7 +7172,13 @@ const SCAN_ATTEMPTS: u32 = 3;
                 Some(pecu_chain::NodeStatus::Syncing { .. })
             ),
             active_node: active.map(|n| n.id),
-            allow_mainnet_spend: self.nodes.allow_mainnet_spend(),
+            requested_name: self.confirm_word(),
+            chain_title: self
+                .nodes
+                .requested()
+                .map(|network| network.title().to_string())
+                .unwrap_or_default(),
+            spend_gate: self.spend_gate(),
             light_server: self.light_server.clone().unwrap_or_default(),
             mock_mode: self.mock,
             nodes: self.nodes.nodes().iter().map(to_node_vm).collect(),
@@ -7262,7 +7332,13 @@ fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
             "spend-wrong-chain",
             [effective.to_string(), requested.to_string()],
         ),
-        SpendRefused::MainnetNotEnabled => NoteVm::plain("spend-mainnet-off"),
+        // Named, because one refusal covers five chains and "spending is turned
+        // off" would leave a person on vARRR looking for a mainnet switch. The
+        // title rather than the name: this is a sentence to read, and the
+        // name's job is the word they have to type.
+        SpendRefused::SpendingNotEnabled { network } => {
+            NoteVm::with("spend-not-enabled", [network.title().to_string()])
+        }
         SpendRefused::Syncing { blocks, longest } => NoteVm::with(
             "spend-node-syncing",
             [blocks.to_string(), longest.to_string()],
@@ -9195,6 +9271,177 @@ mod tests {
         assert!(
             !vm.nodes.iter().any(|n| n.url.contains("saved-for-testnet")),
             "the endpoint saved for the other chain is still listed",
+        );
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// The chain buttons offer names a node could report, and nothing else.
+    ///
+    /// `ChainChoiceVm::name` is what comes straight back in
+    /// `SetRequestedNetwork` and is parsed by `Network::from_chain_name`, so a
+    /// display label in that field is not a cosmetic slip: pressing Verus would
+    /// set the wallet to `Other("Mainnet")`, a chain with no endpoints that
+    /// every real node then contradicts. The titles are checked too, because
+    /// the pair being the wrong way round is exactly the mistake this catches.
+    #[tokio::test]
+    async fn the_chain_buttons_offer_names_a_node_could_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        let vm = next_network(&mut events).await;
+        let offered: Vec<(&str, &str)> = vm
+            .chains
+            .iter()
+            .map(|chain| (chain.name.as_str(), chain.title.as_str()))
+            .collect();
+        assert_eq!(
+            offered,
+            vec![
+                ("VRSCTEST", "Testnet"),
+                ("VRSC", "Verus"),
+                ("vARRR", "Pirate Chain"),
+                ("CHIPS", "CHIPS"),
+                ("vDEX", "vDEX"),
+            ],
+        );
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// An arm made on one chain does not follow the wallet to another.
+    ///
+    /// One flag governs every chain, which is only safe while every route to a
+    /// different chain clears it. Today that happens because `switch_network`
+    /// rebuilds the whole `NodeManager` — a side effect of how the switch is
+    /// written rather than a property anybody stated, so it is pinned here from
+    /// the outside, where a refactor that kept node state across a switch would
+    /// break it loudly.
+    ///
+    /// The chain switched to is read out of `vm.chains` rather than written as
+    /// a literal, so this test and the emitted list cannot drift: a button that
+    /// went back to offering display labels would fail here as well as in
+    /// `the_chain_buttons_offer_names_a_node_could_report`.
+    #[tokio::test]
+    async fn arming_a_spend_does_not_survive_a_chain_switch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Mainnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+        let vm = next_network(&mut events).await;
+
+        // A chain that is not the one the wallet is on, taken from what the
+        // buttons actually offer.
+        let elsewhere = vm
+            .chains
+            .iter()
+            .map(|chain| chain.name.clone())
+            .find(|name| name != &vm.requested_name && name != "VRSCTEST")
+            .expect("the build offers a second real-money chain");
+
+        dispatcher.send(Command::SetAllowSpending {
+            on: true,
+            typed_confirmation: "VRSC".to_string(),
+        });
+        loop {
+            if next_network(&mut events).await.spend_gate == pecu_protocol::SpendGate::Open {
+                break;
+            }
+        }
+
+        dispatcher.send(Command::SetRequestedNetwork(elsewhere.clone()));
+
+        let vm = loop {
+            let vm = next_network(&mut events).await;
+            if vm.requested_name == elsewhere {
+                break vm;
+            }
+        };
+        assert_eq!(
+            vm.spend_gate,
+            pecu_protocol::SpendGate::Closed,
+            "the arm followed the wallet onto another chain",
+        );
+
+        dispatcher.send(Command::Shutdown);
+    }
+
+    /// The word is the chain's own name, and the core is what decides that.
+    ///
+    /// The whole opt-in path had no test at this level: the command, the
+    /// refusal it sends back and the word that refusal names were all only
+    /// reachable through the interface. The refusal has to carry the expected
+    /// word, because it differs per chain now — "that was not the word" without
+    /// saying which word would leave somebody guessing.
+    #[tokio::test]
+    async fn arming_a_spend_needs_the_chains_own_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Mainnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+        let vm = next_network(&mut events).await;
+        assert_eq!(vm.spend_gate, pecu_protocol::SpendGate::Closed);
+        assert_eq!(vm.requested_name, "VRSC");
+        assert_eq!(vm.chain_title, "Verus");
+
+        // The word this control used to ask for, everywhere, forever.
+        dispatcher.send(Command::SetAllowSpending {
+            on: true,
+            typed_confirmation: "mainnet".to_string(),
+        });
+
+        let notice = loop {
+            match events.recv().await {
+                Some(Event::Notice(notice)) => break notice,
+                Some(Event::Network(vm)) => {
+                    panic!("the wrong word armed spending: {:?}", vm.spend_gate)
+                }
+                Some(_) => {}
+                None => panic!("the core stopped before refusing"),
+            }
+        };
+        assert_eq!(notice.code, "spend_confirmation");
+        assert_eq!(
+            notice.message.code, "spend-confirm-word",
+            "{:?}",
+            notice.message
+        );
+        assert_eq!(
+            notice.message.args,
+            vec!["VRSC".to_string()],
+            "the refusal did not name the word it wanted",
+        );
+
+        dispatcher.send(Command::SetAllowSpending {
+            on: true,
+            typed_confirmation: "  vrsc  ".to_string(),
+        });
+        assert_eq!(
+            next_network(&mut events).await.spend_gate,
+            pecu_protocol::SpendGate::Open,
         );
 
         dispatcher.send(Command::Shutdown);

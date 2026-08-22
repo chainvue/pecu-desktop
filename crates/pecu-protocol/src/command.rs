@@ -204,16 +204,19 @@ pub enum Command {
     RemoveNode(u32),
     ProbeNodes,
     SetRequestedNetwork(String),
-    /// Turning on mainnet spending. `typed_confirmation` must be the literal
-    /// word `mainnet`, and core checks it — putting that check in the UI would
-    /// make it a decoration.
     /// Point the wallet at a lightwalletd for shielded notes, or clear it.
     ///
     /// Empty clears, which falls back to whatever the chain ships. The core
     /// checks the address is one a transport would accept before saving it, so
     /// a typo is refused here rather than at the next scan.
     SetLightServer(String),
-    SetAllowMainnetSpend {
+    /// Turning spending on, or off again.
+    ///
+    /// `typed_confirmation` must be the requested chain's own name — `VRSC`,
+    /// `vARRR`, whatever an unknown chain reports — and the core checks it.
+    /// Putting that check in the UI would make it a decoration. Off needs no
+    /// confirmation: refusing to spend is never the dangerous direction.
+    SetAllowSpending {
         on: bool,
         typed_confirmation: String,
     },
