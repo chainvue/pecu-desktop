@@ -36,9 +36,28 @@ The interface is English, on every system. See `crates/pecu-ui/translations/`.
 ## Checks
 
 ```sh
-cargo clippy --workspace --all-targets    # warnings are not acceptable output
-cargo test --workspace
+scripts/check.sh          # all three, which is what you want before pushing
+scripts/check.sh clippy   # warnings are not acceptable output
+scripts/check.sh test
+scripts/check.sh deny     # the dependency graph
 ```
+
+`scripts/check.sh` is the one definition of "the checks". The workflow in
+`.github/workflows/checks.yml` calls that same script rather than repeating the
+commands, so what runs on a pull request and what runs at your desk cannot
+drift into disagreeing. It needs no display — the interface tests render
+offscreen — which is what lets a headless runner run them at all, and a failed
+visual test uploads its diff images as a build artefact, because the log names
+the screens that changed and only the images say what they now look like.
+
+The third one is `cargo deny`, and it compiles nothing: it reads `Cargo.lock`
+and the RustSec advisory database, and fails on a known-vulnerable or abandoned
+crate, a licence this project may not ship, a source nobody chose, or a crate
+that touches key material arriving at two versions. The policy is `deny.toml`
+at the root — every tolerated advisory carries a line saying why it is tolerated
+and what would end that, which is the part a bare ignore list never records. It
+wants `cargo-deny` 0.20 or newer (`cargo install --locked cargo-deny`); the
+other two halves run without it.
 
 Some of the tests are unusual and are the point of the project rather than a
 formality:
