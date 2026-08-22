@@ -488,20 +488,41 @@ export component WordCheck inherits VerticalLayout {
 // every field be read and blanked in the same callback — and it means leaving a
 // step destroys its fields rather than leaving them holding what was typed.
 
-// Prove who you are. Only on the way back to a backup that was interrupted:
-// a phrase just generated is already in front of the person who generated it.
+// Prove who you are. Never on the way *to* a phrase that was just generated —
+// that one is already in front of the person who generated it — but on every
+// route back to one: a backup that was interrupted, and a key on the settings
+// screen whose words somebody wants to read again. The gate is the same one in
+// both cases, and it is not the screen's: core runs the key derivation again
+// rather than trusting the open session, so there is nothing here for the
+// interface to skip.
 export component BackupPassphrase inherits VerticalLayout {
     callback closed();
     spacing: Sp.s6;
 
     VerticalLayout {
         spacing: Sp.s3;
+        // Which key, in the biggest text on the screen.
+        //
+        // The passphrase is typed here and the words come out on the next
+        // screen, so this is the last moment at which somebody who pressed the
+        // wrong row can still notice. A wallet with `main` and `savings` on
+        // adjacent rows offers two buttons with the same words on them, and 24
+        // words copied onto a sheet labelled with the other key restore the
+        // wrong wallet — with nothing on screen having said so.
+        //
+        // The nameless heading is a fallback and not a route: both ways in set
+        // the label before they set the step. It is here so that a screen
+        // opened without one — a bug — reads as a sentence rather than as a
+        // heading with a hole in it.
         Text {
-            text: @tr("Show your recovery phrase");
+            text: SeedState.label == ""
+                ? @tr("Show your recovery phrase")
+                : @tr("Show the recovery phrase for {}", SeedState.label);
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
         HorizontalLayout {
             alignment: center;
@@ -562,6 +583,15 @@ export component BackupPhrase inherits VerticalLayout {
     callback closed();
     callback written-down();
 
+    // Whether this sitting ends on this screen rather than in a verification.
+    //
+    // Set by the screen above, which knows both reasons it can be true. What
+    // changes here is the heading and the way out: somebody re-reading words
+    // they wrote down years ago is not making a claim about having written them
+    // down, and typing three of them back while they are on the screen in front
+    // of them proves nothing to anybody.
+    in property <bool> ends-here: false;
+
     // Whether the words have ever been on screen in this sitting.
     //
     // "I've written it down" used to be enabled from the moment the screen
@@ -580,12 +610,27 @@ export component BackupPhrase inherits VerticalLayout {
 
     VerticalLayout {
         spacing: Sp.s3;
+        // Four whole sentences rather than a stem with a name glued on the
+        // end, because a translator needs the whole sentence to move the words
+        // around in. Two things vary: which key, for the reason argued on the
+        // passphrase gate, and whether these words are being written down for
+        // the first time or read back years later.
+        //
+        // Nameless is a real state here, unlike on the gate: the very first
+        // backup arrives at this step from `seed::open`, which is handed a
+        // challenge and not a label. That wallet has one key and it was created
+        // a minute ago, so there is nothing to disambiguate.
         Text {
-            text: @tr("Write down your recovery phrase");
+            text: SeedState.label == ""
+                ? (root.ends-here ? @tr("Your recovery phrase")
+                                  : @tr("Write down your recovery phrase"))
+                : (root.ends-here ? @tr("The recovery phrase for {}", SeedState.label)
+                                  : @tr("Write down the recovery phrase for {}", SeedState.label));
             font-size: Typo.title1;
             font-weight: Typo.w-bold;
             color: Theme.text-primary;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
         // Wrapped by an explicit width rather than `max-width`: inside a
         // vertical layout the text is handed the full column and wraps against
@@ -672,12 +717,22 @@ export component BackupPhrase inherits VerticalLayout {
     HorizontalLayout {
         alignment: center;
         spacing: Sp.s4;
-        Btn {
+
+        // One way out, and it claims nothing. Closing runs the same path
+        // "Later" does — the words are overwritten and the core drops them —
+        // and it leaves the key's backup exactly as it found it.
+        if root.ends-here: Btn {
+            text: @tr("Done");
+            variant: "primary";
+            clicked => { root.closed(); }
+        }
+
+        if !root.ends-here: Btn {
             text: @tr("Later");
             variant: "ghost";
             clicked => { root.closed(); }
         }
-        Btn {
+        if !root.ends-here: Btn {
             text: @tr("I've written it down");
             variant: "primary";
             enabled: root.seen;
@@ -685,7 +740,7 @@ export component BackupPhrase inherits VerticalLayout {
         }
     }
 
-    if !root.seen: HorizontalLayout {
+    if !root.ends-here && !root.seen: HorizontalLayout {
         alignment: center;
         Text {
             text: @tr("Hold the button above to see the words first.");
@@ -793,6 +848,25 @@ export component BackupScreen inherits Rectangle {
         }
 
         if SeedState.step == "phrase": BackupPhrase {
+            // Where this sitting ends, and there are two reasons it can end
+            // here.
+            //
+            // A re-read is the first: the flag the verification would set is
+            // already set, reading the words again does not un-set it, and
+            // asking somebody to prove they copied down words that are on the
+            // screen in front of them is theatre.
+            //
+            // A challenge that is not three positions long is the second, and it
+            // is why this is a property rather than a straight read of
+            // `re-reading`. The verify step below renders only for exactly three
+            // positions, and core asks for `min(3, word_count)` — so a key whose
+            // "phrase" is a two-word free-text import would otherwise be sent
+            // on to a step that renders nothing at all: a full-window screen
+            // with the shell unmounted behind it and no visible way off it.
+            // Escape does leave it (see the chain in `app.slint`), but a key
+            // somebody has to guess at is not a way out of the screen that
+            // shows recovery words.
+            ends-here: SeedState.re-reading || SeedState.challenge.length != 3;
             closed => { root.close(); }
             written-down => {
                 // Conceal before moving on: the next screen has no business
@@ -813,11 +887,10 @@ export component BackupScreen inherits Rectangle {
 
     // Leaving without finishing. The key keeps its "not backed up" flag, so the
     // offer comes back — this abandons the attempt, it does not decline it
-    // permanently.
+    // permanently. Escape leaves by the same route; the body of it is
+    // `SeedState.leave` so the two cannot come to mean different things.
     function close() {
-        SeedState.problem = { code: "", args: [] };
-        SeedState.step = "";
-        Actions.cancel-backup();
+        SeedState.leave();
     }
 }
 

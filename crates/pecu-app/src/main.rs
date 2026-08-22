@@ -385,8 +385,9 @@ fn wire_backup(ui: &AppWindow, dispatcher: &Dispatcher) {
 
     {
         // The fourth secret-bearing callback: the passphrase again, to show a
-        // phrase that was never written down. Core re-runs the key derivation
-        // rather than reusing the open session — see `Vault::reveal_phrase`.
+        // phrase — one that was never written down, or one whose paper copy is
+        // gone. Core re-runs the key derivation rather than reusing the open
+        // session — see `Vault::reveal_phrase`.
         let dispatcher = dispatcher.clone();
         let weak = ui.as_weak();
         actions.on_reveal_backup(move |passphrase| {
@@ -396,9 +397,22 @@ fn wire_backup(ui: &AppWindow, dispatcher: &Dispatcher) {
             let seed = ui.global::<SeedState>();
             seed.set_problem(pecu_ui::Note::default());
 
-            // Which key is being backed up is the wallet's answer, not the
-            // screen's — the UI is told the label, it does not choose one.
-            let label = ui.global::<WalletState>().get_backup_key().to_string();
+            // Which key this is about is the screen's answer now, because the
+            // screen is the only thing that knows which row somebody pointed at.
+            // It used to be read from `WalletState.backup-key`, the one key the
+            // wallet was nagging about, which meant every other key's phrase was
+            // unreachable for the rest of the wallet's life.
+            //
+            // Nothing is trusted about it. It is a label, not a key; the vault
+            // re-derives the passphrase against it and refuses a name it does
+            // not hold, saying so rather than blaming the passphrase. The empty
+            // guard is what stops a passphrase being sent for a key nobody
+            // named — a screen that opened without setting a label is a bug, and
+            // sending is the wrong way to find out about it.
+            //
+            // Nothing here touches whether the key is backed up. This is a read;
+            // see `Command::RevealBackup`.
+            let label = seed.get_label().to_string();
             if label.is_empty() {
                 return;
             }

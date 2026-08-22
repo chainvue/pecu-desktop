@@ -201,6 +201,56 @@ async fn no_secret_reaches_the_log() {
     });
     wait_for_wallet(&mut events, |vm| vm.keys.len() == 2).await;
 
+    // A key that never had words, asked for its words. The refusal names the
+    // key, and a message that quotes one of its inputs is how the next one
+    // learns to quote the input that matters.
+    dispatcher.send(Command::RevealBackup {
+        label: "third".to_string(),
+        passphrase: Secret::from(PASSPHRASE),
+    });
+    wait_for_notice(&mut events).await;
+
+    // ── And the reveal that works ───────────────────────────────────────
+    //
+    // Not a refusal, and the only path here that is not. It is the route the
+    // keys screen offers for the rest of the wallet's life: the phrase comes
+    // back out of the vault, into the core's `Backup`, and onto a screen, and
+    // every one of those hops is somewhere a `Debug` could turn up. Until this
+    // existed, the only reveal this test drove was one that failed before it
+    // had a phrase to leak.
+    dispatcher.send(Command::RevealBackup {
+        label: "main".to_string(),
+        passphrase: Secret::from(PASSPHRASE),
+    });
+    loop {
+        match events.recv().await {
+            Some(Event::PhraseChallenge { .. }) => break,
+            Some(Event::Notice(notice)) => {
+                panic!("the phrase could not be read again: {}", notice.message.code)
+            }
+            Some(_) => {}
+            None => panic!("the core stopped before showing the phrase again"),
+        }
+    }
+    dispatcher.send(Command::ShowNewPhrase);
+    let again: Vec<String> = loop {
+        match events.recv().await {
+            Some(Event::SeedWords(words)) if !words.is_empty() => {
+                break words.into_iter().map(|word| word.word).collect();
+            }
+            Some(_) => {}
+            None => panic!("the core stopped before sending the words again"),
+        }
+    };
+    // `assert!` rather than `assert_eq!`, in the one test whose whole subject
+    // is phrase words not reaching a log. A failing `assert_eq!` prints both
+    // sides, and both sides here are 24 recovery words unwrapped to `String` —
+    // so the regression this catches would be reported by writing the wallet's
+    // phrase twice into a build log that anybody can read.
+    assert!(again == words, "the same key gave different words");
+    dispatcher.send(Command::HideBackup);
+    dispatcher.send(Command::CancelBackup);
+
     dispatcher.send(Command::Lock);
     dispatcher.send(Command::Unlock {
         passphrase: Secret::from("also not the passphrase"),

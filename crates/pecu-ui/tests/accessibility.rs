@@ -104,6 +104,14 @@ const SCREENS: &[Screen] = &[
     ("activity", pecu_ui::fixtures::funded),
     ("settings", pecu_ui::fixtures::settings),
     ("settings", pecu_ui::fixtures::keys),
+    // The backup screen, in both states it can end in. It replaces the shell
+    // rather than sitting on a screen, so the name beside it is only the one
+    // the reference images file it under. It is the highest-consequence screen
+    // in the wallet and had no entry here at all — including the "Done" that is
+    // the only way out of a re-read, which is the one control on it somebody
+    // driving by screen reader has to be able to find.
+    ("dashboard", pecu_ui::fixtures::backup_passphrase),
+    ("dashboard", pecu_ui::fixtures::backup_reread),
     ("settings", pecu_ui::fixtures::addresses),
     ("settings", pecu_ui::fixtures::general_settings),
     ("nodes", pecu_ui::fixtures::network),

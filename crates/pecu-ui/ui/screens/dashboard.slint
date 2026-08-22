@@ -531,6 +531,11 @@ export component DashboardScreen inherits VerticalLayout {
                     y: (parent.height - self.height) / 2;
                     clicked => {
                         SeedState.problem = { code: "", args: [] };
+                        // The key the wallet is nagging about. The screen is
+                        // told which one; the banner is the one place where the
+                        // wallet, not the person, picks it.
+                        SeedState.label = WalletState.backup-key;
+                        SeedState.re-reading = false;
                         SeedState.step = "passphrase";
                     }
                 }

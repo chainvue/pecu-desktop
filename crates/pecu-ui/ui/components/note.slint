@@ -471,6 +471,14 @@ export component NoticeTitle inherits Text {
         : root.note.code == "backup-record-failed" ? @tr("Could not record the backup")
         : root.note.code == "backup-in-progress"
             ? @tr("Finish writing down the current recovery phrase first")
+        // The keys screen does not offer this action on a key that arrived as a
+        // private key, so nobody should ever read either of these. They exist
+        // because the core refuses on its own account and must be able to say
+        // why — a refusal rendered as its own code is what a missing sentence
+        // looks like on screen.
+        : root.note.code == "reveal-no-phrase"
+            ? @tr("That key was imported as a private key and never had a recovery phrase")
+        : root.note.code == "reveal-failed" ? @tr("Could not show that recovery phrase")
 
         // ── Importing a key ─────────────────────────────────────────────
         : root.note.code == "import-not-a-verus-key"

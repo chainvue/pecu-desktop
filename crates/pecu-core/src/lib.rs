@@ -1284,7 +1284,7 @@ impl Core {
     fn reveal_backup(&mut self, label: &str, passphrase: &pecu_protocol::Secret) {
         match self.wallet.begin_reveal(label, passphrase) {
             Ok(challenge) => self.emit_challenge(&challenge),
-            Err(error) => self.notice("reveal_backup", NoteVm::plain("passphrase-wrong"), &error),
+            Err(error) => self.notice("reveal_backup", reveal_error_note(&error), &error),
         }
     }
 
@@ -7242,6 +7242,31 @@ fn key_error_note(error: &pecu_keystore::VaultError) -> NoteVm {
     }
 }
 
+/// What the passphrase re-prompt says when a reveal is refused.
+///
+/// Every refusal used to be reported as `passphrase-wrong`, which was survivable
+/// while the dashboard banner was the only way in: the label came from the
+/// wallet, so it could not be wrong, and the passphrase was the only thing left
+/// to blame. The keys screen chooses a label from a row somebody pointed at, and
+/// a row can go stale between being drawn and being clicked — a key renamed in
+/// another window, or removed. Telling that person their passphrase is wrong, on
+/// the one screen where hearing it is most alarming, is worth two extra
+/// sentences.
+fn reveal_error_note(error: &pecu_keystore::VaultError) -> NoteVm {
+    use pecu_keystore::VaultError;
+
+    match error {
+        VaultError::WrongPassphrase => NoteVm::plain("passphrase-wrong"),
+        // Refused by the interface long before this, which does not offer the
+        // action on a WIF row. This is what answers a caller that is not the
+        // interface, and the day the interface gets it wrong.
+        VaultError::NoPhrase(_) => NoteVm::plain("reveal-no-phrase"),
+        VaultError::NoSuchKey(_) => NoteVm::plain("key-not-here"),
+        VaultError::Locked => NoteVm::plain("wallet-locked"),
+        _ => NoteVm::plain("reveal-failed"),
+    }
+}
+
 /// What the send form says when a build fails.
 fn send_note(error: &send::SendError) -> NoteVm {
     use verus_sdk::network::FlowError;
@@ -8132,6 +8157,187 @@ mod tests {
                 Some(_) => {}
                 None => panic!("the core stopped"),
             }
+        }
+    }
+
+    /// Years later, the paper is gone — and the wallet still has the words.
+    ///
+    /// The property the keys screen's "Show recovery phrase" rests on, asserted
+    /// where it is enforced. Reading a phrase again is a read: the same words
+    /// come back, and nothing about the key's backup changes for having asked.
+    /// If a reveal ever consumed the phrase, or if the flow behind it could
+    /// clear the flag, somebody who came back because they had lost their paper
+    /// would be told by their own wallet that they had never made a backup.
+    #[tokio::test]
+    async fn a_finished_backup_can_be_read_again_and_stays_finished() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        dispatcher.send(Command::CreateWallet {
+            name: "test".to_string(),
+            passphrase: pecu_protocol::Secret::from("a passphrase"),
+        });
+        let positions = loop {
+            match events.recv().await {
+                Some(Event::PhraseChallenge { positions, .. }) => break positions,
+                Some(_) => {}
+                None => panic!("the core stopped before announcing a challenge"),
+            }
+        };
+        let words = next_words(&mut events, &dispatcher).await;
+        let right: Vec<(u32, String)> = positions
+            .iter()
+            .map(|p| {
+                let word = words
+                    .iter()
+                    .find(|w| w.index == *p)
+                    .map(|w| w.word.clone())
+                    .unwrap_or_default();
+                (*p, word)
+            })
+            .collect();
+        dispatcher.send(Command::ConfirmPhrase { checks: right });
+        assert!(next_confirmation(&mut events).await);
+
+        dispatcher.send(Command::RevealBackup {
+            label: "main".to_string(),
+            passphrase: pecu_protocol::Secret::from("a passphrase"),
+        });
+        loop {
+            match events.recv().await {
+                Some(Event::PhraseChallenge { word_count, .. }) => {
+                    assert_eq!(word_count, 24);
+                    break;
+                }
+                Some(Event::Notice(notice)) => {
+                    panic!("the phrase could not be read again: {}", notice.message.code)
+                }
+                Some(_) => {}
+                None => panic!("the core stopped before showing the phrase again"),
+            }
+        }
+        assert_eq!(
+            next_words(&mut events, &dispatcher).await,
+            words,
+            "the same key gave different words",
+        );
+
+        // Leaving the way the Done button does, and then asking the wallet what
+        // it now thinks. Locking is the cheapest thing that makes it describe
+        // itself again, and the backup flag is one of the facts that survives.
+        dispatcher.send(Command::CancelBackup);
+        dispatcher.send(Command::Lock);
+        let after = loop {
+            match events.recv().await {
+                Some(Event::Wallet(vm)) => break vm,
+                Some(_) => {}
+                None => panic!("the core stopped before reporting the wallet"),
+            }
+        };
+        assert!(
+            after.needs_backup.is_none(),
+            "reading the phrase again re-armed the backup warning",
+        );
+        assert!(
+            after.keys.iter().all(|key| key.backed_up),
+            "reading the phrase again un-recorded the backup",
+        );
+    }
+
+    /// Hold to reveal, and what came back.
+    async fn next_words(
+        events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+        dispatcher: &Dispatcher,
+    ) -> Vec<pecu_protocol::SeedWordVm> {
+        dispatcher.send(Command::ShowNewPhrase);
+        loop {
+            match events.recv().await {
+                Some(Event::SeedWords(words)) if !words.is_empty() => return words,
+                Some(_) => {}
+                None => panic!("the core stopped before sending the words"),
+            }
+        }
+    }
+
+    /// The two refusals that are not about the passphrase.
+    ///
+    /// They were one refusal until the keys screen could name a key: every
+    /// failure reached the person at the passphrase prompt as "that is not your
+    /// passphrase", which is wrong for a key that never had words and wrong for
+    /// a label that went stale between being drawn and being clicked.
+    #[tokio::test]
+    async fn a_reveal_says_which_of_the_three_things_went_wrong() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = tokio::runtime::Handle::current();
+
+        let (dispatcher, mut events) = start(
+            &handle,
+            Config {
+                nodes: testnet_nodes(),
+                network: Network::Testnet,
+                mock: false,
+                home: dir.path().to_path_buf(),
+            },
+        );
+
+        dispatcher.send(Command::CreateWallet {
+            name: "test".to_string(),
+            passphrase: pecu_protocol::Secret::from("a passphrase"),
+        });
+        loop {
+            match events.recv().await {
+                Some(Event::Wallet(vm)) if vm.exists && !vm.locked => break,
+                Some(_) => {}
+                None => panic!("the core stopped before the wallet was created"),
+            }
+        }
+
+        dispatcher.send(Command::ImportKey {
+            label: "cold".to_string(),
+            material: pecu_protocol::ImportMaterial::Wif(pecu_protocol::Secret::from(
+                "UusoQWsobQKUkezgBJa22D9G4t9Avo6k8wD5UUxmmfAEoTN8bawc",
+            )),
+            passphrase: pecu_protocol::Secret::from("a passphrase"),
+        });
+        loop {
+            match events.recv().await {
+                Some(Event::Wallet(vm)) if vm.keys.len() == 2 => break,
+                Some(_) => {}
+                None => panic!("the core stopped before the second key arrived"),
+            }
+        }
+
+        for (label, passphrase, expected) in [
+            ("main", "not the passphrase", "passphrase-wrong"),
+            ("cold", "a passphrase", "reveal-no-phrase"),
+            ("renamed-since", "a passphrase", "key-not-here"),
+        ] {
+            dispatcher.send(Command::RevealBackup {
+                label: label.to_string(),
+                passphrase: pecu_protocol::Secret::from(passphrase),
+            });
+            let notice = loop {
+                match events.recv().await {
+                    Some(Event::Notice(notice)) => break notice,
+                    Some(Event::PhraseChallenge { .. }) => {
+                        panic!("`{label}` was shown when it should have been refused")
+                    }
+                    Some(_) => {}
+                    None => panic!("the core stopped before refusing `{label}`"),
+                }
+            };
+            assert_eq!(notice.code, "reveal_backup");
+            assert_eq!(notice.message.code, expected, "refusing `{label}`");
         }
     }
 

@@ -183,7 +183,16 @@ pub const CASES: &[Case] = &[
         crate::fixtures::young_wallet,
     ),
     ("dashboard", "backup-due", crate::fixtures::backup_due),
+    (
+        "dashboard",
+        "backup-passphrase",
+        crate::fixtures::backup_passphrase,
+    ),
     ("dashboard", "backup-phrase", crate::fixtures::backup_phrase),
+    // Filed with the other backup images rather than with the keys screen it is
+    // opened from: it is the same full-window screen, and a picture of it beside
+    // the first-read version is what makes the difference between them legible.
+    ("dashboard", "backup-reread", crate::fixtures::backup_reread),
     ("dashboard", "backup-verify", crate::fixtures::backup_verify),
     ("dashboard", "locked", crate::fixtures::locked),
     (

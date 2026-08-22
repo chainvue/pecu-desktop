@@ -125,12 +125,56 @@ export global SeedState {
     // wallet. Rust opens it (a phrase exists to show) and closes it (the backup
     // was recorded); everything in between is navigation.
     in-out property <string> step: "";
+
+    /// The key whose phrase is being shown. Set by whoever opened the screen —
+    /// the dashboard banner names the key the wallet is nagging about, a row on
+    /// the keys screen names the row.
+    ///
+    /// The UI owns this because the UI is the only thing that knows which key
+    /// somebody pointed at. Nothing about it is trusted: the vault re-derives
+    /// the passphrase for this label and refuses a name it does not hold, so the
+    /// worst a stale label can do is produce a refusal that says so.
+    in-out property <string> label: "";
+
+    /// Whether this key's phrase has already been confirmed written down.
+    ///
+    /// Decides how the sitting ends: a first backup ends in the verification
+    /// step, a re-read ends with a button that closes the screen. Being wrong in
+    /// either direction is harmless — a re-read that skips the check records
+    /// nothing, and a first read that asks for it again is answered by a flag
+    /// that is already set.
+    in-out property <bool> re-reading: false;
+
     in property <[SeedWord]> words: [];
     /// 1-based positions the confirmation step asks for. Chosen in core — a
     /// screen that picked its own could pick the same three every time.
     in property <[int]> challenge: [];
     in-out property <Note> problem;
     in property <bool> busy: false;
+
+    /// Leave the backup screen, whichever way somebody left it.
+    ///
+    /// A function on the global rather than the same five lines written out at
+    /// each exit. There are two: the screen's own close, which every button on
+    /// it goes through, and the Escape chain in `app.slint`, which cannot reach
+    /// that function because it sits outside the `if` the screen is mounted in.
+    /// A copy that forgot to blank `label` would be the one that sends the next
+    /// passphrase for the wrong key.
+    ///
+    /// Telling the core is part of leaving and not a separate step:
+    /// `cancel-backup` is what overwrites the words and drops them — clearing
+    /// the properties here is only the navigation half. See `seed::close`.
+    ///
+    /// It records nothing. An unfinished backup keeps its "not backed up" flag
+    /// and the offer comes back; a re-read that ends here leaves the key
+    /// exactly as it was found.
+    public function leave() {
+        SeedState.problem = { code: "", args: [] };
+        SeedState.step = "";
+        SeedState.label = "";
+        SeedState.re-reading = false;
+        Actions.cancel-backup();
+    }
 }
 
 // Sending.
