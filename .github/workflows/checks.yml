@@ -1,0 +1,321 @@
+# Clippy, the test suite and the supply-chain policy — on `main`, and on every
+# pull request.
+#
+# Every job calls `scripts/check.sh` rather than listing the commands here, so
+# that what CI runs and what you can run on your own machine are the same thing
+# by construction rather than by somebody remembering to update both.
+#
+# `push` is narrowed to `main` and `pull_request` carries everything else. Work
+# in this project lands through a pull request and the pull request's checks
+# are the merge gate, so a trigger that only fires on `push` would leave the
+# gate measuring nothing on a fork's branch — the one case a push trigger
+# cannot cover, because a fork pushes to its own repository. Firing on both for
+# every branch is the shape to avoid: a branch of this repository with an open
+# pull request would then run the whole matrix twice for one commit. Keeping
+# `push` for `main` alone is what stops that while still checking the tip after
+# a merge, which is the only thing a merge can break that the pull request
+# could not see.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here writes anything. Checkout reads, the cache is scoped on its own
+# and not through this token, and upload-artifact has its own. Left unset the
+# token inherits the repository default, which on a repository created before
+# that default changed is still write on `contents` — an ambient write token in
+# the workflow whose third job exists to police what enters the dependency
+# graph, and which downloads and executes a binary from a third-party release.
+permissions:
+  contents: read
+
+# A second push supersedes the first. There is no reason to keep a run alive
+# for a commit nobody is looking at any more.
+#
+# `main` is the exception, and it is the one branch where that sentence is
+# false: someone is looking at every commit on it, which is the entire reason
+# the `push` trigger above was kept. The group key is
+# `checks-refs/heads/main` for every merge, so with a flat `true` a merge
+# cancels the run of the merge before it — and two merges inside one run's
+# duration is ordinary on a repository that budgets an eight-gigabyte swapfile
+# for its compile. The commit that is never checked is then the one the
+# question "which merge broke main" is about, and it carries a grey cancelled
+# cross in the commit list forever, which is how people learn to stop reading
+# the column. Superseding stale pull-request runs is the behaviour worth
+# having; superseding main's history is not.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # One job per half, on its own machine.
+  #
+  # The first two attempts both died compiling pecu-ui, which is the large
+  # generated Slint crate: once with "No space left on device", once four
+  # minutes into a silent compile with SIGTERM and an `if: always()` step
+  # skipped, which is a runner going down rather than a command failing.
+  # Clippy and rustc share no artefacts, so doing both on one four-core,
+  # sixteen-gigabyte runner asks it to hold two complete sets — forty
+  # gigabytes on the machine this was developed on. Split, each machine holds
+  # one.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        half: [clippy, test]
+
+    runs-on: ubuntu-latest
+
+    # The recorded failure mode of this job is a runner that hangs rather than
+    # one that fails — four minutes into a silent compile, with SIGTERM. At the
+    # 360-minute default a repeat of that costs six hours of a blocked merge
+    # gate before anybody is told anything. An hour is several times the honest
+    # worst case and still an answer the same morning.
+    timeout-minutes: 60
+
+    env:
+      CARGO_TERM_COLOR: always
+      # Debug information is the bulk of `target`, and `line-tables-only`
+      # keeps the file and line in a backtrace, which is the part worth having
+      # when a test fails. Incremental artefacts are waste on a machine that
+      # compiles each crate exactly once — eighteen of those forty gigabytes.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # Four parallel rustc processes against sixteen gigabytes is what the
+      # silent four-minute compile looked like. Two is slower and finishes.
+      CARGO_BUILD_JOBS: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image ships toolchains this repository has no use for, and they
+      # cost more disk than the whole build needs. Swap is headroom for the
+      # one crate that spikes: slower than memory, and far better than a
+      # runner that disappears mid-compile.
+      - name: Headroom
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost /usr/local/.ghcup
+          # The image already has /swapfile, in use — so this is a second one
+          # beside it rather than an attempt to replace it, which is what
+          # "fallocate failed: Text file busy" was.
+          if ! swapon --show=NAME --noheadings | grep -qx /swapfile2; then
+            sudo fallocate -l 8G /swapfile2
+            sudo chmod 600 /swapfile2
+            sudo mkswap /swapfile2
+            sudo swapon /swapfile2
+          fi
+          swapon --show
+          df -h /
+          free -h
+
+      # What the build asks pkg-config for, and the compiler SQLite is built
+      # with — `rusqlite` compiles it from source rather than linking, which is
+      # why there is no libsqlite3-dev here. The X11, Wayland and GL libraries
+      # are not named because nothing links them: the interface tests render
+      # offscreen and never open a window.
+      #
+      # `libfontconfig1-dev` rather than `libfontconfig-dev`: the second is a
+      # transitional package that resolves to the first today and is the kind
+      # of name that stops existing in a release nobody here is watching.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libfontconfig1-dev
+
+      # Pinned, not `stable`. The workspace sets `rust-version = "1.95"` and
+      # the machine this is developed on has exactly that with no rustup and
+      # no headroom; latest stable is several minors ahead. Clippy runs
+      # `pedantic` at warn against `-D warnings`, so every release that adds
+      # or widens a lint is a chance for CI to fail on something the author
+      # cannot reproduce, let alone fix, at their own desk. A lint nobody can
+      # see is not a quality gate, it is a blocked branch.
+      #
+      # `rustup` is already on the image, so this needs no third-party action.
+      # If early warning about new lints is wanted, it belongs in a second,
+      # non-blocking job on `stable` rather than in the one that gates the tip.
+      - name: Toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component clippy
+          rustup default 1.95.0
+          rustc --version
+          cargo --version
+
+      # Keyed on Cargo.lock, which pins the SDK by revision — so the key moves
+      # exactly when the dependency graph does.
+      #
+      # `target` is deliberately not cached. It is several gigabytes per half
+      # against a ten-gigabyte per-repository budget, and the `restore-keys`
+      # prefix makes a *stale* restore the common case rather than the rare
+      # one — so the usual outcome is unpacking gigabytes of artefacts that a
+      # moved Cargo.lock has already invalidated, onto the machine whose
+      # recorded failure mode is running out of disk. The registry and the git
+      # database are small and always pay for themselves, because the SDK is a
+      # git dependency and cloning it is the slow part of a cold start.
+      #
+      # One key across all three jobs, because with `target` gone what is left
+      # is a pure function of Cargo.lock: the clippy, test and deny copies
+      # would be byte-identical by construction. Three of them would spend
+      # three times the SDK's git database against the same ten-gigabyte budget
+      # that is the argument for not caching `target` at all, and that budget
+      # is evicted least-recently-used — so splitting the key makes the cold
+      # start it exists to prevent more likely, not less.
+      #
+      # Restore-only here. Three jobs racing to save one key means two of them
+      # log "another job may be creating this cache" and throw their copy away;
+      # `supply-chain` does the saving because it finishes in about a minute,
+      # while these two are still linking.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The sampler prints memory and disk every thirty seconds *into this
+      # step*, because a runner that goes down takes every `if: always()` step
+      # with it — as the second attempt showed. If this dies again, the last
+      # line before the silence says which of the two ran out.
+      #
+      # No `du -sh target` in this loop, though the size is the thing one most
+      # wants: it walks a nineteen-gigabyte tree twice a minute, against the
+      # compile it is watching, on the machine whose recorded failure mode is
+      # disk. `df -h /` already answers which of the two ran out, and the step
+      # below reports the size once, after the contention stops mattering.
+      #
+      # The trap kills the subshell's children as well as the subshell. Killing
+      # only the parent orphans an in-flight `sleep` or `df` that still holds
+      # this step's stdout, and the runner reads that pipe until EOF — so every
+      # job would idle up to thirty seconds after the checks had finished.
+      - name: Checks
+        run: |
+          ( while sleep 30; do
+              printf '· %s  mem %sG used, %sG avail (+%sG swap used)  disk %s free\n' \
+                "$(date -u +%H:%M:%S)" \
+                "$(free -g | awk '/^Mem:/{print $3}')" \
+                "$(free -g | awk '/^Mem:/{print $7}')" \
+                "$(free -g | awk '/^Swap:/{print $3}')" \
+                "$(df -h --output=avail / | tail -1 | tr -d ' ')"
+            done ) &
+          sampler=$!
+          trap 'pkill -P "$sampler" 2>/dev/null; kill "$sampler" 2>/dev/null; true' EXIT
+          bash scripts/check.sh ${{ matrix.half }}
+
+      - name: Headroom left
+        if: always()
+        run: |
+          df -h /
+          free -h
+          du -sh target 2>/dev/null || true
+
+      # A failed visual test writes a diff image beside every reference it did
+      # not match. Without these the log says which screens changed but not
+      # what they now look like, which is the half that decides whether the
+      # change was wanted.
+      #
+      # Only the `test` half can produce one. On the clippy half this step
+      # would find nothing and say so — a warning, in a repository whose README
+      # says warnings are not acceptable output, printed into the run somebody
+      # is already reading because something failed.
+      - name: Snapshot diffs
+        if: failure() && matrix.half == 'test'
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs-${{ matrix.half }}
+          path: crates/pecu-ui/tests/snapshots/*.diff.png
+          if-no-files-found: ignore
+
+  # The third half, and a job of its own rather than a third entry in the
+  # matrix above.
+  #
+  # `cargo deny` compiles nothing: it reads Cargo.lock and the RustSec
+  # database. Every expensive step in `checks` — the eight-gigabyte swapfile,
+  # the toolchain purge, apt, the two-job build limit, the memory sampler, the
+  # snapshot upload — exists for a compile that does not happen here, and
+  # putting this in the matrix would mean five `if: matrix.half != 'deny'`
+  # guards on steps whose whole purpose is then to not run. A separate job
+  # reads as what it is, and it finishes in about a minute while the other two
+  # are still linking.
+  supply-chain:
+    runs-on: ubuntu-latest
+
+    # Against the "about a minute" claimed above. Generous enough never to fire
+    # on a slow clone, tight enough that if this job ever stops being a minute
+    # long, that is reported rather than absorbed.
+    timeout-minutes: 15
+
+    env:
+      CARGO_TERM_COLOR: always
+      # Pinned. `deny.toml` is written against the 0.20 schema, which dropped
+      # keys that earlier versions require and added ones they reject outright
+      # rather than ignore — so an unpinned install turns a policy file into a
+      # moving target, and the failure it produces names a TOML field rather
+      # than a dependency. 0.20.2 is the version the policy was verified
+      # against.
+      CARGO_DENY_VERSION: 0.20.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The prebuilt release binary, not `cargo install cargo-deny`, which
+      # compiles roughly four hundred crates and takes longer than the job it
+      # is part of. A static musl build needs nothing from the image, and the
+      # published SHA-256 is checked before the archive is unpacked — this is
+      # a supply-chain job, and downloading an unverified binary to run it
+      # would be a poor joke. Upstream publishes the checksum beside the
+      # tarball; both are pinned to the version above.
+      - name: cargo-deny
+        run: |
+          base=https://github.com/EmbarkStudios/cargo-deny/releases/download
+          name=cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl
+          curl -fsSL --retry 3 -o "$name.tar.gz"        "$base/$CARGO_DENY_VERSION/$name.tar.gz"
+          curl -fsSL --retry 3 -o "$name.tar.gz.sha256" "$base/$CARGO_DENY_VERSION/$name.tar.gz.sha256"
+          echo "$(cat "$name.tar.gz.sha256")  $name.tar.gz" | sha256sum --check --strict
+          tar -xzf "$name.tar.gz"
+          install -Dm755 "$name/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
+          rm -rf "$name" "$name.tar.gz" "$name.tar.gz.sha256"
+          # Where `cargo install` would have put it, which is what makes
+          # `cargo deny` resolve as a subcommand. The image already has this on
+          # PATH; saying so again costs nothing and does not depend on it.
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo-deny" --version
+
+      # The same pin as the other two jobs. cargo-deny shells out to
+      # `cargo metadata` to build the graph it judges, and reading that graph
+      # with a different cargo than the one that compiles it is how a policy
+      # ends up passing against a tree nobody builds.
+      - name: Toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+          cargo --version
+
+      # `cargo metadata` still has to fetch the SDK's git repository to resolve
+      # the graph, and that clone is the slow part of this job. No `target`
+      # here for the same reason as above, and because nothing writes one.
+      #
+      # The same key the two `checks` jobs restore from, and this is the job
+      # that saves it — see the note there. It is the short one, so the cache
+      # lands while the other two are still compiling.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # `bash scripts/check.sh` rather than the bare path, in both jobs. The
+      # script is executable in the tree, but that leaves every step in this
+      # file depending on a file mode surviving a round trip through git — and
+      # the failure when it does not is "Permission denied" before a single
+      # cargo command runs, which reads as nothing to do with a file mode.
+      - name: Checks
+        run: bash scripts/check.sh deny

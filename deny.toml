@@ -1,0 +1,262 @@
+# Supply-chain policy for `cargo deny`. Four checks run: advisories, bans,
+# licenses, sources. All four must pass with no output other than the summary
+# line — the same standard the rest of this workspace holds clippy to.
+#
+# Written against cargo-deny 0.20.2. The 0.19/0.20 schema dropped the
+# per-severity keys (`vulnerability`, `unsound`, `notice`) and the
+# `[advisories] version` marker; setting any of them here would print a
+# deprecation warning on every run, which is exactly the noise that trains
+# people to stop reading the output.
+
+[graph]
+# Resolve with every feature enabled rather than the default set. A dependency
+# that only appears behind a feature flag is still a dependency somebody can
+# turn on, and finding out it was unlicensed or advisory-bearing at the moment
+# a feature is enabled is finding out too late. This costs nothing today: the
+# check passes identically with `all-features = false`.
+all-features = true
+
+[advisories]
+# Report unmaintained crates wherever they are in the graph, not just for the
+# workspace's direct dependencies. Everything this wallet renders with is
+# transitive through Slint, so the workspace-only default would report nothing
+# and mean nothing.
+unmaintained = "all"
+# A yank is the registry's own statement that a version should not be used.
+# The cargo-deny default only warns; a warning that nobody has to act on is a
+# warning nobody acts on.
+yanked = "deny"
+
+ignore = [
+  # paste 1.0.15 — the author archived the repository and declared it
+  # unmaintained. It is a proc-macro for pasting identifiers together: it runs
+  # at compile time, produces no code of its own, and is reached only through
+  # image decoding (pulp -> exr -> image, and rav1e -> ravif -> image), which
+  # Slint pulls in for its image support. There is a drop-in fork, `pastey`,
+  # and `pastey` is already in this tree at two versions for other consumers —
+  # so the fix here is entirely upstream's to make. Drop this entry when
+  # `image`/`rav1e` finish migrating; there is nothing to do here in the
+  # meantime, and nothing an attacker can reach, because a proc-macro is not
+  # part of the shipped binary.
+  #
+  # The `reason` repeats the trigger rather than the argument, because the
+  # prose above lives only in this file and the person who needs it most is
+  # reading a red CI log that otherwise carries an advisory ID and a
+  # dependency path.
+  { id = "RUSTSEC-2024-0436", reason = "compile-time proc-macro reached only through image decoding, absent from the shipped binary - drop when image/rav1e finish migrating to pastey" },
+
+  # ttf-parser 0.25.1 — unmaintained, with `skrifa` named as the successor.
+  # This one parses fonts, which in the general case is attacker-supplied
+  # input, and it arrives by three separate paths: fontdb -> usvg -> resvg for
+  # SVG text, owned_ttf_parser -> ab_glyph -> sctk-adwaita for Wayland window
+  # decorations, and rustybuzz -> usvg. The reason it is tolerated is narrower
+  # than "no fix available": this wallet bundles its own faces and never loads
+  # a font from a file, a URL, or a document a user was sent. Re-read that
+  # sentence before adding any feature that renders a user-supplied font,
+  # SVG, or document — the moment one exists, this entry stops being honest
+  # and the advisory has to be answered rather than acknowledged.
+  { id = "RUSTSEC-2026-0192", reason = "font parsing, but this wallet bundles its own faces and loads no font, SVG or document from a file, a URL or a user - revisit the moment a feature does" },
+
+  # rustybuzz 0.20.1 — unmaintained. The complex-text shaper behind
+  # usvg -> resvg -> Slint, and a HarfBuzz port, so the same font-parsing
+  # argument and the same trigger for revisiting it apply. It cannot be
+  # removed without Slint changing its SVG stack, which is not something this
+  # repository can do. Drop this entry when Slint moves off resvg/usvg or
+  # usvg moves off rustybuzz.
+  { id = "RUSTSEC-2026-0206", reason = "the shaper under Slint's SVG stack, same bundled-faces argument as RUSTSEC-2026-0192 - drop when Slint moves off resvg/usvg or usvg off rustybuzz" },
+]
+
+[licenses]
+# The allow list is deliberately the exact set the current tree needs and not
+# one entry more, and `unused-allowed-license = "deny"` is what keeps it that
+# way: an entry that stops being reachable fails the check and has to be
+# deleted. That is the half of "fail on a surprise" that a permissive allow
+# list normally gets wrong — a stale allowance is an unexamined allowance.
+unused-allowed-license = "deny"
+allow = [
+  # The permissive core. Everything in this tree that is dual-licensed
+  # `MIT OR Apache-2.0` is satisfied here, as is the workspace itself.
+  "Apache-2.0",
+  "MIT",
+  # `ring` is `Apache-2.0 AND ISC` and `dpi` is `Apache-2.0 AND MIT`: an AND
+  # expression needs every term allowed, so ISC is load-bearing rather than
+  # decorative.
+  "ISC",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "Zlib",
+  # `unicode-ident` is `(MIT OR Apache-2.0) AND Unicode-3.0`, and the ICU
+  # crates are Unicode-3.0 outright. Unicode's licence is OSI-approved and
+  # permissive; the AND is why it must be listed.
+  "Unicode-3.0",
+  # `ksni` — the Linux tray-icon crate Slint uses — is Unlicense and nothing
+  # else, so there is no permissive alternative term to fall back to. The
+  # Unlicense is a public-domain dedication rather than an OSI licence, which
+  # is a defect in provenance, not in permission: it grants strictly more than
+  # MIT would. Listed knowingly.
+  "Unlicense",
+  # `clipboard-win` and `error-code`, both Boost. OSI-approved, permissive,
+  # no attribution requirement on binaries.
+  "BSL-1.0",
+  # `webpki-roots` — the Mozilla root program shipped as data. CDLA-Permissive
+  # is a data licence rather than a code licence, which is the right shape for
+  # what this crate actually is, and it is permissive. Not OSI-listed, because
+  # OSI does not review data licences.
+  "CDLA-Permissive-2.0",
+  # `libfuzzer-sys` is `(MIT OR Apache-2.0) AND NCSA` and sits in the lockfile
+  # behind rav1e's `fuzzing` feature, which nothing here enables. It is listed
+  # because cargo-deny reads the lockfile rather than the build plan, and NCSA
+  # is OSI-approved and permissive in any case.
+  "NCSA",
+  # Slint is `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+  # LicenseRef-Slint-Software-3.0`, and allowing exactly one arm of that OR is
+  # how this file records which one the project takes. Allowing the
+  # royalty-free arm and NOT GPL-3.0-only is the whole point: it keeps the
+  # workspace's own Apache-2.0 licensing coherent, and it means that if a
+  # future Slint release drops or renames the royalty-free option, this check
+  # fails instead of quietly falling through to GPL-3.0-only. That arm carries
+  # conditions (desktop/mobile/web applications, attribution, no use of Slint
+  # to build a competing toolkit) which this wallet meets today — but it is a
+  # licensing commitment, not a build setting, and it deserves a human's
+  # signature rather than a bot's. No other crate can match this identifier.
+  "LicenseRef-Slint-Royalty-free-2.0",
+]
+
+[bans]
+# Blanket-denying duplicates is the version of this check that gets switched
+# off. The platform tree resolves 35 crates at two or more versions today —
+# bitflags, objc2*, calloop, nom, rustix, hashbrown and the rest — essentially
+# all of it winit/Slint/zbus consumers disagreeing about a major. None of it is
+# actionable from here, so a global deny would fail on day one and be skipped
+# forever after.
+#
+# What is worth failing over is a duplicate of a crate that touches keys,
+# signatures, or the TLS that carries them. Two copies of a crypto crate means
+# two implementations, two audit surfaces, and the real hazard: one of them
+# being the version an advisory has not been filed against yet. Each entry
+# below is a crate this tree resolves to exactly ONE version today; the rule
+# is that it stays that way.
+multiple-versions = "allow"
+# Dev-dependencies count. A second `ring` reachable only from a test harness is
+# still a second `ring` compiled on every developer's machine and in CI.
+multiple-versions-include-dev = true
+# A path dependency with no version is fine inside this workspace and nowhere
+# else; `allow-wildcard-paths` draws exactly that line, since every member here
+# is `publish = false`.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# Entries for crates not currently in the tree (`secp256k1`,
+# `curve25519-dalek`) are intentional and cost nothing: they are the shape of
+# the rule, so that pulling one in later cannot quietly arrive as a pair.
+[[bans.deny]]
+name = "ring"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "rustls"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "zeroize"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "sha2"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "subtle"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "k256"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "secp256k1"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "curve25519-dalek"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "aes"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "chacha20poly1305"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "argon2"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "bellman"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "bls12_381"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "jubjub"
+deny-multiple-versions = true
+[[bans.deny]]
+name = "sapling-crypto"
+deny-multiple-versions = true
+
+# `getrandom` is the one crate where the duplicate rule above cannot be used,
+# and the one where it would have mattered most: the tree holds three copies.
+# 0.3.4 is what `pecu-keystore` depends on directly and what `entropy()` and
+# the vault's nonce generation call as `getrandom::fill` — verified with
+# `cargo tree -i getrandom@0.3.4`, whose only reverse dependency is
+# pecu-keystore. 0.2.17 arrives under `rand_core 0.6.4` (bellman, bls12_381,
+# crypto-bigint) and under `ring`. 0.4.3 is Windows-only plumbing beneath
+# `tempfile` and `jobserver`.
+#
+# So instead of counting versions, this pins the shape: the pre-0.3 copy is
+# banned everywhere except behind the two parents that legitimately have it
+# today. Removing "ring" from the wrapper list is a one-line way to confirm
+# this rule still bites.
+#
+# Be exact about what it does not cover. `rand_core` is on the wrapper list,
+# and `rand_core` is the route by which almost everything reaches the old
+# getrandom — a workspace crate that adds `rand = "0.8"` resolves
+# rand 0.8 -> rand_core 0.6 -> getrandom 0.2 and this rule reports ok. So this
+# entry does not decide which getrandom the wallet's own key material uses; the
+# RNG crate above it does, and the rule below is the one that pins that.
+[[bans.deny]]
+name = "getrandom"
+version = "<0.3.0"
+wrappers = ["rand_core", "ring"]
+
+# `rand` is where the workspace can actually regress, so the rule belongs here
+# rather than on the wrapper list above. The four wrappers are rand 0.8.7's
+# complete set of direct parents today — verified with
+# `cargo tree -i rand@0.8.7 --all-features --depth 1` — and all four are inside
+# the SDK's sapling and proving stack, which this repository cannot change. A
+# workspace crate reaching for `rand 0.8` to generate a key, a nonce or a
+# blinding factor is the ordinary way this regresses, and it is exactly the
+# case this fails on: the parent is not on the list, so the check names it.
+#
+# rand, rand_core and rand_chacha are each in the tree at two versions
+# (0.8.7/0.9.5, 0.6.4/0.9.5, 0.3.1/0.9.0). That pair is not what is being
+# banned — the old arm is the SDK's and is not going anywhere — the pair only
+# means `deny-multiple-versions` would fail on day one and teach nothing.
+[[bans.deny]]
+name = "rand"
+version = "<0.9"
+wrappers = ["pasta_curves", "sapling-crypto", "verus-flows", "verus-sapling"]
+
+[sources]
+# Everything comes from crates.io or from the SDK's own repository. Nothing
+# else — not a vendored fork, not a personal remote, not a registry mirror.
+unknown-registry = "deny"
+unknown-git = "deny"
+# The one exception, and it is pinned by rev in the workspace manifest rather
+# than tracking a branch. Fourteen crates resolve from it: verus-sdk, verus-rpc
+# and verus-flows are declared here, and verus-keys, verus-light,
+# verus-sapling, verus-wire, verus-tx and the six verus-tx-* members come with
+# them. Allowing the remote rather than each crate is deliberate — the rev pin
+# in Cargo.toml is what fixes the content, and this line only fixes where it
+# may come from.
+allow-git = ["https://github.com/chainvue/verus-rust-sdk"]
+# And this is what makes the sentence above a policy instead of a comment. The
+# default is `any`, under which changing `rev = "..."` to `branch = "main"` on
+# any of the three SDK entries in Cargo.toml keeps this check green — turning
+# the fourteen crates that hold key handling, signing and transaction
+# construction into a moving target with the supply-chain gate reporting ok.
+# They are the one dependency here that no registry checksum content-addresses,
+# so the rev pin is the whole of their integrity and it should fail loudly when
+# it is removed.
+required-git-spec = "rev"

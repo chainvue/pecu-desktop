@@ -18,18 +18,23 @@
 //! # One set for every platform
 //!
 //! There is a single set of references and every platform compares against it.
-//! macOS and Linux do not draw this interface identically — 116 of the 132
-//! images differ — but the entire disagreement is 872 pixels off by 1 of 255,
-//! sitting in the navigation rail's icon column, where nothing has moved. It
-//! is a rounding difference in compositing. See `TOLERANCE` for the numbers
-//! and for why allowing it does not blunt this test.
+//! macOS and Linux do not draw this interface identically — 124 of the 142
+//! images differ — but the entire disagreement is 936 pixels off by 1 of 255,
+//! all but sixteen of them in the navigation rail's icon column, where nothing
+//! has moved. It is a rounding difference in compositing. See `TOLERANCE` for
+//! the numbers and for why allowing it does not blunt this test.
+//!
+//! Architecture is not part of this. Linux on x86_64 and on aarch64 render all
+//! 142 byte for byte identically, so "Linux" above is one platform and not two
+//! that happen to agree — which is what makes a measurement taken in a
+//! container an answer about the runner.
 //!
 //! This was two sets, one per operating system, for as long as it took to find
 //! out what the difference actually was. Two sets are worse than a tolerance:
 //! a change reviewed on one platform lands red on the others, and the only
 //! response available is a blanket re-record — which verifies nothing and
 //! teaches the habit that ends snapshot testing. Windows would have made it
-//! three sets and 396 images.
+//! three sets and 426 images.
 //!
 //! Re-recording on any platform is fine. A set recorded on Linux differs from
 //! one recorded on macOS by the same 1 of 255, which is inside the tolerance
@@ -54,13 +59,14 @@ use pecu_ui::snapshot;
 /// ever raised. Here is the reason; the old note was right about the danger
 /// and wrong about the number.
 ///
-/// macOS and Linux disagree about this interface on 116 of the 132 images, on
-/// 872 pixels in total, and **every one of those pixels is off by exactly 1**.
-/// Not one to ten — one. They sit in the navigation rail's icon column and
-/// nothing about the layout differs, so it is a rounding difference in how a
-/// colour is composited, not geometry and not a subpixel edge. At zero that is
-/// 116 red images that mean nothing, and the answer to a test that is red for
-/// no reason is a blanket re-record.
+/// macOS and Linux disagree about this interface on 124 of the 142 images, on
+/// 936 pixels in total, and **every one of those pixels is off by exactly 1**.
+/// Not one to ten — one. All but sixteen sit in the navigation rail's icon
+/// column, and the sixteen that do not are single pixels in the convert
+/// screens and two in the search field; nothing about the layout differs, so
+/// it is a rounding difference in how a colour is composited, not geometry and
+/// not a subpixel edge. At zero that is 124 red images that mean nothing, and
+/// the answer to a test that is red for no reason is a blanket re-record.
 ///
 /// A tolerance of 1 does not hide what this test exists to catch. Measured
 /// against 3cfbd84, which moved the network screens into a Settings tab:
@@ -80,6 +86,16 @@ const TOLERANCE: u8 = 1;
 /// tolerance decides how *strong* a difference may be and this decides how
 /// *much* of it there may be, which is the half that catches a real change
 /// made of weak differences.
+///
+/// Re-measured against the current set rather than inherited from the older
+/// and smaller one, because the reasonable worry about a number like this is
+/// that it was calibrated on content that no longer represents the suite. The
+/// screens added since — the markets, the shielded send and receive paths —
+/// are the chart screens, with large gradient fills and antialiased curves,
+/// which is exactly the content where compositing rounding could be expected
+/// to spread across thousands of pixels instead of ten. It does not: every one
+/// of them differs on exactly eight pixels, all of them in the rail, and the
+/// worst image in the suite is still ten.
 ///
 /// It is also the tripwire under the measurement above. A Slint version or a
 /// third platform that pushes the rounding noise up says so here, instead of
