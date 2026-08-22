@@ -49,6 +49,9 @@ export component Icon inherits Rectangle {
 
     property <string> stroked:
         root.name == "chat" ? "M21 12a8 8 0 0 1-8 8H4l2.3-2.9A8 8 0 1 1 21 12z"
+      // Drawn here rather than taken from the kit, which ships no chevron:
+      // same 24-unit grid, same two-unit stroke as everything beside it.
+      : root.name == "chevron" ? "M 10 7 L 15 12 L 10 17"
       : root.name == "check" ? "M 3.0 12.0 A 9.0 9.0 0 1 0 21.0 12.0 A 9.0 9.0 0 1 0 3.0 12.0 Z M 8 12.5 L 11 15.5 L 16 9.5"
       : root.name == "convert" ? "M17 3l4 4-4 4 M21 7H7 M7 21l-4-4 4-4 M3 17h14"
       : root.name == "copy" ? "M 11.0 9.0 H 19.0 A 2.0 2.0 0 0 1 21.0 11.0 V 19.0 A 2.0 2.0 0 0 1 19.0 21.0 H 11.0 A 2.0 2.0 0 0 1 9.0 19.0 V 11.0 A 2.0 2.0 0 0 1 11.0 9.0 Z M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"

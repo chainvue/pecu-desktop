@@ -470,17 +470,23 @@ pub fn market_detail(ui: &AppWindow) {
 ///
 /// **This is what the live wallet looks like and no reference image had it.**
 /// The list is what a chain with three hundred currencies on it produces, and
-/// the detail beside a list that long is laid out completely differently from
-/// the detail beside a list of seven — which is how a chart that draws nothing
-/// and a panel that has to be scrolled both got past every picture here.
+/// no picture here had more than seven rows until this existed.
 ///
 /// The rows past the first few are generated: what matters is the *count*, and
 /// forty-nine rows of hand-written fixture would be forty-nine chances to
 /// mistype a number that nothing checks.
 pub fn markets_crowded(ui: &AppWindow) {
+    // Built on `market_moving` for its rows, and then **unselected**.
+    //
+    // The selection used to be harmless: the list and the detail were side by
+    // side, so a picture could show a long list and an open currency at once.
+    // They are two views now, and leaving `market_moving`'s selection in place
+    // would quietly turn this case into a second photograph of the detail — the
+    // long-list case would stop existing and no test would say so.
     market_moving(ui);
 
     let state = ui.global::<MarketState>();
+    state.set_selected(SharedString::new());
     let existing = state.get_rows();
     let mut rows: Vec<MarketRow> = (0..existing.row_count())
         .filter_map(|i| existing.row_data(i))
@@ -502,6 +508,21 @@ pub fn markets_crowded(ui: &AppWindow) {
     // and a fixture that imposed its own would be photographing an arrangement
     // the wallet never produces.
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+/// A chain that prices nothing at all.
+///
+/// Reachable on a young chain, or one whose baskets have all been defined and
+/// none started. It was a blank card in the corner of a split screen and is a
+/// blank *screen* now, so the list grew something to say — and a state the
+/// interface can reach is a state worth a picture of.
+pub fn markets_empty(ui: &AppWindow) {
+    markets(ui);
+    let state = ui.global::<MarketState>();
+    state.set_selected(SharedString::new());
+    state.set_rows(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<MarketRow>::new(),
+    ))));
 }
 
 /// A market whose price actually moved, and therefore has a chart.

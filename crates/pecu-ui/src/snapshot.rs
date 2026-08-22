@@ -198,6 +198,7 @@ pub const CASES: &[Case] = &[
     ("markets", "market-detail", crate::fixtures::market_detail),
     ("markets", "market-moving", crate::fixtures::market_moving),
     ("markets", "markets-crowded", crate::fixtures::markets_crowded),
+    ("markets", "markets-empty", crate::fixtures::markets_empty),
     ("convert", "convert", crate::fixtures::converting),
     ("convert", "convert-thin", crate::fixtures::converting_thin),
     (

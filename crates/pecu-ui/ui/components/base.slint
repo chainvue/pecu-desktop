@@ -307,6 +307,103 @@ export component Eyebrow inherits Text {
     color: Theme.text-tertiary;
 }
 
+// Where you are, and the one step back.
+//
+// # Two levels, not a trail
+//
+// Because two levels is what this application has. Everything else that goes
+// deeper is a sheet over the screen — `TxSheet`, `IdentitySheet` — which comes
+// back by closing rather than by climbing. A general breadcrumb would be a
+// component built for a hierarchy nobody has.
+//
+// # Why the root is a button and the leaf is not
+//
+// The leaf is where you already are, so it is a label. Rendering it as a link
+// would offer a journey to the place you are standing, which is the small lie
+// that makes people stop trusting breadcrumbs.
+export component Breadcrumb inherits HorizontalLayout {
+    // The place to go back to — "Markets".
+    in property <string> root-text;
+    // The place you are — the name of the thing being shown.
+    in property <string> leaf-text;
+    callback back();
+
+    spacing: Sp.s3;
+    alignment: start;
+
+    back-link := Rectangle {
+        width: label.width + Sp.s3 * 2;
+        height: label.height + Sp.s2 * 2;
+        border-radius: R.sm;
+        background: touch.has-hover ? Theme.bg-hover : transparent;
+        animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+        label := Text {
+            text: root.root-text;
+            font-size: Typo.caption;
+            font-weight: Typo.w-medium;
+            // Secondary rather than accent: this is a way back, not the thing
+            // on the screen worth pressing. It brightens on hover, which is
+            // where it says it can be pressed at all.
+            color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+            animate color { duration: Motion.fast; enabled: Motion.enabled; }
+        }
+
+        // The same ring every other control uses, and only for somebody
+        // navigating by keyboard — see `InputMode`.
+        if InputMode.keyboard && focus.has-focus: Rectangle {
+            border-radius: parent.border-radius;
+            border-width: 2px;
+            border-color: Theme.accent-ring;
+        }
+
+        focus := FocusScope {
+            key-pressed(event) => {
+                if (event.text == "\n" || event.text == " ") {
+                    root.back();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
+        }
+
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                InputMode.keyboard = false;
+                root.back();
+            }
+        }
+    }
+
+    // An icon, not a `›`. That character is in neither bundled face — see the
+    // top of `icons.slint` — so it draws nothing or falls through to the host,
+    // which is the per-platform fork bundling fonts exists to prevent.
+    Icon {
+        name: "chevron";
+        size: 12px;
+        tone: Theme.text-disabled;
+        y: (parent.height - self.height) / 2;
+    }
+
+    Text {
+        text: root.leaf-text;
+        font-family: Typo.mono;
+        font-size: Typo.caption;
+        font-weight: Typo.w-bold;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // Announced as the button it is. A label on its own would pass the
+    // screen-reader name check and still leave the control impossible to
+    // operate — see `a_screen_reader_can_actually_press_a_button`.
+    accessible-role: button;
+    accessible-label: @tr("Back to {}", root.root-text);
+    accessible-action-default => { root.back(); }
+}
+
 // The ONLY element allowed to render an amount.
 //
 // One place owns sign colouring and the monospace family, so a screen cannot
