@@ -226,6 +226,16 @@ export component AppWindow inherits Window {
     // look like one. Empty every time — a palette that reopens holding the last
     // search is answering a question from a minute ago.
     public function open-search() {
+        // Never over a recovery phrase. The palette mounts full-window and
+        // takes focus on `init`, so ⌘K on the phrase screen would put a search
+        // field over 24 visible words and steal the keyboard from them —
+        // against the invariant the backup screen is mounted under, that a
+        // phrase on screen is the only thing on screen. Refused here as well as
+        // at the mount below, because setting `open` and not rendering it would
+        // only mean the palette appears the moment the phrase screen closes.
+        if (SeedState.step != "") {
+            return;
+        }
         SearchState.query = "";
         SearchState.search("");
         SearchState.open = true;
@@ -441,6 +451,21 @@ export component AppWindow inherits Window {
                 // this line at all means a market is open.
                 if (MarketState.selected != "") {
                     MarketState.select("");
+                    return EventResult.accept;
+                }
+                // Last, because it is the outermost thing there is: the phrase
+                // screen replaces the shell rather than covering it, so nothing
+                // above can still be open when this line is reached.
+                //
+                // The same path "Later" and "Done" take — see
+                // `BackupScreen.close`. It abandons an unfinished backup rather
+                // than declining it, so the key keeps its flag and the offer
+                // comes back; and it ends a re-read the way the button does,
+                // recording nothing. Here because every other full-window view
+                // in this wallet leaves on Escape, and the one that must not
+                // strand anybody was the exception.
+                if (SeedState.step != "") {
+                    SeedState.leave();
                     return EventResult.accept;
                 }
             }
@@ -805,8 +830,11 @@ export component AppWindow inherits Window {
         //
         // Not offered while the wallet is locked or absent: there is nothing
         // to search, and a palette over the unlock form is a way to lose the
-        // field somebody was typing a passphrase into.
-        if SearchState.open && WalletState.exists && !WalletState.locked: palette := CommandPalette {
+        // field somebody was typing a passphrase into. Nor over a recovery
+        // phrase, for the same reason and with more at stake — that screen is
+        // mounted on the promise that nothing else is on it.
+        if SearchState.open && WalletState.exists && !WalletState.locked
+            && SeedState.step == "": palette := CommandPalette {
             width: 100%;
             height: 100%;
             dismissed => {

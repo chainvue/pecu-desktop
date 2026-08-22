@@ -202,3 +202,66 @@ fn escape_closes_an_open_market() {
          key from anything added to the chain below it",
     );
 }
+
+/// Escape leaves the recovery-phrase screen, and tells the core it left.
+///
+/// # Why this one is not like the others in the chain
+///
+/// Every other branch closes something drawn over the wallet. This one leaves
+/// the only full-window view that replaces the shell entirely, and it was the
+/// one view in the application Escape did not leave — defensible while the
+/// backup screen was a step in onboarding with a "Later" button always on it,
+/// and not once a Settings row can open it at any point in the wallet's life.
+///
+/// Telling the core matters as much as clearing the step. `cancel-backup` is
+/// what overwrites the words and drops them; a screen that vanished without it
+/// would leave a phrase held in memory behind a screen nobody can see.
+#[test]
+fn escape_leaves_the_recovery_phrase_screen() {
+    let window = snapshot::install().expect("offscreen platform");
+    let ui = unlocked_window(&window);
+
+    let cancelled: Rc<Cell<u32>> = Rc::default();
+    {
+        let cancelled = cancelled.clone();
+        ui.global::<Actions>()
+            .on_cancel_backup(move || cancelled.set(cancelled.get() + 1));
+    }
+
+    // The re-read state, because it is the one with something to leave behind:
+    // it carries the key whose words are on screen. A fixture with no label
+    // would let a broken exit pass the assertion below by never having had one.
+    pecu_ui::fixtures::backup_reread(&ui);
+    // The screen swap destroys whatever had focus, and the window refocuses the
+    // shortcut scope in response — a redraw is what makes that have happened
+    // before a key arrives.
+    window.request_redraw();
+    let _ = window.draw_if_needed(|_| {});
+
+    // First, the shortcut that must NOT work here. The shortcut scope encloses
+    // this screen — it is the same scope Escape has to reach — so ⌘K is live
+    // while 24 words are on screen, and the palette it opens mounts
+    // full-window and takes the keyboard on `init`. Refused, because the
+    // backup screen is mounted on the promise that nothing else is on it.
+    chord(&ui, Key::Meta, "k");
+    assert!(
+        !ui.global::<pecu_ui::SearchState>().get_open(),
+        "the command palette opened over a recovery phrase",
+    );
+
+    press(&ui, SharedString::from(Key::Escape));
+    release(&ui, SharedString::from(Key::Escape));
+
+    let seed = ui.global::<pecu_ui::SeedState>();
+    assert_eq!(seed.get_step(), "", "Escape did not leave the phrase screen");
+    assert_eq!(
+        seed.get_label(),
+        "",
+        "the key being shown was left behind for the next passphrase to be sent for",
+    );
+    assert!(
+        !seed.get_re_reading(),
+        "the sitting that just ended was left set for the next one",
+    );
+    assert_eq!(cancelled.get(), 1, "the core was never told to drop the words");
+}

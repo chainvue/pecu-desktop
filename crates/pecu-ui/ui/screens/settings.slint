@@ -4,7 +4,7 @@ import { Motion, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Eyebrow, ListRow, Segmented, StatusPill } from "../components/base.slint";
 import { KeyRow, KnownAddressRow } from "../vm/structs.slint";
 import { NodesScreen } from "network.slint";
-import { Actions, AppInfo, NetworkState, SendState, WalletState } from "../vm/state.slint";
+import { Actions, AppInfo, NetworkState, SeedState, SendState, WalletState } from "../vm/state.slint";
 import { Field } from "../components/form.slint";
 import { NoticeTitle } from "../components/note.slint";
 
@@ -346,11 +346,58 @@ export component KeyRowItem inherits VerticalLayout {
             // Bordered, like Remove on the node list. A bare word at the end
             // of a row reads as a label, and the two lists should not disagree
             // about what a row-level action looks like.
-            Rectangle {
-                width: 100px;
+            //
+            // Two of them now, so they get a layout of their own rather than
+            // the fixed slot one button could sit right-aligned in.
+            HorizontalLayout {
+                spacing: Sp.s3;
+                alignment: end;
+
+                // The way back to the words, for the rest of the wallet's life.
+                //
+                // Offered on a key that is already backed up, which is the whole
+                // point: a paper backup gets lost, burned, or written in
+                // handwriting nobody can read, and the wallet still holds the
+                // phrase at the moment somebody discovers that. It is offered on
+                // a key that is NOT backed up too — the same passphrase-gated
+                // screen the dashboard banner opens, reached from the row rather
+                // than from a banner somebody has scrolled past.
+                //
+                // Pressing it does not bring the banner back: a reveal is a
+                // read and takes no decision about whether the backup happened.
+                // The argument for that, and against the obvious alternative,
+                // is at `Command::RevealBackup`.
+                //
+                // Absent on a WIF import, which never had a phrase. Refusing by
+                // not offering rather than by offering and failing: the row
+                // already says "no recovery phrase" two elements to the left, and
+                // a button that exists only to explain why it cannot work is a
+                // worse sentence than the one already there.
+                if root.entry.origin != "wif": Btn {
+                    text: @tr("Show recovery phrase");
+                    // Named, unlike the button beside it, because these are one
+                    // per row and heard one after another. "Show recovery
+                    // phrase, show recovery phrase, show recovery phrase" is
+                    // three identical announcements for three different keys,
+                    // on the one action where picking the wrong one produces a
+                    // sheet of paper labelled with somebody else's key.
+                    //
+                    // The visible words first and then the name, rather than a
+                    // sentence of its own: somebody driving by voice says what
+                    // they can see, so the label on the button has to be the
+                    // start of the name it answers to.
+                    accessible-label: @tr("Show recovery phrase for {}", root.entry.label);
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        SeedState.problem = { code: "", args: [] };
+                        SeedState.label = root.entry.label;
+                        SeedState.re-reading = root.entry.backed-up;
+                        SeedState.step = "passphrase";
+                    }
+                }
+
                 Btn {
                     text: @tr("Rename");
-                    x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     clicked => {
                         WalletState.key-problem = { code: "", args: [] };

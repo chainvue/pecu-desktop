@@ -637,6 +637,18 @@ impl Vault {
     /// already unlocked. Showing recovery words is the highest-consequence read
     /// in the application and must not ride on a session someone opened twenty
     /// minutes ago and walked away from.
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError::WrongPassphrase`] if the passphrase does not open the
+    /// vault; [`VaultError::NoSuchKey`] for a label this vault does not hold,
+    /// which a caller reading a list drawn a moment ago can hit;
+    /// [`VaultError::NoPhrase`] for a WIF import, which never had words — see
+    /// the variant for why that is not a `NoSuchKey` with a sentence in it;
+    /// [`VaultError::Locked`] if the wallet is not open; and
+    /// [`VaultError::Corrupt`] if what comes back out is not the phrase that
+    /// went in. All five reach a person as different sentences, which is why
+    /// they are five values and not one.
     pub fn reveal_phrase(
         &self,
         label: &str,
@@ -662,7 +674,7 @@ impl Vault {
         let sealed = entry
             .phrase
             .as_ref()
-            .ok_or_else(|| VaultError::NoSuchKey(format!("{label} has no recovery phrase")))?;
+            .ok_or_else(|| VaultError::NoPhrase(label.to_string()))?;
 
         let opened = open_sealed(&dek, sealed, entry.aad(&doc.wallet_id, "phrase").as_bytes())
             .map_err(|_| VaultError::Corrupt("the phrase does not decrypt".into()))?;
@@ -752,6 +764,12 @@ impl Vault {
     /// sealed under anything, because it protects nobody. Requiring an unlock
     /// here would only mean the fact could be lost by an auto-lock landing
     /// between the last word and the Done button.
+    ///
+    /// Setting it is the only thing that ever happens to it: there is no
+    /// `mark_not_backed_up`, and the early return below is what makes a second
+    /// confirmation a no-op rather than a write. Why nothing — a second reveal
+    /// least of all — is allowed to un-set it is argued at
+    /// [`pecu_protocol::Command::RevealBackup`].
     pub fn mark_backed_up(&self, label: &str) -> Result<(), VaultError> {
         {
             let mut doc = self.doc.write().map_err(|_| VaultError::Locked)?;

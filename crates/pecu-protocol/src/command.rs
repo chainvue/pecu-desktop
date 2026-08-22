@@ -131,6 +131,25 @@ pub enum Command {
     /// Show the recovery phrase or WIF. Re-prompts for the passphrase on
     /// purpose: this is the highest-consequence read in the application and
     /// must not ride on a session unlocked twenty minutes ago.
+    ///
+    /// # A read, in the strict sense
+    ///
+    /// It names a `label` because any key may be asked for, at any point in the
+    /// wallet's life — not only the one the dashboard is currently nagging
+    /// about. Losing a paper backup is the normal failure over a span of years,
+    /// and the moment somebody discovers it is the moment the wallet has to be
+    /// able to help.
+    ///
+    /// So this takes no decision about `backed_up`. It does not set the flag, it
+    /// does not clear it, and the conversation it opens — [`Self::ShowNewPhrase`],
+    /// [`Self::HideBackup`], [`Self::ConfirmPhrase`], [`Self::CancelBackup`] —
+    /// can only ever set it. Somebody who comes back for words they wrote down
+    /// in 2024 is not told they have no backup for having asked, and the
+    /// dashboard banner does not reappear behind them. That is a deliberate
+    /// answer to the obvious alternative, which is to treat a reveal as
+    /// invalidating the copy on paper: it does not, because the paper is still
+    /// wherever it was, and a wallet that punished the question would teach
+    /// people not to ask it.
     RevealBackup {
         label: String,
         passphrase: Secret,

@@ -1593,6 +1593,42 @@ pub fn backup_phrase(ui: &AppWindow) {
     seed.set_step("phrase".into());
 }
 
+/// The passphrase re-prompt, which is the gate in front of every reveal.
+///
+/// It had no reference image, which was survivable while it was a step on the
+/// way back to an unfinished backup and is not now: the same gate now stands in
+/// front of every key's words for the rest of the wallet's life, and it is the
+/// only thing between an unlocked wallet and them.
+///
+/// Seeded on the dashboard-banner route — a key the wallet is nagging about,
+/// which is why `backup_due` is underneath. The re-read route reaches the same
+/// gate and photographs the same thing: what the two routes differ about is how
+/// the sitting ends, and [`backup_reread`] is the picture of that.
+pub fn backup_passphrase(ui: &AppWindow) {
+    backup_due(ui);
+    let seed = ui.global::<SeedState>();
+    seed.set_label("main".into());
+    seed.set_step("passphrase".into());
+}
+
+/// Reading a phrase again, from a row on the keys screen.
+///
+/// The same words behind the same mask as [`backup_phrase`] — and no real ones
+/// here either, for the reason spelled out there. What differs is the heading
+/// and the way out: there is nothing to prove at the end of a re-read, so the
+/// pair of buttons that ends in a quiz is one button that closes the screen.
+pub fn backup_reread(ui: &AppWindow) {
+    backup_phrase(ui);
+    // Reached from a key row rather than from the banner. This key's phrase was
+    // written down long ago, so the dashboard has nothing to nag about — and
+    // showing it again does not give it something.
+    ui.global::<WalletState>().set_backup_key(SharedString::new());
+
+    let seed = ui.global::<SeedState>();
+    seed.set_label("main".into());
+    seed.set_re_reading(true);
+}
+
 /// The confirmation step, after a wrong answer — the state worth looking at,
 /// because it is the one with an error in it.
 pub fn backup_verify(ui: &AppWindow) {

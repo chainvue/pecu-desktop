@@ -217,6 +217,98 @@ fn a_wif_import_has_no_phrase() {
     assert!(vault.reveal_phrase("main", &Secret::from(PASS)).is_err());
 }
 
+/// The three ways a reveal can be refused are three different sentences on
+/// screen, so they have to be three different values here.
+///
+/// They were not: a WIF used to come back as `NoSuchKey("main has no recovery
+/// phrase")`, which a caller can only tell apart from a genuinely missing key
+/// by reading the prose inside it. Every refusal therefore reached the person
+/// at the passphrase prompt as "that is not your passphrase" — the most
+/// alarming thing the wallet could have said, and wrong in two cases out of
+/// three.
+#[test]
+fn a_reveal_is_refused_with_the_reason_it_was_refused_for() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, _path) = new_vault(&dir);
+
+    vault
+        .add_key("wif-only", NewKey::FromWif { key: key() })
+        .expect("add");
+    vault
+        .add_key(
+            "worded",
+            NewKey::Generated {
+                key: key(),
+                phrase: Zeroizing::new("abandon abandon abandon about".to_string()),
+            },
+        )
+        .expect("add");
+
+    assert!(
+        matches!(
+            vault.reveal_phrase("wif-only", &Secret::from(PASS)),
+            Err(VaultError::NoPhrase(label)) if label == "wif-only",
+        ),
+        "a key that never had words is not a key that is not there",
+    );
+    assert!(
+        matches!(
+            vault.reveal_phrase("gone", &Secret::from(PASS)),
+            Err(VaultError::NoSuchKey(label)) if label == "gone",
+        ),
+        "a label nothing in the vault answers to is a missing key",
+    );
+    assert!(
+        matches!(
+            vault.reveal_phrase("worded", &Secret::from("not the passphrase")),
+            Err(VaultError::WrongPassphrase),
+        ),
+        "and only the passphrase being wrong is the passphrase being wrong",
+    );
+}
+
+/// Reading a phrase a second time is a read: it changes nothing, and confirming
+/// a backup twice writes nothing.
+///
+/// This is the property the whole "show it again" route rests on. If revealing
+/// ever consumed something, or if a second confirmation could flip the flag
+/// back, then somebody who came back years later because they had lost their
+/// paper would be punished for asking.
+#[test]
+fn revealing_and_confirming_again_changes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vault, path) = new_vault(&dir);
+
+    let phrase = Zeroizing::new("abandon abandon abandon about".to_string());
+    vault
+        .add_key(
+            "main",
+            NewKey::Generated {
+                key: key(),
+                phrase: phrase.clone(),
+            },
+        )
+        .expect("add");
+
+    vault.mark_backed_up("main").expect("mark");
+    let after_first = std::fs::read_to_string(&path).expect("read");
+
+    for _ in 0..3 {
+        let revealed = vault
+            .reveal_phrase("main", &Secret::from(PASS))
+            .expect("reveal");
+        assert_eq!(*revealed, *phrase);
+    }
+    vault.mark_backed_up("main").expect("mark again");
+
+    assert!(vault.keys()[0].backed_up, "the backup was un-recorded");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        after_first,
+        "reading the phrase again rewrote the vault",
+    );
+}
+
 #[test]
 fn labels_are_restricted() {
     let dir = tempfile::tempdir().expect("tempdir");

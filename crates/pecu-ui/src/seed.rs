@@ -100,6 +100,11 @@ pub fn close(ui: &AppWindow) {
     seed.set_challenge(ModelRc::from(Rc::new(VecModel::<i32>::from(Vec::new()))));
     seed.set_problem(crate::Note::default());
     seed.set_step(SharedString::new());
+    // Both of these are navigation, and both belong to the sitting that has
+    // just ended. A label left behind would be the key the *next* passphrase is
+    // sent for, which is the one mistake this indirection could make.
+    seed.set_label(SharedString::new());
+    seed.set_re_reading(false);
 }
 
 fn masked(count: u32) -> Vec<SeedWord> {
