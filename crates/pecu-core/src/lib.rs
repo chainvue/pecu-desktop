@@ -146,6 +146,7 @@ pub fn start(
         refreshing: false,
         work: work_tx,
         spendable: verus_sdk::money::Amount::ZERO,
+        key_funds: std::collections::BTreeMap::new(),
         shielded: None,
         light_server: None,
         scanning: false,
@@ -262,6 +263,14 @@ fn open_store(paths: &paths::Paths) -> Option<pecu_store::Store> {
         }
     }
 }
+
+/// A refusal that has already been reported to the interface.
+///
+/// The helpers that turn a draft away call `refuse_send` themselves, because
+/// each of them knows the sentence that fits. What the caller needs back is
+/// only "stop" — an error carrying a message would invite a second, worse one
+/// being written at the call site.
+struct Refused;
 
 // Nine flags on a forty-field actor. The lint is about a struct somebody
 // constructs positionally, where four bools in a row are four chances to swap
@@ -382,6 +391,17 @@ struct Core {
     /// draft offline; the builder is still the authority, and it refuses on its
     /// own terms if this turns out to be stale.
     spendable: verus_sdk::money::Amount,
+    /// The same figure, and the maturing one, per address.
+    ///
+    /// The wallet-wide `spendable` above is what the dashboard shows. This is
+    /// what the *send* screens need: a payment is signed by the active key and
+    /// spends its coins alone, so validating a draft against the wallet total
+    /// tells somebody they can afford something one key cannot pay for, and the
+    /// refusal then arrives from the builder — after the form said it was fine.
+    ///
+    /// An address missing from here has not been read, which is not the same as
+    /// holding nothing. See [`portfolio::Reading::by_address`].
+    key_funds: std::collections::BTreeMap<String, portfolio::KeyFunds>,
     /// The shielded side of the active key, once the wallet is open.
     ///
     /// `None` while locked, for a key that cannot have one, and before the
@@ -1611,6 +1631,7 @@ impl Core {
         self.cached.native = reading.native;
         self.cached.names.clone_from(&reading.names);
         self.spendable = reading.spendable;
+        self.key_funds.clone_from(&reading.by_address);
         self.native_balance = confirmed_native(reading);
 
         // What can be converted, which is not what can be spent: a token
@@ -1650,6 +1671,13 @@ impl Core {
 
         let portfolio = reading.portfolio(ticker);
         let _ = self.events.send(Event::Portfolio(portfolio.clone()));
+
+        // The per-key figures moved with this read, and they travel on the
+        // wallet rather than on the portfolio — see `WalletVm::key_funds`. So
+        // the wallet is republished here, as it already is after a shielded
+        // scan, for the same reason: the balance changed and the send form is
+        // drawn from it.
+        self.emit_wallet();
 
         match &reading.history {
             Ok(entries) => {
@@ -2704,6 +2732,7 @@ impl Core {
         self.cached = portfolio::Cached::default();
         self.refreshing = false;
         self.spendable = verus_sdk::money::Amount::ZERO;
+        self.key_funds.clear();
         self.native_balance = 0;
         self.prepared.clear();
         self.identity_changes.clear();
@@ -4122,6 +4151,21 @@ const SCAN_ATTEMPTS: u32 = 3;
             .map_or(0, shielded::Shielded::balance)
     }
 
+    /// What the key that would sign a payment holds, on its own.
+    ///
+    /// Zero for an address no refresh has covered yet, which is the same answer
+    /// the wallet-wide figure gives before its first read — the send form is
+    /// already written to treat a balance it has not been told about as a
+    /// balance it cannot promise. What it must not do is quote the *wallet's*
+    /// figure for one key: two keys with 5 coins each is not one key with 10,
+    /// and no transaction this wallet can build spends both.
+    fn active_key_funds(&self) -> portfolio::KeyFunds {
+        self.wallet
+            .active_address()
+            .and_then(|address| self.key_funds.get(&address).copied())
+            .unwrap_or_default()
+    }
+
     fn validate_draft(&mut self, draft: &pecu_protocol::SendDraft) {
         self.last_draft = draft.clone();
         self.maybe_resolve_identity(draft.to.trim());
@@ -4132,7 +4176,10 @@ const SCAN_ATTEMPTS: u32 = 3;
         // something they cannot, and the refusal would then arrive from the
         // builder — after the form had said it was fine.
         let against = match draft.from_pool {
-            pecu_protocol::Pool::Transparent => self.spendable,
+            // The **active key's** transparent balance, not the wallet's. The
+            // shielded figure is already per-key — there is only ever one
+            // shielded account open — so this is the half that was wrong.
+            pecu_protocol::Pool::Transparent => self.active_key_funds().spendable,
             pecu_protocol::Pool::Shielded => {
                 verus_sdk::money::Amount::from_sat(self.shielded_balance())
             }
@@ -6582,6 +6629,84 @@ const SCAN_ATTEMPTS: u32 = 3;
         self.validate_draft(&draft);
     }
 
+    /// Choose the notes a shielded payment will spend, or say why it cannot.
+    ///
+    /// Planned on the actor: choosing notes is arithmetic over state this
+    /// already holds, and it fails fast for the two reasons somebody most often
+    /// hits — nothing scanned, and not enough in one bundle. `Ok(None)` is a
+    /// route that needs no plan rather than a plan that could not be made.
+    ///
+    /// It lives out here because [`Self::prepare_send`] sits on clippy's
+    /// hundred-line ceiling exactly, so the function cannot take another line
+    /// without something leaving it. This block is the most self-contained
+    /// thing in it.
+    fn shielded_plan(
+        &mut self,
+        draft: &pecu_protocol::SendDraft,
+        route: pecu_protocol::Route,
+    ) -> Result<Option<shielded::PlannedSpend>, Refused> {
+        if !matches!(
+            route,
+            pecu_protocol::Route::Private | pecu_protocol::Route::Unshield
+        ) {
+            return Ok(None);
+        }
+
+        // Named separately from "this key has no shielded account". The two
+        // look identical on screen — no shielded payment — and call for
+        // opposite things: one is a key that can never have one, the other is a
+        // setting nobody has filled in yet.
+        if self.light_server.is_none() {
+            self.refuse_send(
+                NoteVm::plain("shielded-not-configured"),
+                "no light server is configured",
+            );
+            return Err(Refused);
+        }
+        let Some(shielded) = self.shielded.as_ref() else {
+            self.refuse_send(
+                NoteVm::plain("shielded-none"),
+                "this key has no shielded account",
+            );
+            return Err(Refused);
+        };
+        match shielded.plan_spend(&draft.to, &draft.amount) {
+            Ok(plan) => Ok(Some(plan)),
+            Err(error) => {
+                self.refuse_send(Self::shielded_note(&error), &error.to_string());
+                Err(Refused)
+            }
+        }
+    }
+
+    /// Turn away a "send everything" that has arrived on a route which cannot
+    /// serve it, having said why.
+    ///
+    /// [`Refused`] rather than a `bool`, for the reason that type carries: the
+    /// sentence has already been sent and the caller's only remaining move is
+    /// to stop. It sits immediately below [`Self::shielded_plan`], which means
+    /// the same thing by the same mechanism, and two spellings of "already
+    /// reported" a dozen lines apart is one more than this file needs.
+    ///
+    /// The flag rides on the same draft as the pool selector, so it reaches
+    /// every route whether or not the form offers it there. Ignored, a shielded
+    /// send-all would send whatever string happened to be left in `amount`,
+    /// which is the worst of the three things this could do.
+    fn refuses_send_all(
+        &mut self,
+        draft: &pecu_protocol::SendDraft,
+        route: pecu_protocol::Route,
+    ) -> Result<(), Refused> {
+        if !draft.send_all {
+            return Ok(());
+        }
+        let Some((note, why)) = send_all_refusal(route) else {
+            return Ok(());
+        };
+        self.refuse_send(note, why);
+        Err(Refused)
+    }
+
     /// Build and sign, off the actor.
     ///
     /// `prepare_send` reads the funding set first, so this is several requests
@@ -6616,6 +6741,10 @@ const SCAN_ATTEMPTS: u32 = 3;
         let to_shielded = verus_sdk::light::zaddr::decode(draft.to.trim()).is_ok();
         let route = pecu_protocol::Route::of(draft.from_pool, to_shielded);
 
+        if self.refuses_send_all(&draft, route).is_err() {
+            return;
+        }
+
         // The parameters are settled *before* anything is dispatched. Loading
         // them takes seconds and proving takes tens of seconds, so a wallet that
         // discovered they were missing inside the worker would look like it had
@@ -6634,38 +6763,8 @@ const SCAN_ATTEMPTS: u32 = 3;
             None
         };
 
-        // Planned on the actor: choosing notes is arithmetic over state this
-        // already holds, and it fails fast for the two reasons somebody most
-        // often hits — nothing scanned, and not enough in one bundle.
-        let plan = match route {
-            pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => {
-                // Named separately from "this key has no shielded account".
-                // The two look identical on screen — no shielded payment — and
-                // call for opposite things: one is a key that can never have
-                // one, the other is a setting nobody has filled in yet.
-                if self.light_server.is_none() {
-                    self.refuse_send(
-                        NoteVm::plain("shielded-not-configured"),
-                        "no light server is configured",
-                    );
-                    return;
-                }
-                let Some(shielded) = self.shielded.as_ref() else {
-                    self.refuse_send(
-                        NoteVm::plain("shielded-none"),
-                        "this key has no shielded account",
-                    );
-                    return;
-                };
-                match shielded.plan_spend(&draft.to, &draft.amount) {
-                    Ok(plan) => Some(plan),
-                    Err(error) => {
-                        self.refuse_send(Self::shielded_note(&error), &error.to_string());
-                        return;
-                    }
-                }
-            }
-            _ => None,
+        let Ok(plan) = self.shielded_plan(&draft, route) else {
+            return;
         };
 
         let from_address = self.wallet.active_address().unwrap_or_default();
@@ -6781,7 +6880,12 @@ const SCAN_ATTEMPTS: u32 = 3;
                 let known = self.known.contains_key(&prepared.to);
                 // Built from the SIGNED bytes, not from the draft — see
                 // `send::review`.
-                let review = send::review(ticket, &prepared, &from, self.spendable, known);
+                // The balance the payment came out of, so "Left afterwards"
+                // is about the key that just paid. Still the transparent one on
+                // every route — see `docs/LATER.md` §12, which is the other
+                // half of this line and is not fixed here.
+                let spendable = self.active_key_funds().spendable;
+                let review = send::review(ticket, &prepared, &from, spendable, known);
                 self.prepared.insert(ticket, prepared);
                 let _ = self.events.send(Event::SendPrepared(review));
             }
@@ -7067,6 +7171,18 @@ const SCAN_ATTEMPTS: u32 = 3;
             vm.shielded_scan = Some(share);
         }
 
+        // What the active key alone holds, for the send form. Formatted here
+        // because money is formatted in one place in this workspace, and
+        // published from `emit_wallet` because that is the moment the active
+        // key is settled — a key switch and a refresh both pass through here,
+        // and neither can forget.
+        let funds = self.active_key_funds();
+        vm.key_funds = pecu_protocol::KeyFundsVm {
+            spendable_display: portfolio::coins(funds.spendable),
+            immature_sats: funds.immature.to_sat().to_string(),
+            immature_display: portfolio::coins(funds.immature),
+        };
+
         vm.shielded_funds = match self.shielded.as_ref() {
             // Scanned: a figure, which may legitimately be zero.
             Some(held) if held.scanned_to().is_some() => pecu_protocol::ShieldedFunds::Scanned(
@@ -7267,6 +7383,37 @@ fn reveal_error_note(error: &pecu_keystore::VaultError) -> NoteVm {
     }
 }
 
+/// Why "send everything" cannot be served on this route, or `None` if it can.
+///
+/// A free function so the mapping can be checked without an actor, a vault and
+/// a chain behind it — see the tests at the bottom of this file. The wiring
+/// that acts on it is [`Core::refuses_send_all`], which is three lines long
+/// precisely because the decision is here.
+///
+/// **Two sentences, because there are two different situations.** A shielded
+/// *source* is money this cannot sweep: the shielded fee is flat in the number
+/// of input notes, so the fixpoint [`send::resolve_send_all`] exists for does
+/// not arise there, but a ten-note ceiling on a single spend makes "everything"
+/// unreachable in one transaction for a balance spread any wider — and whether
+/// that should send what ten notes reach or decline is a product decision, not
+/// one to settle inside a fee calculation. A shielded *destination* is money it
+/// cannot deliver: the coins really are the transparent ones, and telling
+/// somebody to pay from a different balance would be asking them to correct the
+/// half that is already right.
+fn send_all_refusal(route: pecu_protocol::Route) -> Option<(NoteVm, &'static str)> {
+    match route {
+        pecu_protocol::Route::Transparent => None,
+        pecu_protocol::Route::Shield => Some((
+            NoteVm::plain("send-all-shielded-recipient"),
+            "sending everything does not shield a balance",
+        )),
+        pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => Some((
+            NoteVm::plain("send-all-transparent-only"),
+            "sending everything is built for the transparent balance only",
+        )),
+    }
+}
+
 /// What the send form says when a build fails.
 fn send_note(error: &send::SendError) -> NoteVm {
     use verus_sdk::network::FlowError;
@@ -7277,6 +7424,10 @@ fn send_note(error: &send::SendError) -> NoteVm {
         send::SendError::Shielded(_) => NoteVm::plain("shielded-build-failed"),
         send::SendError::BadAmount => NoteVm::plain("amount-unparsable"),
         send::SendError::NothingToSend => NoteVm::plain("amount-zero"),
+        // The same sentence the form already showed offline. It reaches here
+        // when the coins moved between the keystroke and the build — the
+        // refusal did not change, only when it was found.
+        send::SendError::NotEnoughForFee => NoteVm::plain("amount-below-fee"),
         send::SendError::Vault(_) => NoteVm::plain("wallet-locked"),
         // The distinction the SDK draws and a wallet must not lose: what you
         // hold and what you can spend right now are different numbers, and a
@@ -8648,6 +8799,7 @@ mod tests {
             to: address.to_string(),
             amount: "1.0".to_string(),
             from_pool: pecu_protocol::Pool::Transparent,
+            send_all: false,
         }));
         // The label is its own field now, so this reads the thing itself
         // rather than looking for a substring of a sentence the core used to
@@ -8686,6 +8838,49 @@ mod tests {
             }
         }
         panic!("the core never sent the address book this test was waiting for");
+    }
+
+    /// The route that can be swept, and the only one.
+    #[test]
+    fn only_a_wholly_transparent_payment_can_send_everything() {
+        assert!(send_all_refusal(pecu_protocol::Route::Transparent).is_none());
+
+        for route in [
+            pecu_protocol::Route::Shield,
+            pecu_protocol::Route::Private,
+            pecu_protocol::Route::Unshield,
+        ] {
+            assert!(
+                send_all_refusal(route).is_some(),
+                "{route:?} was allowed to send everything",
+            );
+        }
+    }
+
+    /// A shielded **source** and a shielded **destination** are refused for
+    /// different reasons and must not borrow each other's sentence.
+    ///
+    /// `R → z` reaches this at all because the toggle stays on screen whenever
+    /// the transparent balance is paying: pasting a `zs1…` into a form already
+    /// set to send everything is one keystroke away. It used to be told to
+    /// "choose an amount to pay from the shielded one" — advice about a balance
+    /// that is not the one paying.
+    #[test]
+    fn shielding_everything_and_sweeping_a_shielded_balance_are_told_apart() {
+        let shielding = send_all_refusal(pecu_protocol::Route::Shield)
+            .expect("shielding cannot send everything");
+        let unshielding = send_all_refusal(pecu_protocol::Route::Unshield)
+            .expect("a shielded balance cannot send everything");
+
+        assert_eq!(shielding.0.code, "send-all-shielded-recipient");
+        assert_eq!(unshielding.0.code, "send-all-transparent-only");
+        assert_ne!(shielding.1, unshielding.1);
+
+        // `z → z` is the same situation as `z → R` — the source is what cannot
+        // be swept — so those two do share their words, deliberately.
+        let private = send_all_refusal(pecu_protocol::Route::Private)
+            .expect("a shielded balance cannot send everything");
+        assert_eq!(private.0.code, unshielding.0.code);
     }
 
     /// "never paid" rather than "0 payments", and singular where it should be.
@@ -8877,6 +9072,9 @@ mod tests {
             spendable: Amount::from_sat(500),
             // Confirmed and counted by the history, just not spendable yet.
             immature: Amount::from_sat(100),
+            // The anchor is a wallet-wide figure, so the per-key breakdown has
+            // nothing to say to it.
+            by_address: std::collections::BTreeMap::new(),
             // Confirmed outputs that an UNCONFIRMED transaction spends. Still
             // confirmed; the transaction spending them is not in the history.
             pending_out: Amount::from_sat(30),

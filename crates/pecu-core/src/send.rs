@@ -22,9 +22,15 @@
 use pecu_chain::{Chain, SpendPermit};
 use pecu_keystore::{Vault, VaultError};
 use pecu_protocol::{NoteVm, ReviewOutputVm, SendDraft, SendReviewVm};
-use verus_sdk::money::Amount;
-use verus_sdk::network::{self, FlowError, Sent, Unsent};
+use verus_sdk::money::{Amount, DEFAULT_FEE_PER_KB};
+use verus_sdk::network::{self, FlowError, Funding, Sent, Unsent};
 use verus_sdk::verus_keys::{Address, AddressKind};
+// `estimate_fee` is not in any of the curated `verus_sdk` facades — `money` and
+// `send` expose the types and the builders, not the fee heuristic. Reaching
+// through `verus_tx`, which the SDK re-exports wholesale for exactly this, is
+// deliberate: see `resolve_send_all` for why this module has to price a
+// transaction the builder has not been asked to build yet.
+use verus_sdk::verus_tx::estimate_fee;
 
 use crate::portfolio::coins;
 
@@ -60,6 +66,15 @@ pub enum SendError {
     BadAmount,
     #[error("send nothing and nothing happens")]
     NothingToSend,
+
+    /// Everything this key holds is worth less than it costs to move.
+    ///
+    /// Only reachable from a send-all: an ordinary payment of an amount the
+    /// fee tips out of reach is the SDK's `InsufficientFunds`, which can quote
+    /// both figures. This one cannot quote the fee, because there is no
+    /// transaction to price — see [`resolve_send_all`].
+    #[error("there is not enough here to cover the network fee")]
+    NotEnoughForFee,
     #[error(transparent)]
     Vault(#[from] VaultError),
     #[error(transparent)]
@@ -215,29 +230,74 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
         },
     };
 
-    let (amount_valid, amount_note) = match draft.amount.trim() {
-        "" => (false, NoteVm::none()),
-        text => match Amount::from_coins_str(text) {
-            Ok(amount) if amount.is_zero() => (false, NoteVm::plain("amount-zero")),
-            // The figure travels with the code, already spelled: money is
-            // formatted in exactly one place in this workspace and the
-            // interface is not a second one.
-            Ok(amount) if amount > spendable => (
-                false,
-                NoteVm::with("amount-above-spendable", [coins(spendable)]),
-            ),
-            Ok(_) => (true, NoteVm::none()),
-            // The SDK refuses more than eight decimal places rather than
-            // rounding, and so does this: a satoshi silently dropped is a
-            // satoshi the user did not decide to drop.
-            Err(_) => (false, NoteVm::plain("amount-unparsable")),
-        },
+    // The route, not the pool, is what decides whether a send-all can be
+    // served — and it is what `Core::refuses_send_all` branches on. Branching
+    // on the pool here said "ready" for a transparent balance paying a `zs1…`
+    // and then watched the core refuse it, which is precisely the disagreement
+    // the offline refusal below exists to prevent.
+    let route = pecu_protocol::Route::of(draft.from_pool, to_shielded);
+
+    // Sending everything has no typed amount to judge, and the form has no
+    // field to type one into. What is still knowable offline is the one refusal
+    // that matters: a balance at or under the cheapest possible fee cannot pay
+    // for any transaction at all. Deliberately without a figure — the fee is
+    // not known until coins have been selected, and quoting a guess is the
+    // mistake the amount field was taken off the form to avoid.
+    let (amount_valid, amount_note) = if draft.send_all {
+        // Refused here as well as at the builder, so the button is disabled
+        // rather than pressed into a refusal. Two codes rather than one,
+        // because the two refusals are about different halves of the payment
+        // and a sentence that fits one is false about the other: a shielded
+        // *source* is money this cannot sweep, a shielded *destination* is
+        // money it cannot deliver.
+        match route {
+            pecu_protocol::Route::Transparent => {
+                if spendable.to_sat() > cheapest_transparent_fee() {
+                    (true, NoteVm::none())
+                } else {
+                    (false, NoteVm::plain("amount-below-fee"))
+                }
+            }
+            // `R → z`. The coins being swept really are the transparent ones,
+            // so the sentence about paying from the shielded balance would be
+            // telling somebody to fix the half that is not wrong. What is
+            // wrong is the destination: shielding runs through a different
+            // builder with a different fee, and `resolve_send_all` prices a
+            // transparent payment.
+            pecu_protocol::Route::Shield => (false, NoteVm::plain("send-all-shielded-recipient")),
+            // `z → z` and `z → R`. See `Core::refuses_send_all`: the shielded
+            // fee does not depend on the input count, but a balance spread over
+            // more than ten notes cannot all move at once, and what "everything"
+            // means then is not a question this commit answers.
+            pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => {
+                (false, NoteVm::plain("send-all-transparent-only"))
+            }
+        }
+    } else {
+        match draft.amount.trim() {
+            "" => (false, NoteVm::none()),
+            text => match Amount::from_coins_str(text) {
+                Ok(amount) if amount.is_zero() => (false, NoteVm::plain("amount-zero")),
+                // The figure travels with the code, already spelled: money is
+                // formatted in exactly one place in this workspace and the
+                // interface is not a second one.
+                Ok(amount) if amount > spendable => (
+                    false,
+                    NoteVm::with("amount-above-spendable", [coins(spendable)]),
+                ),
+                Ok(_) => (true, NoteVm::none()),
+                // The SDK refuses more than eight decimal places rather than
+                // rounding, and so does this: a satoshi silently dropped is a
+                // satoshi the user did not decide to drop.
+                Err(_) => (false, NoteVm::plain("amount-unparsable")),
+            },
+        }
     };
 
     pecu_protocol::DraftValidationVm {
         to_valid,
         to_note,
-        route: pecu_protocol::Route::of(draft.from_pool, to_shielded),
+        route,
         amount_valid,
         amount_note,
         // Filled in by the caller, which is the side that knows what this
@@ -245,6 +305,149 @@ pub fn validate(draft: &SendDraft, spendable: Amount) -> pecu_protocol::DraftVal
         to_label: String::new(),
         ready: to_valid && amount_valid,
     }
+}
+
+// ── Emptying a key ──────────────────────────────────────────────────────────
+
+/// The cheapest a transparent payment can be, whatever it pays for.
+///
+/// One input, one recipient plus change, plain outputs — the smallest
+/// transaction the builder can produce. Derived by asking the SDK rather than
+/// written down here, so a rev bump that moves the floor moves this with it.
+///
+/// A recipient that is a VerusID is priced higher, never lower, so this stays a
+/// valid lower bound for every transparent send. That is what makes it safe to
+/// use offline: a balance at or under it cannot pay for *any* transaction.
+fn cheapest_transparent_fee() -> u64 {
+    // The only way this fails is `num_inputs * INPUT_SIZE` overflowing a `u64`,
+    // which two constants cannot do. If a future SDK ever made it possible,
+    // refusing is the honest direction on a money path — better a send-all that
+    // declines than one that promises a fee it could not price.
+    estimate_fee(1, 2, DEFAULT_FEE_PER_KB, false).unwrap_or(u64::MAX)
+}
+
+/// The amount that empties a key — worked out from the coins, not from the
+/// balance.
+///
+/// # Why this is not `total − fee`
+///
+/// It reads like it should be, and it is wrong. The transparent fee is a
+/// function of the transaction's **size**, so of how many inputs it has;
+/// `select_utxos` chooses how many inputs by looping until the selected value
+/// covers **the amount** plus the fee so far. So the fee depends on the input
+/// count, the input count depends on the amount, and the amount is the thing
+/// being derived. The SDK says so itself, in `prepare_send`: *"The fee is not
+/// known until selection."*
+///
+/// Subtracting a fee priced for every coin the key holds always **builds**, and
+/// frequently does not **empty**. Past the fee floor each extra input costs
+/// about 1 800 satoshis, so selection declines any trailing coin worth less
+/// than that: it stops early, at a lower input count and a lower fee, and the
+/// difference comes back as a change output. The key still has coins in it, and
+/// the review shows change on a payment that was supposed to leave none.
+///
+/// # The rule that is exact
+///
+/// Pick the input set first and let the amount fall out of it. Sorted
+/// descending by value — the order `select_utxos` puts them in — for each
+/// prefix length `k`:
+///
+/// ```text
+/// net(k) = Σ(the k largest) − estimate_fee(k, outputs + 1, …)
+/// ```
+///
+/// and the answer is the largest `net(k)` over every prefix. Nothing else — the
+/// amount is the whole return value, and **which** prefix achieves it is never
+/// computed here.
+///
+/// It is exact because at `amount = max net` the selection loop's exit test at
+/// step `j` — "is what I have selected at least the amount plus this fee" — is
+/// precisely `net(j) ≥ max net`, and a prefix satisfies that only by *being* a
+/// maximiser. So selection stops on the first prefix that achieves the maximum,
+/// whichever that is, and the change is `Σ − amount − fee = net(j) − amount = 0`
+/// to the satoshi.
+///
+/// That is also why ties in `net` need no handling in the loop below. Several
+/// prefixes reaching the same maximum is common — a coin worth exactly what an
+/// input costs adds nothing — and the selector, not this function, decides
+/// which of them it stops on. Either choice yields the same amount and the same
+/// zero change.
+///
+/// Coins beyond the prefix the selector stops on are excluded because spending
+/// them costs more than they are worth. That is the right economic answer and a
+/// user-visible one: a key with a few hundred satoshis of dust still reads as
+/// non-empty afterwards. The send form says so in as many words — *"A coin
+/// worth less than it costs to move stays where it is"* — because without that
+/// sentence "everything" is a promise this function does not keep. What is not
+/// said is **how much**, and `docs/LATER.md` §13 carries why not.
+///
+/// The red test for all of this is
+/// `sending_everything_leaves_behind_a_coin_that_costs_more_to_spend_than_it_is_worth`
+/// in `crates/pecu-core/tests/send_build.rs`: five whole coins and three worth
+/// 500 satoshis each, where `total − fee` builds a transaction that hands
+/// change back to a key somebody has just been told is empty. It is an
+/// integration test rather than a unit test because the property it asserts —
+/// no change output — belongs to the SDK's selector, not to the arithmetic
+/// here.
+///
+/// Pure and offline. It reads a `Funding` — the same set the builder will be
+/// handed — and returns an amount; it makes no calls and holds no key.
+pub fn resolve_send_all(funding: &Funding, has_smart_outputs: bool) -> Result<Amount, SendError> {
+    // Descending by value, stably, so "the k largest" here names the same coins
+    // as "the first k `select_utxos` takes". Its sort is stable too, and ties
+    // keep the caller's order on both sides.
+    let mut values: Vec<u64> = funding
+        .utxos
+        .iter()
+        .map(|utxo| utxo.satoshis.to_sat())
+        .collect();
+    values.sort_by_key(|value| core::cmp::Reverse(*value));
+
+    // One recipient, plus the change output the selector always prices for.
+    // Both must match what `plan_transparent_send` will compute or the input
+    // count comes out one off, silently.
+    let change_outputs = 2;
+
+    // `i128` because the fee is subtracted from a running sum and the early
+    // prefixes are legitimately negative — and because a sum of `u64` satoshis
+    // has no business wrapping on the money path.
+    let mut running: i128 = 0;
+    let mut inputs: u64 = 0;
+    let mut best: Option<i128> = None;
+    for value in &values {
+        running += i128::from(*value);
+        inputs += 1;
+        let fee = estimate_fee(
+            inputs,
+            change_outputs,
+            DEFAULT_FEE_PER_KB,
+            has_smart_outputs,
+        )
+        .map_err(|error| SendError::Flow(error.into()))?;
+        let net = running - i128::from(fee);
+        // A running maximum and nothing more. No index is kept, because none is
+        // needed: see the doc above — the selector lands on the first prefix
+        // achieving this figure by its own exit test, so a tie here has no
+        // consequence to break.
+        best = Some(best.map_or(net, |previous| previous.max(net)));
+    }
+
+    let Some(net) = best else {
+        // No spendable coins at all. The same refusal as a balance that cannot
+        // cover a fee, because from the form it is the same situation: there is
+        // nothing here that can be moved.
+        return Err(SendError::NotEnoughForFee);
+    };
+    if net <= 0 {
+        return Err(SendError::NotEnoughForFee);
+    }
+
+    // Unreachable with a real chain — a total above `u64::MAX` satoshis is more
+    // coin than exists — but this is the money path, so it is checked rather
+    // than cast.
+    u64::try_from(net)
+        .map(Amount::from_sat)
+        .map_err(|_| SendError::BadAmount)
 }
 
 // ── Building ────────────────────────────────────────────────────────────────
@@ -267,18 +470,58 @@ pub fn prepare(
     // draft reaches. A `zs…` arriving here would be a routing bug, and the
     // parse below reports it as the bad address it is from this builder's point
     // of view rather than inventing a second explanation.
-    to.parse::<Address>().map_err(|_| SendError::BadAddress)?;
+    let destination = to.parse::<Address>().map_err(|_| SendError::BadAddress)?;
 
-    let amount = Amount::from_coins_str(draft.amount.trim()).map_err(|_| SendError::BadAmount)?;
-    if amount.is_zero() {
-        return Err(SendError::NothingToSend);
-    }
+    // Whether the fee heuristic sizes every output at 200 bytes instead of 34,
+    // decided the way `plan_transparent_send` decides it and for the same
+    // reason: one identity recipient makes the whole transaction smart-output
+    // priced. Working it out differently here would move the fee ladder by an
+    // input and leave a send-all quietly short.
+    let has_smart_outputs = destination.kind() == AddressKind::Identity;
 
-    let unsent = vault.with_key(label, |key| network::prepare_send(chain, key, to, amount))??;
+    // Parsed before the key is opened, as it always was. A send-all has nothing
+    // to parse — the field it would have been typed into is not on the form.
+    let typed = if draft.send_all {
+        None
+    } else {
+        let amount =
+            Amount::from_coins_str(draft.amount.trim()).map_err(|_| SendError::BadAmount)?;
+        if amount.is_zero() {
+            return Err(SendError::NothingToSend);
+        }
+        Some(amount)
+    };
+
+    let (unsent, amount) = vault.with_key(label, |key| {
+        // Resolving needs the coins, reading the coins needs the address, and
+        // the address needs the key — so the extra read happens inside the
+        // window the signature already opens rather than opening a second one.
+        // It is a second `spendable` round trip: `prepare_send` reads the same
+        // set again a moment later. Folding the two together would mean
+        // reimplementing `prepare_send` here, and a second copy of the build
+        // path is the worse trade on the money path than three RPC calls.
+        //
+        // The set can change in between. If it does, the build still succeeds —
+        // the resolved amount is at most the new total — and the review shows
+        // whatever it actually left behind, which is the same window every
+        // offline builder has.
+        let amount = if let Some(amount) = typed {
+            amount
+        } else {
+            let funding = network::spendable(chain, &key.address().to_string())?;
+            resolve_send_all(&funding, has_smart_outputs)?
+        };
+        let unsent = network::prepare_send(chain, key, to, amount)?;
+        Ok::<_, SendError>((unsent, amount))
+    })??;
 
     Ok(Prepared {
         signed: Signed::Transparent(unsent),
         to: to.to_string(),
+        // The resolved figure, not the draft. `review` echoes this field for
+        // `amount_display` rather than reading it back out of the bytes — only
+        // the outputs, the fee and the change come from there — so a send-all
+        // that left this alone would show a zero beside a correct outputs list.
         amount,
         route: pecu_protocol::Route::Transparent,
         spends: Vec::new(),
@@ -616,6 +859,10 @@ mod tests {
     use super::*;
 
     const ADDRESS: &str = "RQr2cUkF46n7y8WRzDkd1iV9gHusSSQuzX";
+    /// A real shielded address, so the decode that decides the route succeeds
+    /// for the reason it would in the product rather than by accident.
+    const SHIELDED_ADDRESS: &str =
+        "zs18pytujp8qu73a3fu6g9chl7mfumrr0htyqsh60r3ed4capagqwm8tx2l8f9c5g7w87q4566uph3";
 
     fn draft(to: &str, amount: &str) -> SendDraft {
         SendDraft {
@@ -623,6 +870,7 @@ mod tests {
             to: to.to_string(),
             amount: amount.to_string(),
             from_pool: pecu_protocol::Pool::Transparent,
+            send_all: false,
         }
     }
 
@@ -645,16 +893,16 @@ mod tests {
     /// the chain records.
     #[test]
     fn a_shielded_address_is_a_destination_and_names_the_route() {
-        const SHIELDED: &str =
-            "zs18pytujp8qu73a3fu6g9chl7mfumrr0htyqsh60r3ed4capagqwm8tx2l8f9c5g7w87q4566uph3";
-
-        let from_transparent = validate(&draft(SHIELDED, "1"), Amount::from_sat(1_000_000_000));
+        let from_transparent = validate(
+            &draft(SHIELDED_ADDRESS, "1"),
+            Amount::from_sat(1_000_000_000),
+        );
         assert!(from_transparent.to_valid);
         assert_eq!(from_transparent.to_note.code, "address-shielded");
         assert!(from_transparent.ready);
         assert_eq!(from_transparent.route, pecu_protocol::Route::Shield);
 
-        let mut shielded_source = draft(SHIELDED, "1");
+        let mut shielded_source = draft(SHIELDED_ADDRESS, "1");
         shielded_source.from_pool = pecu_protocol::Pool::Shielded;
         assert_eq!(
             validate(&shielded_source, Amount::from_sat(1_000_000_000)).route,
@@ -746,6 +994,101 @@ mod tests {
         assert!(verdict.to_note.code.is_empty());
         assert!(verdict.amount_note.code.is_empty());
         assert!(!verdict.ready);
+    }
+
+    /// The amount field is not on the form while this is set, so there is
+    /// nothing to be empty and nothing to be above the balance.
+    #[test]
+    fn a_draft_that_sends_everything_needs_no_typed_amount() {
+        let mut draft = draft(ADDRESS, "");
+        draft.send_all = true;
+
+        let verdict = validate(&draft, Amount::from_sat(100_000_000));
+        assert!(verdict.amount_valid);
+        assert!(verdict.amount_note.code.is_empty());
+        assert!(verdict.ready);
+    }
+
+    /// A stale string left in `amount` by a form that has since switched modes
+    /// must not change the verdict either way.
+    #[test]
+    fn a_draft_that_sends_everything_ignores_whatever_was_typed_before() {
+        let mut draft = draft(ADDRESS, "99999999");
+        draft.send_all = true;
+
+        let verdict = validate(&draft, Amount::from_sat(100_000_000));
+        assert!(verdict.amount_valid);
+        assert!(verdict.ready);
+    }
+
+    /// Knowable without the chain, and worth saying before the button is
+    /// pressed rather than after a build has been refused.
+    #[test]
+    fn a_draft_that_sends_everything_from_a_balance_below_the_fee_says_so() {
+        let mut draft = draft(ADDRESS, "");
+        draft.send_all = true;
+
+        let verdict = validate(&draft, Amount::from_sat(5_000));
+        assert!(!verdict.amount_valid);
+        assert_eq!(verdict.amount_note.code, "amount-below-fee");
+        // No figure travels with it. The fee is not known until coins have been
+        // selected, and a quoted guess is the thing the amount field was taken
+        // off the form to avoid.
+        assert!(verdict.amount_note.args.is_empty());
+        assert!(!verdict.ready);
+    }
+
+    /// The flag rides on the same draft as the pool selector, so it reaches the
+    /// shielded routes whatever the form offers. Refused rather than ignored.
+    #[test]
+    fn sending_everything_out_of_the_shielded_pool_is_refused_by_the_form() {
+        let mut draft = draft(ADDRESS, "");
+        draft.send_all = true;
+        draft.from_pool = pecu_protocol::Pool::Shielded;
+
+        let verdict = validate(&draft, Amount::from_sat(100_000_000));
+        assert_eq!(verdict.route, pecu_protocol::Route::Unshield);
+        assert!(!verdict.amount_valid);
+        assert_eq!(verdict.amount_note.code, "send-all-transparent-only");
+        assert!(!verdict.ready);
+    }
+
+    /// The toggle is drawn whenever the transparent balance is paying, and a
+    /// shielded recipient does not turn it off — so this is reachable by
+    /// pasting a `zs1…` into a form that is already set to send everything.
+    ///
+    /// It said `ready` here once, and then `Core::refuses_send_all` turned the
+    /// same draft away: the form branched on the pool and the core on the
+    /// route, and `R → z` is the one combination where those two disagree.
+    #[test]
+    fn sending_everything_to_a_shielded_address_is_refused_by_the_form() {
+        let mut draft = draft(SHIELDED_ADDRESS, "");
+        draft.send_all = true;
+
+        let verdict = validate(&draft, Amount::from_sat(100_000_000));
+        assert_eq!(verdict.route, pecu_protocol::Route::Shield);
+        assert!(!verdict.amount_valid);
+        assert!(!verdict.ready);
+    }
+
+    /// Not the same sentence as the shielded *source*, and that is the point of
+    /// having two codes: on this route the money genuinely is coming out of the
+    /// transparent balance, so "choose an amount to pay from the shielded one"
+    /// would be telling somebody to correct the half that is already right.
+    #[test]
+    fn the_two_send_all_refusals_do_not_share_a_sentence() {
+        let mut from_shielded = draft(ADDRESS, "");
+        from_shielded.send_all = true;
+        from_shielded.from_pool = pecu_protocol::Pool::Shielded;
+
+        let mut to_shielded = draft(SHIELDED_ADDRESS, "");
+        to_shielded.send_all = true;
+
+        let balance = Amount::from_sat(100_000_000);
+        assert_ne!(
+            validate(&from_shielded, balance).amount_note.code,
+            validate(&to_shielded, balance).amount_note.code,
+        );
     }
 
     /// Garbage in must not panic: this runs on every keystroke.

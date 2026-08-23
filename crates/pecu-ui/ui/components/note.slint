@@ -98,6 +98,20 @@ export component NoteText inherits Text {
             ? @tr("More than the {0} you can spend now.", root.note.args[0])
         : root.note.code == "amount-unparsable"
             ? @tr("Not an amount. Up to eight decimal places, like 1.5 or 0.00000001.")
+        // No figure, deliberately. The fee is not known until the builder has
+        // chosen coins, and a number quoted here would be a guess — the same
+        // reason the amount field is absent while this mode is on.
+        : root.note.code == "amount-below-fee"
+            ? @tr("There is not enough here to cover the network fee.")
+        // The shielded balance is the one paying, and it cannot be swept in one
+        // transaction — see `docs/LATER.md` §11.
+        : root.note.code == "send-all-transparent-only"
+            ? @tr("Sending everything works on the transparent balance. Choose an amount to pay from the shielded one.")
+        // The other way round: the coins are transparent and the recipient is
+        // not. Naming the destination rather than the balance, because on this
+        // route the balance is not what is wrong.
+        : root.note.code == "send-all-shielded-recipient"
+            ? @tr("Sending everything does not shield a balance. Choose an amount, or send everything to a public address.")
 
         // ── What an output is ───────────────────────────────────────────
         : root.note.code == "output-payment" ? @tr("Payment")

@@ -1082,6 +1082,15 @@ fn apply_wallet(ui: &AppWindow, vm: pecu_protocol::WalletVm) {
     // each screen actually asks.
     send.set_shielded_balance(vm.shielded_funds.balance().into());
     send.set_shielded_scanned(vm.shielded_funds.scanned());
+    // The active key's own money, which is what this form spends. Blanked when
+    // nothing is maturing by the same helper the dashboard's breakdown uses —
+    // a zero here would be the wallet stating that none of this key's coins are
+    // immature, which is a claim, not a blank.
+    send.set_key_spendable(vm.key_funds.spendable_display.clone().into());
+    send.set_key_immature(shown(
+        &vm.key_funds.immature_sats,
+        &vm.key_funds.immature_display,
+    ));
     state.set_shielded_balance(vm.shielded_funds.balance().into());
     state.set_shielded_any(vm.shielded_funds.any());
     state.set_shielded_scanning(vm.shielded_scan.is_some());
@@ -1244,14 +1253,6 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
         && is_zero(&balance.pending_in_sats);
     state.set_has_breakdown(!quiet);
 
-    // Formatted by core. This only decides whether there is anything to say.
-    let shown = |zero: &str, display: &str| -> SharedString {
-        if is_zero(zero) {
-            SharedString::new()
-        } else {
-            display.into()
-        }
-    };
     state.set_immature(shown(&balance.immature_sats, &balance.immature_display));
     // Money that has left and not settled. Counted by `quiet` since the first
     // version, and then never drawn — so a wallet whose only unusual state was
@@ -1287,6 +1288,25 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
 /// Satoshi counts cross as decimal strings, so "nothing" is a string test.
 fn is_zero(sats: &str) -> bool {
     sats.is_empty() || sats.chars().all(|c| c == '0')
+}
+
+/// A figure, or nothing at all when there is nothing to say.
+///
+/// The core formats; this only decides whether the line is drawn. Zero is not
+/// neutral on a balance: printed beside real numbers it is the wallet stating
+/// that none of your coins are maturing, in the same breath and the same weight
+/// as the coins that are.
+///
+/// A free function rather than a closure because two handlers want it — the
+/// dashboard's wallet-wide breakdown and the send form's per-key one — and the
+/// rule has to be the same on both or the same wallet says two different things
+/// about the same zero.
+fn shown(zero: &str, display: &str) -> SharedString {
+    if is_zero(zero) {
+        SharedString::new()
+    } else {
+        display.into()
+    }
 }
 
 /// A named reason, on its way to the words.

@@ -960,3 +960,126 @@ conversions on VRSCTEST while `disabledefi` holds. So the first move is the
 then a real token conversion on a chain that allows one. Only then is there
 reason to trust the same input selection with a payment. Steps one and two are
 §9's outstanding item as well; the two entries share their first move.
+
+**A currency picker has to decide what "send everything" means.** `SendDraft`
+now has five fields, and the fifth is `send_all` — documented as native-coin
+only, because that is the only thing it can mean while there is one currency.
+The moment a currency sits beside it the flag becomes ambiguous, and not
+harmlessly: "all of the token" and "all of the coin" are different transactions
+that **cannot both be satisfied**, because a token transfer is paid for in
+native coin. A key swept of its coin cannot then move its token, and a key swept
+of its token still shows a coin balance. Whoever adds the picker owns that
+sentence on the form as much as the routing in `prepare` —
+`send::resolve_send_all` itself would also need rewriting, since a token
+transfer uses CryptoCondition outputs and its fee ladder is the 200-byte one.
+
+---
+
+## 11. Sending everything on any route but `R → R`
+
+**Status:** refused, in so many words, rather than ignored — and in two different
+sets of words, because there are two different reasons.
+
+`send_all` rides on `SendDraft`, and `from_pool` is on the same struct, so the
+flag reaches the shielded routes whatever the form offers. `Core::prepare_send`
+turns it away there with `send-all-transparent-only`, and `send::validate`
+refuses it on the same code so the button is disabled rather than pressed into a
+refusal. The interface does not draw the control while the shielded balance is
+paying — the same "omit, do not grey" convention the pool selector follows.
+
+**And `R → z`, which is the reachable one.** The toggle *is* drawn whenever the
+transparent balance is paying, so pasting a `zs1…` into a form already set to
+send everything takes one keystroke. Both sides refuse it — `send_all_refusal`
+in `pecu-core/src/lib.rs` and `send::validate` — under a second code,
+`send-all-shielded-recipient`, because the two refusals are about different
+halves of the payment: here the coins genuinely are the transparent ones and it
+is the destination that cannot be served. Shielding runs through
+`crate::shield` with a fee of its own, so `resolve_send_all` — which prices a
+plain transparent payment — does not describe it. Implementing it means a
+second resolver against the shield builder's fee, not a relaxed guard.
+
+The form branched on `draft.from_pool` and the core on `route` for one commit,
+and `R → z` is exactly where those disagree: the form said ready and the core
+then refused, with a sentence telling somebody to pay from a balance that was
+not the one paying. `the_two_send_all_refusals_do_not_share_a_sentence` and
+`shielding_everything_and_sweeping_a_shielded_balance_are_told_apart` hold the
+two halves shut.
+
+**The arithmetic would be the easy half.** `min_relay_fee` counts outputs, never
+bytes (`verus-flows/src/shielded/spending.rs`), so for two shielded outputs and
+at most one transparent one it is a flat 10 000 satoshis whatever the input
+notes number. The fixpoint `send::resolve_send_all` exists for does not arise;
+the answer really is "the notes, minus the fee".
+
+**The hard half is a product question.** `MAX_SPEND_NOTES = 10`, and
+`Shielded::plan_spend` enforces it. A shielded balance spread over more than ten
+notes cannot all move in one transaction at any fee, and each note is a Groth16
+spend proof — tens of seconds of CPU. So "send everything" from the shielded
+pool either means "what ten notes reach and no more", or it means a refusal that
+explains the ceiling, and that decision does not belong inside a fee
+calculation. `ShieldedError::NotEnough` already carries `reachable` — the sum of
+the ten largest notes — which is the figure either answer would quote.
+
+Testing it needs the Sapling proving parameters, which is why every existing
+shielded build test is `#[ignore]`. The transparent case tests offline in
+milliseconds; bundling them would have put a fee fixpoint and a fifty-megabyte
+download in one commit.
+
+---
+
+## 12. "Left afterwards" is computed against the transparent balance, always
+
+`Core::finish_prepare` passes `self.active_key_funds().spendable` — the
+**transparent** figure — as `send::review`'s `spendable`, for every route. So
+`balance_after_display` on a shielded payment subtracts a shielded amount from a
+transparent balance and prints the result as if it meant something. Pre-existing,
+and easy to miss while the review's other figures are all decoded from the
+signed bytes.
+
+The *key* half of this is fixed: that call used to pass `self.spendable`, the
+sum over every address in the wallet, so "Left afterwards" on a two-key wallet
+reported the other key's money as what this payment left behind. Send-everything
+made that conspicuous — "Left afterwards" is the one number somebody emptying a
+key reads closely — and on the transparent route it now reads what the swept key
+actually still holds, which for a key with no sub-marginal coins is
+`0.0000 0000`.
+
+The *pool* half is not. The fix is to branch on `prepared.route` at the call
+site and hand `review` the balance of the pool that is actually paying. Small,
+and deliberately still separate — it changes a figure on three screens that the
+send-all work does not otherwise touch.
+
+---
+
+## 13. A sweep says that coins can stay behind, never how many
+
+**Status:** warned in general, unquantified in particular.
+
+`send::resolve_send_all` excludes coins that cost more to move than they are
+worth — past the fee floor an extra input costs about 1 800 satoshis, so a
+500-satoshi coin makes the recipient worse off. That is the right economic
+answer, and it means a payment the form called "everything" can leave a key
+holding something.
+
+The form now says so: *"A coin worth less than it costs to move stays where it
+is."* That sentence had to exist, because without it "everything this key can
+spend goes, less the network fee" is simply false whenever a key holds dust.
+
+**What is still missing is the figure.** The review's "Left afterwards" line is
+the key's balance less what the transaction takes, so on a sweep it *is* the
+dust — but it is a bare number with no sentence attached, and somebody
+decommissioning the machine that holds the key reads `0.0000 1500` as a rounding
+artefact rather than as coins they still own.
+
+Naming it properly needs a fact the review does not carry: whether this payment
+was a sweep at all. The figure does not exist until coins have been selected,
+which is inside the builder — the same reason there is no amount field in this
+mode — so the sentence belongs on the review rather than beside the toggle, and
+`SendReviewVm` is decoded from the signed bytes and deliberately knows nothing
+about the draft. Either it gains a flag, or `Prepared` carries one for it. That
+is a small change to a struct three screens read, which is why it is written
+down here rather than done in passing.
+
+`sending_everything_leaves_behind_a_coin_that_costs_more_to_spend_than_it_is_worth`
+in `pecu-core/tests/send_build.rs` is the case that produces it: 1 500 satoshis
+left in the key, deliberately.

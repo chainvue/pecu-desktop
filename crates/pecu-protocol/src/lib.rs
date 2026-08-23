@@ -39,12 +39,12 @@ pub use models::{
     ContentValueVm, ConvertDraft, ConvertQuoteVm, ConvertReviewVm, CurrencyChoicesVm,
     CurrencyDraft, CurrencyDraftVm, CurrencyFieldVm, CurrencyPickVm, CurrencyProblemVm,
     CurrencySliceVm, CurrencyVm, DraftValidationVm, EligibleIdentityVm, FlowStepVm, HistoryRowVm,
-    IdentityDetailVm, IdentityVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm, LaunchPendingVm,
-    LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm, NodeVm, NoteVm,
-    PendingVm, Pool, PortfolioVm, PreallocationDraft, Reachability, RegistrationVm, ReserveDraft,
-    ReviewOutputVm, Route, ScreenId, SearchHitVm, SeedWordVm, SendDraft, SendOutcomeVm,
-    SendReviewVm, ShieldedFunds, SpendGate, StatVm, TaskKind, TxDetailVm, TxDirection, VenueVm,
-    WalletVm,
+    IdentityDetailVm, IdentityVm, KeyFundsVm, KeyOrigin, KeyVm, KnownAddressVm, LaunchDoneVm,
+    LaunchPendingVm, LaunchReviewVm, ListDelta, LockReason, MarketDetailVm, MarketRowVm, NetworkVm,
+    NodeVm, NoteVm, PendingVm, Pool, PortfolioVm, PreallocationDraft, Reachability, RegistrationVm,
+    ReserveDraft, ReviewOutputVm, Route, ScreenId, SearchHitVm, SeedWordVm, SendDraft,
+    SendOutcomeVm, SendReviewVm, ShieldedFunds, SpendGate, StatVm, TaskKind, TxDetailVm,
+    TxDirection, VenueVm, WalletVm,
 };
 pub use secret::Secret;
 

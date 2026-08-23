@@ -320,6 +320,8 @@ async fn resolve(
             from_label: "main".to_string(),
             to: typed.to_string(),
             amount: "1".to_string(),
+            // A typed amount, which is what this asks about.
+            send_all: false,
         },
     ));
 

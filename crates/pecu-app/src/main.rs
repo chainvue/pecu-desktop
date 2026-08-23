@@ -596,12 +596,13 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
 
     {
         let dispatcher = dispatcher.clone();
-        actions.on_validate_draft(move |to, amount, from_shielded| {
+        actions.on_validate_draft(move |to, amount, from_shielded, send_all| {
             dispatcher.send(Command::ValidateDraft(SendDraft {
                 from_label: String::new(),
                 to: to.to_string(),
                 amount: amount.to_string(),
                 from_pool: pool(from_shielded),
+                send_all,
             }));
         });
     }
@@ -609,7 +610,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
     {
         let dispatcher = dispatcher.clone();
         let weak = ui.as_weak();
-        actions.on_prepare_send(move |to, amount, from_shielded| {
+        actions.on_prepare_send(move |to, amount, from_shielded, send_all| {
             if let Some(ui) = weak.upgrade() {
                 let send = ui.global::<SendState>();
                 send.set_problem(pecu_ui::Note::default());
@@ -619,6 +620,7 @@ fn wire_send(ui: &AppWindow, dispatcher: &Dispatcher) {
                 to: to.to_string(),
                 amount: amount.to_string(),
                 from_pool: pool(from_shielded),
+                send_all,
             }));
         });
     }
@@ -1404,8 +1406,10 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
                     hit.target.clone(),
                     send.get_amount_draft(),
                     // Whatever the form is already set to. Picking a recipient
-                    // from search must not quietly change which balance pays.
+                    // from search must not quietly change which balance pays,
+                    // nor turn "send everything" off under somebody.
                     send.get_from_shielded(),
+                    send.get_send_all(),
                 );
                 ui.invoke_go("send".into());
                 return;
