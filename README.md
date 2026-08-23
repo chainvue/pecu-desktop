@@ -64,7 +64,7 @@ formality:
 
 | Test | What it refuses to let happen |
 |---|---|
-| `pecu-ui/tests/visual.rs` | A layout change nobody looked at. Renders 96 screens in both themes and compares them against checked-in references. |
+| `pecu-ui/tests/visual.rs` | A layout change nobody looked at. Renders 75 screen states in both themes — 150 images — and compares them against checked-in references. |
 | `pecu-ui/tests/accessibility.rs` | A control a screen reader announces as "button" and nothing else. |
 | `pecu-ui/tests/dependency_boundary.rs` | The interface crate gaining the ability to name a `PrivateKey`. |
 | `pecu-ui/tests/translation.rs` | "It is ready for translation" being false. |
@@ -81,12 +81,13 @@ Reference images are whole-tree artefacts: a commit that changes the palette
 changes all of them, so source and images travel together or the tip is red.
 
 There is **one set for every platform**. macOS and Linux do not draw this
-identically — 116 of the 132 images differ — but the entire disagreement is 872
-pixels off by 1 of 255, in the navigation rail's icon column, and nothing
-moves. So the comparison forgives a per-channel delta of 1 and caps how many
-such pixels an image may carry, rather than keeping a set per operating system:
-a change reviewed on one machine would otherwise land red on every other, and
-the only answer to that is a blanket re-record, which verifies nothing.
+identically — when it was measured, at 132 images, 116 of them differed — but
+the entire disagreement was 872 pixels off by 1 of 255, in the navigation rail's
+icon column, and nothing moved. So the comparison forgives a per-channel delta
+of 1 and caps how many such pixels an image may carry, rather than keeping a set
+per operating system: a change reviewed on one machine would otherwise land red
+on every other, and the only answer to that is a blanket re-record, which
+verifies nothing.
 
 The tolerance does not blunt the test. The change in `3cfbd84` moved 2,096,525
 pixels, 99.65% of them by more than 1, and not one of its 120 images would have

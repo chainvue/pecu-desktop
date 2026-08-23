@@ -68,7 +68,11 @@ export global WalletState {
     in property <string> ticker: "VRSC";
     in property <string> total: "0.0000 0000";
     in property <string> spendable: "0.0000 0000";
-    in property <string> immature: "0.0000 0000";
+    // Empty rather than a zero, because both readers of this treat "" as
+    // "nothing is maturing" and draw nothing — the bridge blanks it for exactly
+    // that. A default of `0.0000 0000` made the wallet state, before it had
+    // read anything at all, that none of your coins are immature.
+    in property <string> immature: "";
     in property <string> pending: "0.0000 0000";
     // Only shown when it differs from the total — a wallet with everything
     // spendable stays calm and says nothing extra.
@@ -231,6 +235,30 @@ export global SendState {
     // them, on success only.
     in-out property <string> to-draft: "";
     in-out property <string> amount-draft: "";
+
+    // What the **active key** holds, which is not what the wallet holds.
+    //
+    // `WalletState.spendable` and `WalletState.immature` are sums over every
+    // address in the wallet, and the dashboard is right to show them. A payment
+    // is signed by one key and spends its coins alone, so on this form those
+    // figures are true about the wallet and false about the payment: in a
+    // two-key wallet they quote the other key's money as this one's.
+    //
+    // `key-immature` is empty when nothing is maturing, the same convention
+    // `WalletState.immature` follows and for the same reason — a
+    // "0.0000 0000 is still maturing" under every send is the wallet making a
+    // statement about coins it does not have.
+    in property <string> key-spendable: "0.0000 0000";
+    in property <string> key-immature: "";
+
+    // Empty this key rather than pay a figure somebody typed.
+    //
+    // `in-out` for the same reason `from-shielded` is: it is a decision made
+    // here, not a fact the core reports. While it is set the amount field is
+    // **absent** from the form — not disabled, not filled in — because the only
+    // number this side could put there would be a guess. See the comment above
+    // the control in `screens/send.slint`.
+    in-out property <bool> send-all: false;
 
     // Verdicts from core, which owns address parsing and the fee rules.
     in property <bool> to-valid: false;
@@ -1030,8 +1058,9 @@ export global Actions {
     // Passed rather than read from state, so the value that was on screen when
     // somebody pressed Review is the value that gets sent — a payment must not
     // change which pool it comes out of between the click and the dispatch.
-    callback validate-draft(string, string, bool);
-    callback prepare-send(string, string, bool);
+    // Recipient, amount, paying from the shielded pool, sending everything.
+    callback validate-draft(string, string, bool, bool);
+    callback prepare-send(string, string, bool, bool);
     callback confirm-send(int);
     callback cancel-send(int);
     // "check" | "resend" | "abandon" — for a payment whose fate is unknown.

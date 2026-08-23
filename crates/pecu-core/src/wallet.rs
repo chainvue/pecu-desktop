@@ -566,6 +566,9 @@ impl Wallet {
             shielded_funds: pecu_protocol::ShieldedFunds::Absent,
             // The core fills this in while a scan is under way.
             shielded_scan: None,
+            // A balance, so the core's again — and this one is transparent, so
+            // it needs no scan, only a refresh that has read this address.
+            key_funds: pecu_protocol::KeyFundsVm::default(),
         }
     }
 }

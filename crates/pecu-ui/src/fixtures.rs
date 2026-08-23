@@ -959,6 +959,16 @@ pub fn sending(ui: &AppWindow) {
     ]))));
     wallet.set_address(ADDRESS.into());
 
+    // What the ACTIVE key holds, which is deliberately less than the wallet
+    // does. `funded` gives this wallet two keys, 12 382.42 spendable and 100
+    // maturing between them; `main` holds 8 000 and 40 of that. The send form
+    // spends one key, so a fixture that made the two figures equal would
+    // photograph a picture that cannot tell a correct form from the one that
+    // quoted the wallet's sum — which is the bug these images now hold shut.
+    let send = ui.global::<SendState>();
+    send.set_key_spendable("8 000.0000 0000".into());
+    send.set_key_immature("40.0000 0000".into());
+
     // Who this wallet has paid, which the send screen now shows beside the
     // form. The same rows the Addresses tab lists — one list, one truth about
     // who has been paid, rather than a second address book that could disagree
@@ -1533,7 +1543,37 @@ pub fn sending_too_much(ui: &AppWindow) {
     send.set_to_label("the exchange".into());
     send.set_amount_draft("99 999.0000 0000".into());
     send.set_amount_valid(false);
-    send.set_amount_note(note("amount-above-spendable", &["12 382.4200 0000"]));
+    // The figure the core would quote: what the *active key* can spend, which
+    // is what `validate_draft` now measures a draft against.
+    send.set_amount_note(note("amount-above-spendable", &["8 000.0000 0000"]));
+}
+
+/// Emptying a key: the amount field is gone and a sentence stands in its place.
+///
+/// The state the reference image exists to hold honest. Two things have to be
+/// visible in it and neither can be checked by a unit test: that there is no
+/// box to type a number into — the invariant the old "no Max button" comment
+/// was protecting, now held by absence rather than by argument — and that the
+/// maturing balance is named. Somebody sweeping a key before they decommission
+/// the machine holding it needs to be told what is staying behind.
+///
+/// The figure in that sentence comes from `sending`, and it is the **active
+/// key's** 40 coins rather than the wallet's 100. That is the whole reason this
+/// image is worth keeping: the two numbers are different, so a form that went
+/// back to quoting the wallet-wide total would move these pixels.
+pub fn sending_everything(ui: &AppWindow) {
+    sending(ui);
+    let send = ui.global::<SendState>();
+    send.set_to_draft(SECOND_ADDRESS.into());
+    send.set_to_valid(true);
+    send.set_to_note(note("address-transparent", &[]));
+    send.set_to_label("the exchange".into());
+    send.set_send_all(true);
+    // What the core says about a send-all: nothing to object to, and nothing
+    // typed to object about.
+    send.set_amount_valid(true);
+    send.set_amount_note(Note::default());
+    send.set_ready(true);
 }
 
 /// The network screen with everything that can be wrong with a node.

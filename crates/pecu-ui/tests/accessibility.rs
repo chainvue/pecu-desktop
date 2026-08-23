@@ -98,6 +98,19 @@ const SCREENS: &[Screen] = &[
     ("activity", pecu_ui::fixtures::history),
     ("send", pecu_ui::fixtures::sending),
     ("send", pecu_ui::fixtures::sending_too_much),
+    // Listed for completeness, not for coverage: every control on this state is
+    // one the `sending` entry above already walks, and the "Send everything"
+    // toggle is a `Btn` like any other, so it is named either way.
+    //
+    // What is genuinely new here is the thing this test cannot see. The toggle
+    // carries its on/off state in `variant: primary/secondary` — colour — and
+    // `Btn` announces `accessible-label: root.text` and nothing else, so a
+    // screen reader says "Send everything, button" whether the mode is on or
+    // off. `accessible-checked` appears nowhere in this tree; the pool selector
+    // beside it carries its selection exactly the same way. So this is a gap in
+    // the convention rather than in this screen, and closing it means teaching
+    // `Btn` about a checked state everywhere at once.
+    ("send", pecu_ui::fixtures::sending_everything),
     ("nodes", pecu_ui::fixtures::network_trouble),
     ("send", pecu_ui::fixtures::reviewing),
     ("receive", pecu_ui::fixtures::receiving),

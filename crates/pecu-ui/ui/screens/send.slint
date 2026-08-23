@@ -54,7 +54,7 @@ export component SendForm inherits HorizontalLayout {
                     interactive: true;
                     clicked => {
                         SendState.to-draft = row.address;
-                        Actions.validate-draft(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
+                        root.check();
                     }
                 }
             }
@@ -125,7 +125,7 @@ export component SendForm inherits HorizontalLayout {
                             horizontal-stretch: 1;
                             clicked => {
                                 SendState.from-shielded = false;
-                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, false);
+                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, false, SendState.send-all);
                             }
                         }
                         Btn {
@@ -134,7 +134,13 @@ export component SendForm inherits HorizontalLayout {
                             horizontal-stretch: 1;
                             clicked => {
                                 SendState.from-shielded = true;
-                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, true);
+                                // Cleared on the way over rather than carried:
+                                // the control is not offered on this side, and
+                                // a mode still switched on behind a control
+                                // nobody can see is a mode nobody can switch
+                                // off.
+                                SendState.send-all = false;
+                                Actions.validate-draft(SendState.to-draft, SendState.amount-draft, true, false);
                             }
                         }
                     }
@@ -199,8 +205,15 @@ export component SendForm inherits HorizontalLayout {
                         // the summary line does: with the shielded balance
                         // paying, the transparent figure here is a number that
                         // is true about the wallet and false about the payment.
+                        //
+                        // And the **active key's** figure, not the wallet's,
+                        // for the second half of the same reason. This form
+                        // pays from one key; `WalletState.spendable` is the sum
+                        // over every address the wallet holds, and printing it
+                        // over prose that says "everything this key can spend"
+                        // quotes another key's money as this one's.
                         text: !SendState.from-shielded
-                                ? @tr("{} spendable", WalletState.spendable)
+                                ? @tr("{} spendable", SendState.key-spendable)
                             // Empty means nothing has been scanned, which is a
                             // different statement from a balance of zero — and
                             // the wrong one to make silently on the line
@@ -213,7 +226,47 @@ export component SendForm inherits HorizontalLayout {
                         color: Theme.text-tertiary;
                     }
                 }
-                Field {
+
+                // ── Emptying the key ────────────────────────────────────
+                //
+                // Still no "Max" button, and still for the reason the design
+                // was told no the first time: the fee is not known until the
+                // builder has chosen coins, so a Max that copied the spendable
+                // balance into the field would put a number there that cannot
+                // be built — a control that is wrong exactly when somebody uses
+                // it.
+                //
+                // This is not that. It is a **mode**, not a fill: while it is
+                // on the amount field is gone from the form and the figure is
+                // worked out in the builder, from the coins, at the moment they
+                // are selected. The first resolved number anybody sees is on
+                // the review, read back out of a transaction that has already
+                // been signed. So the invariant the old comment was protecting
+                // — no unbuildable number ever appears in the amount field —
+                // holds here in its strongest form: there is no field to put
+                // one in.
+                //
+                // Called "Send everything" rather than "Max" deliberately. Max
+                // is a fill-the-field verb and invites somebody to expect a
+                // number to appear.
+                //
+                // Absent, not disabled, while the shielded balance is paying —
+                // the same convention as the pool selector above. The core
+                // refuses the flag on that route, and a greyed control would
+                // only invite somebody to work out why it is greyed.
+                if !SendState.from-shielded: HorizontalLayout {
+                    alignment: start;
+                    Btn {
+                        text: @tr("Send everything");
+                        variant: SendState.send-all ? "primary" : "secondary";
+                        clicked => {
+                            SendState.send-all = !SendState.send-all;
+                            root.check();
+                        }
+                    }
+                }
+
+                if !SendState.send-all: Field {
                     mono: true;
                     placeholder: "0.0000 0000";
                     text <=> SendState.amount-draft;
@@ -221,19 +274,66 @@ export component SendForm inherits HorizontalLayout {
                     edited => { root.check(); }
                     accepted => { root.review(); }
                 }
+
+                // What replaces the field: a sentence, and where the numbers
+                // will be. Not a figure — see the comment above.
+                //
+                // Both paragraphs sit **directly** in this layout rather than
+                // in a `VerticalLayout` of their own. A wrapping `Text` is
+                // measured against the width it has been given, and a nested
+                // layout reported a height for one line where four were drawn —
+                // so the Review button was placed on top of the last sentence.
+                // The reference image is what caught it, which is the argument
+                // for looking at these rather than blessing them.
+                //
+                // The second sentence is not padding. `resolve_send_all`
+                // deliberately leaves behind any coin that costs more to spend
+                // than it is worth — past the fee floor an input costs about
+                // 1 800 satoshis — so without it "everything" is a promise the
+                // builder does not keep. What is still missing is the figure:
+                // it is not known until coins have been selected, which is the
+                // same reason there is no amount field here. `docs/LATER.md`
+                // §13 has what naming it on the review would cost.
+                if SendState.send-all: Text {
+                    text: @tr("Everything this key can spend goes, less the network fee — both figures are on the next step, read back from the transaction that was signed. A coin worth less than it costs to move stays where it is.");
+                    font-size: Typo.caption;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                // The one thing this screen has never said, and the one that
+                // costs money if it stays unsaid.
+                //
+                // Coins that have not matured are not spendable, so they are
+                // not swept — and somebody emptying a key before they
+                // decommission the machine holding it will read "sent
+                // everything" as "this key is finished". A staking wallet's
+                // maturing balance would still be arriving afterwards, to an
+                // address nobody is watching any more.
+                //
+                // The **active key's** maturing coins. `WalletState.immature`
+                // is the wallet's, summed over every address, and this sentence
+                // names a key — in a two-key wallet it would quote the other
+                // key's coins as this one's, on the screen where somebody is
+                // deciding whether the key is finished with.
+                //
+                // Empty rather than zero when there is nothing maturing: the
+                // bridge blanks it, and a "0.0000 0000 is still maturing" under
+                // every send-all would be the wallet making a statement about
+                // coins it does not have.
+                if SendState.send-all && SendState.key-immature != "": Text {
+                    text: @tr("{} in this key has not matured yet and stays behind. It will arrive here later.", SendState.key-immature);
+                    font-size: Typo.caption;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+
                 if SendState.amount-note.code != "": NoteText {
                     note: SendState.amount-note;
                     problem: true;
                 }
             }
 
-            // No "Max" button, deliberately, and the design asks for one.
-            //
-            // The fee is not known until the builder has chosen coins, so a Max
-            // that filled in the whole spendable balance would produce an amount
-            // that cannot be built — a button that is wrong exactly when
-            // somebody uses it. Keeping it out is the same decision as not
-            // printing a fee on this step: see the panel beside this form.
             HorizontalLayout {
                 alignment: end;
                 Btn {
@@ -281,9 +381,11 @@ export component SendForm inherits HorizontalLayout {
                     // reach — the reference image showed "12 382.42" beside a
                     // shielded balance of 2.5. A number that is true about the
                     // wallet and false about the payment is worse on this
-                    // screen than no number.
+                    // screen than no number — which is also why the transparent
+                    // arm is now the active key's figure rather than the
+                    // wallet's sum. Same failure, other axis.
                     label: SendState.from-shielded ? @tr("Shielded") : @tr("Spendable");
-                    value: !SendState.from-shielded ? WalletState.spendable
+                    value: !SendState.from-shielded ? SendState.key-spendable
                         : !SendState.shielded-scanned ? @tr("not scanned")
                         : SendState.shielded-balance;
                 }
@@ -393,12 +495,12 @@ export component SendForm inherits HorizontalLayout {
     }
 
     function check() {
-        Actions.validate-draft(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
+        Actions.validate-draft(SendState.to-draft, SendState.amount-draft, SendState.from-shielded, SendState.send-all);
     }
 
     function review() {
         if (!SendState.ready) { return; }
-        Actions.prepare-send(SendState.to-draft, SendState.amount-draft, SendState.from-shielded);
+        Actions.prepare-send(SendState.to-draft, SendState.amount-draft, SendState.from-shielded, SendState.send-all);
     }
 }
 

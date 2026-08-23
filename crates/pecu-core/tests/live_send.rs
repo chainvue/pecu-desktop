@@ -143,6 +143,9 @@ fn a_payment_built_by_this_wallet_is_accepted_by_the_network() {
         from_label: LABEL.to_string(),
         to: address.clone(),
         amount: Amount::from_sat(AMOUNT_SATS).to_coins_string(),
+        // A fixed small amount against a real chain — emptying the funded key
+        // would leave nothing for the next run.
+        send_all: false,
     };
 
     let verdict = send::validate(&draft, funding.total);

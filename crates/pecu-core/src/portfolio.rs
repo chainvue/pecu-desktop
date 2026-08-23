@@ -64,6 +64,20 @@ pub struct Reading {
     pub tip: u32,
     pub spendable: Amount,
     pub immature: Amount,
+    /// The same two figures, kept per address rather than summed.
+    ///
+    /// The dashboard wants the wallet, and the send form wants **one key**: a
+    /// payment is signed by the active key and spends its coins only, so a
+    /// wallet-wide figure on that screen is a number that is true about the
+    /// wallet and false about the payment. Both are wanted, so both are kept —
+    /// deriving one from the other after the fact is impossible in the
+    /// direction that matters.
+    ///
+    /// Keyed by address, which is what a key is here: one key, one address.
+    /// An address whose read failed is **absent** rather than zero, for the
+    /// reason the loop below gives — a node that could not answer has not said
+    /// the key is empty.
+    pub by_address: BTreeMap<String, KeyFunds>,
     /// Confirmed coins an unconfirmed transaction already spends. Gone, not
     /// waiting — see `Funding::spent_unconfirmed`.
     pub pending_out: Amount,
@@ -88,6 +102,18 @@ pub struct Reading {
     pub failure: Option<FlowError>,
 }
 
+/// What one address holds, on its own.
+///
+/// The pair the send screen needs: what this key can spend now, and what it
+/// holds that has not matured. Both are per-address sums of the same `Funding`
+/// the wallet-wide figures come from, so they cannot disagree with the
+/// dashboard about anything but scope.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct KeyFunds {
+    pub spendable: Amount,
+    pub immature: Amount,
+}
+
 /// What the caller already knows, so the read does not ask again.
 #[derive(Clone, Default)]
 pub struct Cached {
@@ -106,6 +132,7 @@ pub fn read(chain: &Chain, addresses: &[String], cached: Cached) -> Reading {
         tip: 0,
         spendable: Amount::ZERO,
         immature: Amount::ZERO,
+        by_address: BTreeMap::new(),
         pending_out: Amount::ZERO,
         pending_in: Amount::ZERO,
         tokens: BTreeMap::new(),
@@ -146,6 +173,19 @@ pub fn read(chain: &Chain, addresses: &[String], cached: Cached) -> Reading {
         reading.spendable = add(reading.spendable, funding.total);
         reading.immature = add(reading.immature, funding.immature_total());
         reading.pending_out = add(reading.pending_out, funding.spent_unconfirmed_total());
+
+        // Written here rather than summed later, because this is the only point
+        // at which the two are still separable. Inserted for every address that
+        // answered, including one holding nothing — "this key is empty" is a
+        // fact worth having, and it is the `continue` above that withholds it
+        // when nobody could say.
+        reading.by_address.insert(
+            address.clone(),
+            KeyFunds {
+                spendable: funding.total,
+                immature: funding.immature_total(),
+            },
+        );
 
         // Token counting can fail where the native figure did not — a
         // CryptoCondition output this build cannot read. That means the token

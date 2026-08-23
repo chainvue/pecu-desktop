@@ -172,6 +172,36 @@ pub struct WalletVm {
     /// permanent reasons — a WIF import has no words and never will, and a
     /// phrase that is not a valid BIP-39 mnemonic cannot walk ZIP-32.
     pub shielded_note: Option<NoteVm>,
+
+    /// What the **active key alone** holds, for the screens that spend it.
+    ///
+    /// Here for the same reason [`Self::shielded_funds`] is: it is a balance,
+    /// so it belongs to the core rather than to the wallet file, and it follows
+    /// the active key rather than the wallet. The send form is the reason it
+    /// exists — a payment is signed by one key and spends its coins only, so a
+    /// wallet-wide figure on that screen is true about the wallet and false
+    /// about the payment.
+    pub key_funds: KeyFundsVm,
+}
+
+/// One key's own money, formatted.
+///
+/// Both figures are about a single address. The wallet-wide pair lives on
+/// [`BalanceVm`] and is what the dashboard shows; these are what the send form
+/// shows, and the difference is the whole point of having two.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyFundsVm {
+    /// What this key can spend now. Always a figure — a key holding nothing can
+    /// spend nothing, and that is a statement worth making.
+    pub spendable_display: String,
+    /// What this key holds that has not matured yet.
+    ///
+    /// The satoshi figure travels beside the formatted one so the interface can
+    /// tell "nothing is maturing" from "something is", without parsing a
+    /// display string to find out. It is the same pair, and the same reason, as
+    /// [`BalanceVm::immature_sats`].
+    pub immature_sats: String,
+    pub immature_display: String,
 }
 
 /// One word of a recovery phrase, on its way to a screen that shows it once.
@@ -1089,6 +1119,26 @@ pub struct SendDraft {
     /// telling them, whether this payment is traceable. The two pools are not
     /// interchangeable and the interface asks.
     pub from_pool: Pool,
+    /// Empty this key of the chain's own coin, with the amount worked out by
+    /// the builder rather than typed. [`Self::amount`] is ignored when this is
+    /// set, and the form does not offer a field to type one into — a figure the
+    /// form could show would be a guess, because it cannot be known until coins
+    /// have been selected.
+    ///
+    /// **The `R → R` route only, and the native coin only.** [`Route`] is what
+    /// decides that, not [`Self::from_pool`] — a transparent balance paying a
+    /// `zs…` is a shield, and shielding has a builder and a fee of its own that
+    /// nothing here prices. The other three refuse it rather than ignoring it,
+    /// under two different reasons: a shielded *source* cannot be swept, since
+    /// its ten-note spend ceiling means "everything" is frequently unreachable
+    /// in one transaction and that is a product question rather than an
+    /// arithmetic one; a shielded *destination* is a different transaction
+    /// altogether. And a key holding a token still
+    /// holds it afterwards — a reserve output is not native funding, so no
+    /// native builder will spend one. Once #36 puts a currency on this struct,
+    /// this has to mean "all of the selected currency", which is a different
+    /// transaction again.
+    pub send_all: bool,
 }
 
 /// Which balance a payment is drawn from.
