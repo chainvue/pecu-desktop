@@ -751,7 +751,14 @@ export component DashboardScreen inherits VerticalLayout {
                                 color: Theme.accent;
                             }
                             Text {
-                                text: @tr("shielded");
+                                // The second-pool argument at the top of this
+                                // row, said on screen instead of only in the
+                                // source. Safe in every state the caption can
+                                // reach, because the row is gated on
+                                // `shielded-any` — it never renders beside a
+                                // pool nobody has scanned, nor beside one
+                                // scanned and found empty.
+                                text: @tr("shielded · not counted above");
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                             }
@@ -806,7 +813,14 @@ export component DashboardScreen inherits VerticalLayout {
                                 color: Theme.positive;
                             }
                             Text {
-                                text: @tr("arriving");
+                                // Not the shielded sentence, and deliberately
+                                // not. This is the same pool one confirmation
+                                // away: it joins the total the moment it is
+                                // mined, where shielded value never does.
+                                // Repeating "not counted above" here would
+                                // flatten the difference between money that is
+                                // coming and money that is elsewhere.
+                                text: @tr("arriving · not counted yet");
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                             }
@@ -822,7 +836,16 @@ export component DashboardScreen inherits VerticalLayout {
                                 color: Theme.text-secondary;
                             }
                             Text {
-                                text: @tr("leaving");
+                                // The opposite sentence to the shielded one,
+                                // and it has to be. These coins are confirmed
+                                // and an unconfirmed transaction already spends
+                                // them, so `Funding` puts them in neither of the
+                                // lists the total is built from: a reader who
+                                // subtracts them a second time arrives at a
+                                // number the wallet never claimed. "not counted
+                                // above" would be false here in the same breath
+                                // it is true two columns to the left.
+                                text: @tr("leaving · already deducted");
                                 font-size: Typo.micro;
                                 color: Theme.text-tertiary;
                             }
