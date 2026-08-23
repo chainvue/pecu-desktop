@@ -395,6 +395,12 @@ export struct AssetRow {
     name: string,
     amount: string,
     secondary: string,
+    // The currency's i-address, on every row including the native one, where
+    // `secondary` carries it only for tokens because a chain does not need its
+    // own id printed under its own name. The Convert shortcut sends this and
+    // never the name beside it: two currencies on this chain can share a name
+    // component, so the name is not an identifier.
+    currency-id: string,
     native: bool,
 }
 

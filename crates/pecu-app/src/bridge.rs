@@ -1273,9 +1273,14 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
             } else {
                 asset.currency_id.clone().into()
             },
+            currency_id: asset.currency_id.clone().into(),
             native: asset.native,
         })
         .collect();
+    // Folded here rather than in the interface, for the same reason
+    // `has_breakdown` is: Slint cannot fold a model inside an expression. Why
+    // it is carried at all is argued at the property declaration.
+    state.set_holds_tokens(vm.assets.iter().any(|asset| !asset.native));
     state.set_assets(ModelRc::from(Rc::new(VecModel::from(assets))));
 }
 

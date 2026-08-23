@@ -1666,7 +1666,7 @@ export component ReservePicker inherits Rectangle {
                         // The "not started yet" note is not in the spoken
                         // label: a `Note` cannot be interpolated into a string
                         // in Slint, and it is announced by the `NoteText`
-                        // beside this row anyway. `docs/LATER.md` §10.
+                        // beside this row anyway. See `docs/LATER.md`.
                         accessible-label: @tr("{}, {}", row.name, row.kind);
                         accessible-action-default => {
                             Actions.choose-reserve(

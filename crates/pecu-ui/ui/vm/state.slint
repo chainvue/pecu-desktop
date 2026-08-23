@@ -75,6 +75,13 @@ export global WalletState {
     in property <bool> has-breakdown: false;
     in property <string> matures-in: "";
 
+    // True when this wallet holds something other than the chain's own
+    // currency. What it gates is a sentence about what can be sent, and that
+    // sentence is noise on a wallet holding only coin — so the fact is carried
+    // rather than inferred from `assets.length > 1`, which is the same answer
+    // only because the native row happens to be pushed first.
+    in property <bool> holds-tokens: false;
+
     in property <[AssetRow]> assets: [];
     // The dashboard's short list, and the whole thing for the Activity screen.
     // Two models rather than one sliced, because Slint's `for` has no window.
