@@ -3,7 +3,7 @@
 
 import { R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, TxId } from "../components/base.slint";
-import { Actions, SendState, WalletState } from "../vm/state.slint";
+import { Actions, HaltState, SendState, WalletState } from "../vm/state.slint";
 import { Field, KeyPicker, QuoteLine } from "../components/form.slint";
 import { Notice, NoteText, NoticeTitle } from "../components/note.slint";
 
@@ -324,6 +324,37 @@ export component SendForm inherits HorizontalLayout {
 
                 Text {
                     text: @tr("The fee and the total appear on the next step. They are read back from the signed transaction, not estimated here.");
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+
+                // Which currency this form is about — the one thing it never
+                // said, on a screen with no currency field to give it away.
+                //
+                // Only for a wallet that holds a token, because that is the
+                // only person it is about: somebody who read "48.5000 0000"
+                // off a Bridge.vETH row and typed it in here would otherwise
+                // send 48.5 of the chain's own coin, and the review would show
+                // the amount and the recipient and never the currency.
+                //
+                // Stated as a property of this build, in the present tense,
+                // and naming the thing that does work in the same breath. No
+                // button beside it: `SendScreen` is mounted bare and has no
+                // way to navigate, and the shortcut already lives on the asset
+                // row this sentence points back at.
+                //
+                // Three wordings, on the same three halt states the dashboard
+                // caption splits and for the reason written down there: only
+                // one of them is "conversions work", and pointing at Convert
+                // in the other two is directions to a door this screen has no
+                // idea is shut.
+                if WalletState.holds-tokens: Text {
+                    text: HaltState.conversions-halted
+                        ? @tr("This form sends {}. Sending a token is not built yet, and this chain has conversions switched off — so a token cannot be moved at all.", WalletState.ticker)
+                        : HaltState.severity == "" || HaltState.severity == "unknown"
+                        ? @tr("This form sends {}. Sending a token is not built yet, and this wallet does not know whether this chain is taking conversions — the Convert screen will say.", WalletState.ticker)
+                        : @tr("This form sends {}. Sending a token is not built yet; a token is moved by converting it on the Convert screen.", WalletState.ticker);
                     font-size: Typo.micro;
                     color: Theme.text-tertiary;
                     wrap: word-wrap;

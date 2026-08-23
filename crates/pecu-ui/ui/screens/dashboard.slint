@@ -2,7 +2,7 @@
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Skeleton, StatusPill } from "../components/base.slint";
-import { Actions, ChartState, MarketState, SeedState, SendState, WalletState } from "../vm/state.slint";
+import { Actions, ChartState, ConvertState, HaltState, MarketState, SeedState, SendState, WalletState } from "../vm/state.slint";
 
 // The screen shown whenever there is no unlocked wallet.
 // A payment we could not confirm reached the network.
@@ -314,6 +314,11 @@ export component BalanceChart inherits VerticalLayout {
 
 // What this wallet holds.
 export component AssetsPanel inherits Card {
+    // Which currency to convert, by i-address. Asked of the screen, because
+    // going to Convert belongs to the window and this panel knows only that a
+    // row was pressed and which currency it was about.
+    callback convert(string);
+
     VerticalLayout {
         padding: Sp.s3;
 
@@ -346,7 +351,41 @@ export component AssetsPanel inherits Card {
             glyph-tone: asset.native ? Theme.accent : Theme.text-secondary;
             title: asset.name;
             subtitle: asset.secondary;
-            interactive: false;
+            // A token row is the way to Convert; the chain's own row is not.
+            // Converting coin is something Convert will happily do, but the
+            // native row is here to say what is held, and a wallet whose every
+            // balance is also a button has stopped distinguishing the two.
+            interactive: !asset.native;
+            // Overriding the inherited name rather than accepting it: "{title},
+            // {subtitle}" says everything except the one thing a screen reader
+            // needs, which is what pressing does. The i-address stays in it.
+            // Thirty-four characters is punishing to hear, and it is the only
+            // part of a token row that cannot lie — dropping it would announce
+            // two holdings whose names collide as the same button, which is the
+            // substitution the sighted row refuses to make.
+            accessible-label: asset.native
+                ? asset.name
+                : @tr("Convert {}, {}", asset.name, asset.secondary);
+            clicked => { root.convert(asset.currency-id); }
+
+            // # Why there is no convert mark on this row
+            //
+            // There was one, in a gutter reserved on every row so the amounts
+            // would still line up. It was re-recorded and looked at, and the
+            // gutter cost 27px of a column that has none to spare: this card
+            // is one of three sharing the window by what each would prefer, so
+            // it widened Assets, elided `iBoaN7sw…stcfgGMh` on the row the
+            // mark sat on — the part of a token row that cannot lie — and
+            // pushed `Bridge.vETH` in Markets down to `Bridge.v…`. A 15px
+            // arrow bought with two truncated identifiers is a bad trade.
+            //
+            // What says the row is pressable is the sentence under the list,
+            // which is words rather than a glyph and costs nothing. Every one
+            // of its three wordings names Convert, including the one for a
+            // chain that is refusing conversions: a caption that fell silent
+            // about where the row goes would leave a pressable row with
+            // nothing at all marking it, in exactly the state somebody is most
+            // likely to go looking.
 
             // Right-aligned, so a column of amounts lines up on the decimal
             // point rather than floating in the middle of the row. With the
@@ -359,6 +398,79 @@ export component AssetsPanel inherits Card {
                     size: Typo.num;
                     y: (parent.height - self.height) / 2;
                 }
+            }
+        }
+
+        // What the row is a shortcut to, and why it is the only route.
+        //
+        // Under the rows rather than on one of them: it is true of every token
+        // in the list, and repeated per row it would be three copies of one
+        // sentence. Silent on a wallet holding only coin, where it would be a
+        // warning about money nobody has.
+        //
+        // # Why this is a `Rectangle` with its height written out
+        //
+        // A wrapping `Text` is measured twice and the two answers disagree.
+        // Slint asks a layout cell how tall it wants to be **before** any
+        // width has been solved, and the width it measures against is the
+        // cell's *preferred* width; then it draws the text at the width the
+        // solved layout actually handed over. Both earlier shapes got caught
+        // by that from opposite sides. In a `HorizontalLayout` the sentence
+        // was measured unwrapped, asked for one line's height, and the picture
+        // came back with everything after the first line cut off below the
+        // card. In a `VerticalLayout` with `preferred-width: 0px` — which the
+        // caption needs, or its unwrapped width decides how wide this column
+        // is and Markets loses a third of itself — it was measured against
+        // nought and asked for the height of a sentence wrapped one word per
+        // line: 105px of empty card under two drawn lines, and the ASSETS card
+        // stopped hugging its rows.
+        //
+        // A `Rectangle` is not a layout, so it contributes exactly the height
+        // written here and nothing about the sentence is inferred. The width
+        // is read off the cell the card handed over rather than asked for,
+        // which is the direction that cannot feed back into the column split,
+        // and the `Text` inside — sized by its own content rather than by a
+        // cell — wraps to that width and is the height it actually drew. Same
+        // move as the `Rectangle { height: 108px }` empty state above.
+        //
+        // The inset is not decoration either: the rows carry the list's own
+        // padding rather than the card's, so without it the sentence starts to
+        // the left of every name it is about.
+        if WalletState.holds-tokens: Rectangle {
+            height: caption.height + Sp.s3 * 2;
+
+            caption := Text {
+                x: Sp.s5;
+                y: Sp.s3;
+                width: parent.width - Sp.s5 * 2;
+
+                // Three wordings, because there are three states and only one
+                // of them is "conversions work". `HaltState.conversions-halted`
+                // alone does not separate them: `upgrade::Status::unknown` sets
+                // it false because the field has to be something, and the note
+                // on it says never to collapse that into clear.
+                text: HaltState.conversions-halted
+                    // Present tense, no date. `disabledefi` has stood on this
+                    // chain since block 1 187 000 and on mainnet since July, so
+                    // "until they are back" would be a promise nobody made.
+                    ? @tr("Only {} can be sent, and this chain has conversions switched off — so a token cannot be moved at all. Its row opens Convert, which says the same thing.", WalletState.ticker)
+                    // Nothing read yet, or the read failed. The dashboard is
+                    // the first screen after unlock and the portfolio can
+                    // arrive before the halt does, so this is a state a wallet
+                    // passes through rather than an exotic one — and on this
+                    // chain the instruction it would otherwise print is false.
+                    : HaltState.severity == "" || HaltState.severity == "unknown"
+                    ? @tr("Only {} can be sent. A token leaves this wallet only by conversion, and this wallet does not know whether this chain is taking them. Its row opens Convert, which will say.", WalletState.ticker)
+                    // "Leaves this wallet only by conversion" rather than "open
+                    // its row to convert it": a row is given to every non-zero
+                    // token holding, while a conversion needs a started pool
+                    // trading both legs, so a currency that is nobody's reserve
+                    // has a row and no route. The row still goes to Convert,
+                    // which is the screen that answers that per pair.
+                    : @tr("Only {} can be sent. A token leaves this wallet only by conversion — its row opens Convert, which says whether this one has a route.", WalletState.ticker);
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
             }
         }
     }
@@ -795,7 +907,52 @@ export component DashboardScreen inherits VerticalLayout {
             alignment: start;
             horizontal-stretch: 1;
             Eyebrow { text: @tr("ASSETS"); }
-            AssetsPanel {}
+            AssetsPanel {
+                // The Convert screen's own picker writes these two properties
+                // and then fires `edited()`; arriving from here does the same
+                // thing, so there is one path into a priced form rather than
+                // two that can drift apart.
+                convert(currency) => {
+                    // Convert draws the form only at `step == "form"`, and
+                    // nothing resets the step on navigation — so somebody who
+                    // read "Conversion sent" and pressed Dashboard in the rail
+                    // instead of Done would press this row and land back on
+                    // that receipt, with the currency swapped underneath it
+                    // and a fresh quote already sent. Land on a form.
+                    //
+                    // Through the screen's own two exits rather than by
+                    // writing `step` here: a review that is merely walked away
+                    // from leaves the core holding signed bytes against a
+                    // ticket number nobody can reach again, which is the whole
+                    // reason `cancel()` sends `CancelConversion`. The price of
+                    // going through them is that a signed conversion is
+                    // discarded by pressing a row, and that is the right way
+                    // round — the alternative is money already signed for
+                    // sitting in memory behind a screen that has moved on.
+                    if (ConvertState.step == "review") {
+                        ConvertState.cancel();
+                    } else if (ConvertState.step != "form") {
+                        ConvertState.done();
+                    }
+                    // A refusal from earlier in the session is not about the
+                    // currency this row just picked, and it is drawn under the
+                    // button on the form this row promises. `cancel()` and
+                    // `done()` clear it; arriving at a form that was already a
+                    // form has to clear it here.
+                    ConvertState.problem = { code: "", args: [] };
+                    ConvertState.from-address = currency;
+                    // An amount typed against another currency is not this
+                    // one's amount. Carrying it over would put a figure in the
+                    // pay field that means something else.
+                    ConvertState.pay-draft = "";
+                    // Never a form that converts something into itself.
+                    if (ConvertState.to-address == currency) {
+                        ConvertState.to-address = "";
+                    }
+                    ConvertState.edited();
+                    root.navigate("convert");
+                }
+            }
         }
 
         VerticalLayout {

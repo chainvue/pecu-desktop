@@ -1185,6 +1185,13 @@ pub fn funded(ui: &AppWindow) {
     net.set_tip("1 187 500".into());
     net.set_latency("84 ms".into());
 
+    // The oracle has been asked and answered nothing is switched off. Left
+    // out, the severity is the empty string, which the interface reads as "not
+    // asked yet" and says so under the asset rows — a different sentence, and
+    // not the one a wallet that has read a block height and a converter is in.
+    // `converting_halted` and `converting_halt_scheduled` override it.
+    ui.global::<HaltState>().set_severity("clear".into());
+
     let wallet = ui.global::<WalletState>();
     wallet.set_ticker("VRSCTEST".into());
     wallet.set_total("12 482.4200 0000".into());
@@ -1196,12 +1203,17 @@ pub fn funded(ui: &AppWindow) {
     wallet.set_pending("".into());
     wallet.set_incoming("5.0000 0000".into());
     wallet.set_has_breakdown(true);
+    // Set beside the assets rather than derived from them, because the bridge
+    // carries it as its own fact and a fixture that computed it would be
+    // photographing a different wallet.
+    wallet.set_holds_tokens(true);
 
     wallet.set_assets(ModelRc::from(Rc::new(VecModel::from(vec![
         AssetRow {
             name: "VRSCTEST".into(),
             amount: "12 482.4200 0000".into(),
             secondary: SharedString::new(),
+            currency_id: VRSCTEST.into(),
             native: true,
         },
         AssetRow {
@@ -1214,6 +1226,7 @@ pub fn funded(ui: &AppWindow) {
             // hand-typed one here failed to parse, which nobody would notice in
             // a picture and somebody might copy out of it.
             secondary: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
+            currency_id: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
             amount: "48.5000 0000".into(),
             native: false,
         },

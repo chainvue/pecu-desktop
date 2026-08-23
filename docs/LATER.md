@@ -909,3 +909,54 @@ wallet deliberately does not reach them. It destroys value with no output
 paying anything back, and it belongs behind its own confirmation, on its own
 screen, not as a currency you can pick in the same list as the rest.
 
+---
+
+## 10. Sending a token — signposted, not built
+
+**Status:** the absence is now said out loud; the capability is not there.
+
+`SendDraft` has four fields and none of them names a currency
+(`pecu-protocol/src/models.rs`), `send::prepare` calls
+`verus_flows::send::prepare_send`, which builds a native output, and `validate`
+compares the typed amount against the **native** spendable balance. So the send
+path is not "untested for tokens" — there is no slot to put a token into. What
+a person could do until now was read `48.5000 0000` off the Bridge.vETH row,
+type `48.5` into Send, and pay somebody 48.5 of the chain's own coin: a valid
+transaction, an amount they believed was their token, and a review step that
+shows the amount and the recipient and never the currency, because there is
+only ever one.
+
+The dashboard and the send form now say which currency can be sent, and a token
+asset row is a shortcut into Convert pre-filled with that currency. That is a
+signpost, not a fix.
+
+**And the signpost has a blind spot of its own.** Both sentences are gated on
+`holds_tokens`, which the bridge folds out of the asset rows — and a portfolio
+read whose `token_balances` call failed produces no token rows at all
+(`portfolio::read` logs the warning and drops the result without even setting
+`reading.failure`). So the person whose tokens could not be counted sees an
+asset list that under-reports what they hold and no sentence about it, rather
+than being told the count is unknown. `PortfolioVm::tokens_unknown` exists for
+exactly that distinction and is still read by nobody; whoever wires it up should
+know the caption is its second consumer.
+
+**What building it costs.** Less than it looks, because both halves already
+exist. The SDK has `send::prepare_send_token(reader, key, currency, to, amount,
+token_utxos)` at the pinned rev, and its doc is explicit that discovering the
+outputs is the caller's job. This wallet already discovers them:
+`convert::token_inputs` walks the spendable set, decodes each script and keeps
+reserve outputs carrying exactly the wanted currency. The work is a currency on
+`SendDraft` and `SendState`, a picker on the form (the Convert screen's overlay
+is the component to reuse — it already writes an i-address rather than a name,
+for the recorded reason that `Bridge.vETH` and `Bridge.CHIPS` share a name
+component), routing in `prepare`, and a currency-aware `validate`. That last one
+is the part that ships wrong quietly: `amount-above-spendable` currently quotes
+the native figure, which becomes a false sentence the moment a currency exists.
+
+**Gated on evidence, not on effort.** The selector it would be built on is the
+one §9 records as never having run — no reserve utxos on the scripted chain, no
+conversions on VRSCTEST while `disabledefi` holds. So the first move is the
+`with_reserve_utxo` fixture §9 already asks for, through `convert_build.rs`, and
+then a real token conversion on a chain that allows one. Only then is there
+reason to trust the same input selection with a payment. Steps one and two are
+§9's outstanding item as well; the two entries share their first move.
