@@ -42,9 +42,13 @@ publish = false
 # nullifiers round-trip together, which is the pair that is wrong in the
 # dangerous direction if they are stored apart.
 verus-sdk = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", features = ["network", "light", "prover", "multicore", "serde"] }
-# Taken directly (not through the facade) by pecu-mock, which needs
-# `verus-rpc` WITHOUT the `http` feature so no socket-capable code exists in its
-# dependency graph at all. See pecu-mock/Cargo.toml.
+# Taken directly (not through the facade) by pecu-mock, which declines the
+# `http` feature. That buys something only if pecu-mock is ever built alone:
+# in this workspace pecu-chain needs `verus-rpc/http` for the live client,
+# cargo unifies the feature back on, and `cargo tree -p pecu-mock` lists
+# `ureq`. What holds in every build is that no source file in pecu-mock names
+# a transport, a URL or a socket — see pecu-mock/src/lib.rs and its
+# tests/no_network_stack.rs.
 verus-rpc = { git = "https://github.com/chainvue/verus-rust-sdk", rev = "a08d652ddb0837efafa2b5df251ca8d6c28206ae", default-features = false }
 # Dev-dependency only, for `testing::ScriptedReader` — which lets a send be
 # built and signed against a scripted chain, with the broadcasts it received

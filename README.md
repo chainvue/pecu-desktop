@@ -15,8 +15,9 @@ cargo run -p pecu-app                   # a real node, testnet by default
 
 Start with `mock`. It runs against a scripted chain in its own directory, so
 fixture figures can never end up in the files a real wallet reads back — and it
-is structurally unable to reach a network, because `pecu-mock` does not have a
-socket-capable crate in its dependency graph.
+holds no client to reach a network with: no source file in `pecu-mock` names a
+transport, a URL or a socket, which is what its `tests/no_network_stack.rs`
+enforces, and reaching the network is absent rather than refused.
 
 Only **one instance per wallet directory**. A second one says so and stops:
 three of the files it would share are written whole, and the last writer wins —
@@ -36,9 +37,10 @@ The interface is English, on every system. See `crates/pecu-ui/translations/`.
 ## Checks
 
 ```sh
-scripts/check.sh          # all three, which is what you want before pushing
+scripts/check.sh          # all four, which is what you want before pushing
 scripts/check.sh clippy   # warnings are not acceptable output
 scripts/check.sh test
+scripts/check.sh mock     # the tests the default feature set compiles away
 scripts/check.sh deny     # the dependency graph
 ```
 
@@ -50,14 +52,20 @@ offscreen — which is what lets a headless runner run them at all, and a failed
 visual test uploads its diff images as a build artefact, because the log names
 the screens that changed and only the images say what they now look like.
 
-The third one is `cargo deny`, and it compiles nothing: it reads `Cargo.lock`
+`mock` is the same suite again with the one feature this workspace has,
+because four of pecu-core's test files are `#![cfg(feature = "mock")]` and
+compile to empty binaries without it — the offline coverage of building and
+signing a transaction against a scripted chain. It skips `pecu-ui`, whose
+build that feature cannot reach.
+
+The last one is `cargo deny`, and it compiles nothing: it reads `Cargo.lock`
 and the RustSec advisory database, and fails on a known-vulnerable or abandoned
 crate, a licence this project may not ship, a source nobody chose, or a crate
 that touches key material arriving at two versions. The policy is `deny.toml`
 at the root — every tolerated advisory carries a line saying why it is tolerated
 and what would end that, which is the part a bare ignore list never records. It
 wants `cargo-deny` 0.20 or newer (`cargo install --locked cargo-deny`); the
-other two halves run without it.
+other three halves run without it.
 
 Some of the tests are unusual and are the point of the project rather than a
 formality:

@@ -86,6 +86,58 @@ async fn wait_for_pending(
     .expect("a pending launch is reported within thirty seconds")
 }
 
+/// The two facts a resumed launch needs before it can be built, neither of
+/// which anybody asks for: the identity list, and a balance.
+///
+/// Both are needed and neither is instant. The record holds a *name*, not an
+/// address — the address did not exist when the form was filled in — so the
+/// identity list is where the address comes from; and a definition needs the
+/// parent currency, which is a fact about the chain nobody has asked for yet in
+/// a freshly started process. Pressing before either lands is refused,
+/// correctly, which is what the second test below proves on the way here.
+///
+/// # Why this is a function rather than seventeen lines in that test
+///
+/// Because clippy, once it could finally see this file, counted the test at 102
+/// lines against a hundred-line limit — and of everything in there this is the
+/// block that owes least to the story around it. It waits for two events and
+/// asserts nothing, so lifting it out moves no assertion away from the test
+/// that gives it its meaning. It is the trade `Core::shielded_plan` was lifted
+/// out of `prepare_send` on when that function sat on the same ceiling exactly:
+/// take the most self-contained block out, and say where it landed why. The
+/// other candidate was the two-second wait that proves nothing was signed, and
+/// that one is the point of the test, which is exactly why it stayed.
+///
+/// Two of the three `#[allow(clippy::too_many_lines)]` in this suite argue for
+/// themselves, and both arguments are that the length *is* the subject:
+/// shielded_persistence.rs is three launches in sequence, and log_hygiene.rs is
+/// one walk through the application — a file-level allow rather than one on a
+/// test, but written down beside the reason. Splitting either would split the
+/// narrative. The third, on demo_chain.rs's markets-pricing test, is a bare
+/// allow that has never said why. Neither argument is available here — this
+/// block is not the narrative and nothing about it wants a hundred lines — so
+/// the lint is right and the function moved.
+async fn wait_for_the_identities_and_a_balance(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+) {
+    let mut listed = false;
+    let mut funded = false;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !listed || !funded {
+            match events.recv().await {
+                Some(Event::Identities { yours, .. }) => {
+                    listed = yours.iter().any(|row| row.name == LAUNCHABLE);
+                }
+                Some(Event::Portfolio(_)) => funded = true,
+                Some(_) => {}
+                None => panic!("the core stopped before the identities arrived"),
+            }
+        }
+    })
+    .await
+    .expect("the identities and the balance both arrive within thirty seconds");
+}
+
 /// The decision survives the process that made it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_currency_waiting_for_its_name_outlives_the_wallet_that_configured_it() {
@@ -266,31 +318,9 @@ async fn a_resumed_launch_is_signed_but_waits_for_a_press() {
     // What the application does on its own between unlocking and anybody
     // reaching this screen: read the balance, which is where the chain's own
     // currency comes from, and read the identities.
-    //
-    // Both are needed and neither is instant. The record holds a *name*, not an
-    // address — the address did not exist when the form was filled in — so the
-    // identity list is where the address comes from; and a definition needs the
-    // parent currency, which is a fact about the chain nobody has asked for yet
-    // in a freshly started process. Pressing before either lands is refused,
-    // correctly, which is what this test proved on the way here.
     dispatcher.send(Command::Refresh(pecu_protocol::RefreshScope::All));
     dispatcher.send(Command::RefreshIdentities);
-    let mut listed = false;
-    let mut funded = false;
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !listed || !funded {
-            match events.recv().await {
-                Some(Event::Identities { yours, .. }) => {
-                    listed = yours.iter().any(|row| row.name == LAUNCHABLE);
-                }
-                Some(Event::Portfolio(_)) => funded = true,
-                Some(_) => {}
-                None => panic!("the core stopped before the identities arrived"),
-            }
-        }
-    })
-    .await
-    .expect("the identities and the balance both arrive within thirty seconds");
+    wait_for_the_identities_and_a_balance(&mut events).await;
 
     // And now somebody presses it.
     dispatcher.send(Command::ResumeLaunch);
