@@ -1,5 +1,5 @@
-# Clippy, the test suite and the supply-chain policy — on `main`, and on every
-# pull request.
+# Clippy, the test suite, the same suite again with `mock`, and the
+# supply-chain policy — on `main`, and on every pull request.
 #
 # Every job calls `scripts/check.sh` rather than listing the commands here, so
 # that what CI runs and what you can run on your own machine are the same thing
@@ -60,11 +60,44 @@ jobs:
   # sixteen-gigabyte runner asks it to hold two complete sets — forty
   # gigabytes on the machine this was developed on. Split, each machine holds
   # one.
+  #
+  # The third entry is the suite again with `mock`, the one feature this
+  # workspace has and the one that is off by default — so `test` compiles four
+  # of pecu-core's test files to empty binaries and reports them green.
+  # Twenty-one tests, and the only offline coverage of building and signing a
+  # transaction. It is an entry of its own rather than a second command in
+  # `test` for the reason scripts/check.sh sets out at length, and that reason
+  # is not cost: so that the result has a name in the checks list, having spent
+  # its whole life inside somebody else's green tick.
+  #
+  # What this machine costs, though, is a full build and not the 26 seconds and
+  # 720 MB quoted in that script. Those are the *warm delta* — a second feature
+  # set beside an already-built tree — and they are the figures that say
+  # folding this into `test` would have been nearly free, not a description of
+  # this runner. This one starts cold at the same moment the other two do, so
+  # it pays roughly what the `test` half pays: the twenty minutes and six
+  # gigabytes of a first build, less pecu-ui's thirteen test binaries.
+  # `--exclude pecu-ui` drops those and nothing else — pecu-ui's own lib is
+  # still compiled here, because pecu-app depends on it, which
+  # `cargo tree --workspace --exclude pecu-ui --features mock -e features`
+  # shows as `pecu-ui feature "default"` under pecu-app, and that lib is the
+  # generated Slint crate both runner deaths happened in. So this entry wants
+  # the swapfile, the toolchain purge and `CARGO_BUILD_JOBS: 2` exactly as much
+  # as the other two, which is why it is a matrix entry and not a light job of
+  # its own like `supply-chain`.
+  #
+  # A new matrix value also publishes a new check name — `checks (mock)` — and
+  # a required-status-check list names its checks literally, so the name has to
+  # be added to `main`'s by hand. Today there is no list to add it to:
+  # `gh api repos/:owner/:repo/branches/main/protection` answers 404 and
+  # `gh api repos/:owner/:repo/rulesets` answers `[]`. That is a repository
+  # setting rather than anything this file can fix, but the next entry added
+  # here needs the same treatment, or it is a check nobody's merge waits for.
   checks:
     strategy:
       fail-fast: false
       matrix:
-        half: [clippy, test]
+        half: [clippy, test, mock]
 
     runs-on: ubuntu-latest
 
@@ -157,18 +190,18 @@ jobs:
       # database are small and always pay for themselves, because the SDK is a
       # git dependency and cloning it is the slow part of a cold start.
       #
-      # One key across all three jobs, because with `target` gone what is left
-      # is a pure function of Cargo.lock: the clippy, test and deny copies
-      # would be byte-identical by construction. Three of them would spend
-      # three times the SDK's git database against the same ten-gigabyte budget
+      # One key across all four jobs, because with `target` gone what is left
+      # is a pure function of Cargo.lock: the clippy, test, mock and deny copies
+      # would be byte-identical by construction. Four of them would spend four
+      # times the SDK's git database against the same ten-gigabyte budget
       # that is the argument for not caching `target` at all, and that budget
       # is evicted least-recently-used — so splitting the key makes the cold
       # start it exists to prevent more likely, not less.
       #
-      # Restore-only here. Three jobs racing to save one key means two of them
+      # Restore-only here. Four jobs racing to save one key means three of them
       # log "another job may be creating this cache" and throw their copy away;
       # `supply-chain` does the saving because it finishes in about a minute,
-      # while these two are still linking.
+      # while these three are still linking.
       - uses: actions/cache/restore@v4
         with:
           path: |
@@ -231,10 +264,12 @@ jobs:
       # what they now look like, which is the half that decides whether the
       # change was wanted.
       #
-      # Only the `test` half can produce one. On the clippy half this step
-      # would find nothing and say so — a warning, in a repository whose README
-      # says warnings are not acceptable output, printed into the run somebody
-      # is already reading because something failed.
+      # Only the `test` half can produce one. The clippy half renders nothing,
+      # and the mock half excludes pecu-ui, whose build that feature cannot
+      # reach — so on either of them this step would find nothing and say so: a
+      # warning, in a repository whose README says warnings are not acceptable
+      # output, printed into the run somebody is already reading because
+      # something failed.
       - name: Snapshot diffs
         if: failure() && matrix.half == 'test'
         uses: actions/upload-artifact@v4
@@ -243,7 +278,7 @@ jobs:
           path: crates/pecu-ui/tests/snapshots/*.diff.png
           if-no-files-found: ignore
 
-  # The third half, and a job of its own rather than a third entry in the
+  # The fourth half, and a job of its own rather than a fourth entry in the
   # matrix above.
   #
   # `cargo deny` compiles nothing: it reads Cargo.lock and the RustSec
@@ -252,8 +287,8 @@ jobs:
   # snapshot upload — exists for a compile that does not happen here, and
   # putting this in the matrix would mean five `if: matrix.half != 'deny'`
   # guards on steps whose whole purpose is then to not run. A separate job
-  # reads as what it is, and it finishes in about a minute while the other two
-  # are still linking.
+  # reads as what it is, and it finishes in about a minute while the other
+  # three are still linking.
   supply-chain:
     runs-on: ubuntu-latest
 
@@ -298,7 +333,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           "$HOME/.cargo/bin/cargo-deny" --version
 
-      # The same pin as the other two jobs. cargo-deny shells out to
+      # The same pin as the other three jobs. cargo-deny shells out to
       # `cargo metadata` to build the graph it judges, and reading that graph
       # with a different cargo than the one that compiles it is how a policy
       # ends up passing against a tree nobody builds.
@@ -314,7 +349,7 @@ jobs:
       #
       # The same key the two `checks` jobs restore from, and this is the job
       # that saves it — see the note there. It is the short one, so the cache
-      # lands while the other two are still compiling.
+      # lands while the other three are still compiling.
       - uses: actions/cache@v4
         with:
           path: |
