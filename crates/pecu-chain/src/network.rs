@@ -38,13 +38,16 @@
 /// [`crate::corroborate`] holds the coins those spends would fund against a
 /// second node's answer for the same address, so an endpoint serving another
 /// chain's outputs cannot fund a transparent payment or a shield: the two
-/// chains' UTXO sets for one address are disjoint, and the outpoints it offers
-/// are ones the second node has indexed the blocks of and never seen. That
-/// reaches a selective liar, which no amount of corroborating `getinfo` does —
+/// chains' UTXO sets for one address are disjoint, and the second node
+/// recognises none of the outpoints it offers. Whether that is a disagreement
+/// or two honest nodes out of step is decided by the two tips against the
+/// coins' claimed heights, which [`crate::corroborate`] spells out along with
+/// what the heights are and are not worth. That reaches a selective liar, which
+/// no amount of corroborating `getinfo` does —
 /// a proxy can forward `getinfo` to a real node and answer `getaddressutxos`
 /// from somewhere else.
 ///
-/// Four limits, stated here rather than left to be discovered:
+/// Five limits, stated here rather than left to be discovered:
 ///
 /// * **A compromised built-in is corroborated by nothing.** The check runs when
 ///   the *active* node is one the user added, because that is the only case
@@ -59,7 +62,27 @@
 ///   install has no second source at all, and "refuse whenever uncorroborated"
 ///   would refuse every spend on every chain. Shipping a second, independently
 ///   operated endpoint per real-money chain is what would make that rule
-///   possible, and it is an operator decision rather than a code one.
+///   possible. Finding and paying for one is an operator decision; turning it
+///   into a check is not, because
+///   [`crate::node::NodeManager::second_source`] returns `Unheld` the moment
+///   the active node is a built-in, so a second shipped URL on its own would
+///   leave a default install exactly as uncorroborated as it is now. Both
+///   halves are recorded in `docs/LATER.md`.
+/// * **While the shipped endpoint is unreachable, a user on their own node
+///   cannot spend transparent funds or shield at all** — on any chain, and
+///   there is no way out from inside the wallet. Corroboration fails closed by
+///   design, and `SecondSourceSilent` is a refusal rather than a fallback for
+///   the reason [`crate::corroborate`] gives at length. What is worth stating
+///   is that the state is a trap and not merely a pause:
+///   `NodeManager::remove` refuses to remove a built-in, and selecting the
+///   built-in instead is no way out either — `permit::evaluate` will not issue
+///   a permit for a node that is not answering, so that switch is refused as
+///   `NetworkUnknown` or `NodeNotReady` for as long as the outage lasts. The
+///   remedy is to wait for somebody else's server, or to edit the stored node
+///   list by hand. There is deliberately no opt-out — a switch
+///   reading "spend without checking" is the switch an attacker's instructions
+///   would tell somebody to flick — and the cost of not having one belongs
+///   here, in the list of things this build does not pretend about.
 /// * **Two endpoints agreeing is not proof.** They may share an operator, an
 ///   upstream or a bug. What this defeats is *one* endpoint being wrong.
 /// * **Every other spend this wallet signs is uncorroborated.** A conversion,

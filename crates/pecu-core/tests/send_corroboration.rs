@@ -111,18 +111,33 @@ fn wallet() -> Wallet {
     }
 }
 
-/// A node calling itself VRSCTEST, holding `coins` at the wallet's address.
+/// What the two chains in issue #29 had actually reached when this was written.
+///
+/// `api.verus.services` answered 4,207,412 blocks and `api.verustest.net`
+/// 1,203,115. The figures are not decoration: the whole attack is a node
+/// serving the first chain's outputs while calling itself the second, so its
+/// coins sit three million blocks *above* anything the honest node has indexed.
+/// A suite that gave both nodes the same tip — which is what this file did
+/// first, by taking `MockState::default().tip` for every node — certified a
+/// verdict the field never produces, and the field's verdict was the wrong one.
+const MAINNET_TIP: u32 = 4_207_412;
+const TESTNET_TIP: u32 = 1_203_115;
+
+/// A node calling itself VRSCTEST, holding `coins` at the wallet's address, and
+/// answering from `tip`.
 ///
 /// The identity is the same on both nodes in every test here. That is
 /// deliberate: if the two disagreed about the chain, `#28`'s check would catch
-/// it and this file would be testing something already covered.
-fn node(wallet: &Wallet, chain: u8, coins: &[u64]) -> pecu_mock::MockChain {
+/// it and this file would be testing something already covered. What differs is
+/// the height each one answers from, because that is the only thing left that
+/// tells a hostile endpoint from an honest one.
+fn node_at(wallet: &Wallet, chain: u8, coins: &[u64], tip: u32) -> pecu_mock::MockChain {
     let mut state = pecu_mock::MockState {
         chain_name: "VRSCTEST".to_string(),
         chain_id: TESTNET_ID.to_string(),
+        tip,
         ..pecu_mock::MockState::default()
     };
-    let tip = state.tip;
     let held: Vec<AddressUtxo> = coins
         .iter()
         .enumerate()
@@ -142,6 +157,15 @@ fn node(wallet: &Wallet, chain: u8, coins: &[u64]) -> pecu_mock::MockChain {
         .collect();
     state.utxos.insert(wallet.address.clone(), held);
     pecu_mock::MockChain::new(state)
+}
+
+/// The same, at whatever tip the mock ships with.
+///
+/// For the tests where the two nodes' heights are not the subject — the default
+/// install, the node that cannot answer — and where giving them different ones
+/// would only make the fixture harder to read.
+fn node(wallet: &Wallet, chain: u8, coins: &[u64]) -> pecu_mock::MockChain {
+    node_at(wallet, chain, coins, pecu_mock::MockState::default().tip)
 }
 
 fn draft(send_all: bool) -> pecu_protocol::SendDraft {
@@ -168,9 +192,12 @@ fn a_node_calling_itself_vrsctest_while_serving_coins_the_testnet_node_has_never
 ) {
     let wallet = wallet();
     // Disjoint in both directions, which is what two chains' unspent outputs
-    // for one address always are.
-    let hostile = Chain::Mock(node(&wallet, 0xaa, &[5 * COIN, 5 * COIN]));
-    let honest = Chain::Mock(node(&wallet, 0xbb, &[3 * COIN]));
+    // for one address always are — and three million blocks apart, which is
+    // what two chains' *heights* are. The second half is the one this file used
+    // to leave out, and leaving it out is what let the shipped verdict be
+    // "the second node is behind, try again later".
+    let hostile = Chain::Mock(node_at(&wallet, 0xaa, &[5 * COIN, 5 * COIN], MAINNET_TIP));
+    let honest = Chain::Mock(node_at(&wallet, 0xbb, &[3 * COIN], TESTNET_TIP));
 
     let outcome = send::prepare(
         &hostile,
@@ -259,7 +286,7 @@ fn the_transaction_that_is_signed_spends_only_outpoints_both_nodes_have() {
         "the signed transaction spends an outpoint only one node has heard of",
     );
     assert_ne!(tx.inputs[0].txid_internal, unseen.utxo.txid.to_internal());
-    assert_eq!(prepared.withheld, 1);
+    assert_eq!(prepared.withheld.count, 1);
     assert_eq!(prepared.corroborated_by, SHIPPED_URL);
 }
 
@@ -342,7 +369,7 @@ fn a_send_from_a_built_in_endpoint_still_works_when_no_second_source_exists() {
         .expect("five coins can pay one");
 
     assert!(prepared.corroborated_by.is_empty());
-    assert_eq!(prepared.withheld, 0);
+    assert_eq!(prepared.withheld.count, 0);
     let review = send::review(1, &prepared, &wallet.address, Amount::from_sat(5 * COIN), true);
     assert_eq!(
         review.corroboration,
@@ -401,7 +428,7 @@ fn the_review_says_how_much_was_withheld_when_the_second_source_is_behind() {
     )
     .expect("two coins can pay a fee");
 
-    assert_eq!(prepared.withheld, 1);
+    assert_eq!(prepared.withheld.count, 1);
     let review = send::review(1, &prepared, &wallet.address, Amount::from_sat(3 * COIN), true);
     assert_eq!(
         review.corroboration,
@@ -565,6 +592,128 @@ fn one_genuine_coin_does_not_buy_a_hostile_node_a_filtered_payment() {
     }
 }
 
+/// The same mixture, at the heights it actually arrives with.
+///
+/// The test above puts the invented coins *below* the shipped endpoint's tip,
+/// which is the arrangement where "the second node has indexed that block and
+/// does not have the coin" does the work. The scenario in the issue is the
+/// other one: a proxy forwarding a mainnet node's answers offers coins three
+/// million blocks above anything a VRSCTEST endpoint has reached, and a rule
+/// that read every such coin as lag let this exact case through as a filtered
+/// payment under a grey caption — spending the one real coin, saying nothing
+/// about the rest but a count.
+///
+/// The genuine coin is at a height the honest node has long since indexed,
+/// because it is genuine. The invented ones are where mainnet is.
+#[test]
+fn one_genuine_coin_does_not_buy_a_hostile_node_a_filtered_payment_from_blocks_nobody_has_reached() {
+    let wallet = wallet();
+    let coin = |chain: u8, index: u8, height: u32| AddressUtxo {
+        utxo: Utxo {
+            txid: txid(chain, index),
+            vout: 0,
+            satoshis: Amount::from_sat(5 * COIN),
+            script_pubkey: wallet.script.clone(),
+        },
+        address: wallet.address.clone(),
+        height,
+        is_spendable: true,
+    };
+
+    let real = coin(0x77, 0, TESTNET_TIP - 500);
+    let primary = with_utxos_at(
+        &wallet,
+        vec![
+            real.clone(),
+            coin(0x88, 0, MAINNET_TIP - 500),
+            coin(0x88, 1, MAINNET_TIP - 400),
+            coin(0x88, 2, MAINNET_TIP - 300),
+        ],
+        MAINNET_TIP,
+    );
+    let secondary = with_utxos_at(&wallet, vec![real], TESTNET_TIP);
+
+    match send::prepare(
+        &Chain::Mock(primary),
+        Some(&Corroborator {
+            chain: &Chain::Mock(secondary),
+            url: SHIPPED_URL,
+        }),
+        &wallet.vault,
+        LABEL,
+        &draft(false),
+        "",
+    ) {
+        Err(send::SendError::Refused(SpendRefused::Uncorroborated { count, .. })) => {
+            assert_eq!(count, 3, "the invented coins should all be named");
+        }
+        // Specifically not a `Prepared`. One real coin among three from another
+        // chain is enough to pay the 1.0 this draft asks for, so the failure
+        // this guards against is a *successful* send, not a different refusal.
+        Err(other) => panic!("a mixed set at mainnet heights was downgraded to: {other:?}"),
+        Ok(_) => panic!("a hostile node bought a filtered payment with one real coin"),
+    }
+}
+
+/// The mirror, which must not be an accusation.
+///
+/// The node being spent through is the one that is behind. It still offers a
+/// coin the shipped endpoint has watched be spent — the likeliest cause being
+/// an earlier payment from this wallet that confirmed while the node in use was
+/// catching up. Read as a disagreement, this pair gets the sentence written for
+/// an endpoint serving another chain, over the wallet's own last payment; and
+/// the remedy in that sentence, switching to the shipped endpoint, is advice
+/// about a node that is working perfectly.
+#[test]
+fn a_coin_the_shipped_endpoint_has_already_seen_spent_is_not_an_accusation_against_the_node_in_use()
+{
+    let wallet = wallet();
+    let coin = |index: u8, satoshis: u64| AddressUtxo {
+        utxo: Utxo {
+            txid: txid(0x99, index),
+            vout: 0,
+            satoshis: Amount::from_sat(satoshis),
+            script_pubkey: wallet.script.clone(),
+        },
+        address: wallet.address.clone(),
+        height: TESTNET_TIP - 500,
+        is_spendable: true,
+    };
+
+    // Two coins on the node in use; the shipped endpoint, two hundred blocks
+    // further on, has seen the second one spent.
+    let primary = with_utxos_at(&wallet, vec![coin(0, 4 * COIN), coin(1, COIN)], TESTNET_TIP);
+    let secondary = with_utxos_at(&wallet, vec![coin(0, 4 * COIN)], TESTNET_TIP + 200);
+
+    let prepared = send::prepare(
+        &Chain::Mock(primary),
+        Some(&Corroborator {
+            chain: &Chain::Mock(secondary),
+            url: SHIPPED_URL,
+        }),
+        &wallet.vault,
+        LABEL,
+        &draft(true),
+        "",
+    )
+    .expect("the corroborated coin can pay a fee");
+
+    assert_eq!(prepared.withheld.count, 1);
+    assert!(
+        prepared.withheld.already_spent,
+        "the second source is ahead, so this is a spent coin and not an unreached block",
+    );
+    let review = send::review(1, &prepared, &wallet.address, Amount::from_sat(4 * COIN), true);
+    assert_eq!(
+        review.corroboration,
+        pecu_protocol::NoteVm::with(
+            "send-withheld-spent",
+            ["1".to_string(), SHIPPED_URL.to_string()]
+        ),
+        "the review told somebody to wait for a node that is already ahead",
+    );
+}
+
 /// The route the guard would have missed if it had been written around the
 /// word "shielded".
 ///
@@ -581,8 +730,11 @@ fn one_genuine_coin_does_not_buy_a_hostile_node_a_filtered_payment() {
 #[test]
 fn a_shield_is_funded_from_the_same_transparent_coins_and_is_checked_the_same_way() {
     let wallet = wallet();
-    let hostile = Chain::Mock(node(&wallet, 0xaa, &[5 * COIN, 5 * COIN]));
-    let honest = Chain::Mock(node(&wallet, 0xbb, &[3 * COIN]));
+    // The same two nodes as the transparent scenario, heights included: a
+    // shield that was only checked against a pair the field never produces
+    // would be pinning the shape of the call rather than the verdict.
+    let hostile = Chain::Mock(node_at(&wallet, 0xaa, &[5 * COIN, 5 * COIN], MAINNET_TIP));
+    let honest = Chain::Mock(node_at(&wallet, 0xbb, &[3 * COIN], TESTNET_TIP));
 
     let nowhere = pecu_core::params::Located {
         spend: std::path::PathBuf::from("/nonexistent/sapling-spend.params"),

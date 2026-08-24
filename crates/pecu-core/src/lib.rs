@@ -7806,6 +7806,19 @@ fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
             "spend-second-source-behind",
             [count.to_string(), secondary.clone(), tip.to_string()],
         ),
+        // The mirror, and it needs its own words rather than the tip being
+        // dropped into the sentence above. There the second source has to catch
+        // up; here it is already ahead and the node in use is the one behind,
+        // so "wait for it to catch up" would be waiting on something that has
+        // already happened.
+        SpendRefused::SecondSourceAhead {
+            count,
+            secondary,
+            tip,
+        } => NoteVm::with(
+            "spend-second-source-ahead",
+            [count.to_string(), secondary.clone(), tip.to_string()],
+        ),
         // Names the endpoint that went quiet, not the one being checked. The
         // remedy for the two is opposite: here a second node exists and is
         // configured, so "add a second node" would send somebody after a

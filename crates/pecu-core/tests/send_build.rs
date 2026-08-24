@@ -69,7 +69,7 @@ fn a_payment_is_built_signed_and_read_back_without_being_sent() {
         // What this file is about is the arithmetic of a send-all, and the
         // corroborator has its own tests.
         corroborated_by: String::new(),
-        withheld: 0,
+        withheld: send::Withheld::default(),
     };
 
     let review = send::review(
@@ -491,7 +491,7 @@ fn the_review_of_a_send_all_shows_the_resolved_amount_and_no_change() {
         spends: Vec::new(),
         name: String::new(),
         corroborated_by: String::new(),
-        withheld: 0,
+        withheld: send::Withheld::default(),
     };
     let review = send::review(1, &prepared, FROM, Amount::from_sat(2 * COIN), false);
 

@@ -87,10 +87,10 @@ pub enum SpendRefused {
     #[error("the node is not ready to be spent through")]
     NodeNotReady { status: NodeStatus },
 
-    /// The primary offered coins the second source has indexed the blocks of
-    /// and does not have.
+    /// The primary offered coins whose absence from the second source is not
+    /// explained by the two nodes being at different heights.
     ///
-    /// None of the four variants below is raised by [`evaluate`], and none can
+    /// None of the five variants below is raised by [`evaluate`], and none can
     /// be: answering these questions costs a network call, and the whole reason
     /// a [`SpendPermit`] is worth anything is that its only constructor does no
     /// I/O. So corroboration is a runtime check on the prepare/confirm path and
@@ -101,6 +101,12 @@ pub enum SpendRefused {
     /// required for a send, every way it can fail refuses on testnet exactly as
     /// it does on VRSC. [`crate::network::Network::may_be_real_money`] does not
     /// gate any of them.
+    ///
+    /// The wording is careful not to promise more than the check does. It says
+    /// the second source does not have these outputs, which is a fact it
+    /// reported; it does not say the primary invented them, which is an
+    /// inference from heights the primary itself supplied. See
+    /// [`crate::corroborate`] on what a chosen height can and cannot buy.
     #[error("this node offers {count} output(s) that {secondary} does not have")]
     Uncorroborated { count: usize, secondary: String },
 
@@ -108,11 +114,34 @@ pub enum SpendRefused {
     /// once they were set aside there was nothing left to pay with.
     ///
     /// Not a disagreement — the secondary's own tip says it has not indexed
-    /// them yet. Kept apart from [`SpendRefused::Uncorroborated`] because
-    /// accusing an honest pair of the attack is its own harm, and because the
-    /// remedy is to wait rather than to change anything.
+    /// them yet, and it is close enough behind for that to be credible. Kept
+    /// apart from [`SpendRefused::Uncorroborated`] because accusing an honest
+    /// pair of the attack is its own harm, and because the remedy is to wait
+    /// rather than to change anything.
     #[error("{secondary} has only reached block {tip}, which is behind {count} of these coins")]
     SecondSourceBehind {
+        count: usize,
+        secondary: String,
+        tip: u32,
+    },
+
+    /// The mirror of [`SpendRefused::SecondSourceBehind`]: the *primary* is the
+    /// node that is behind, and once the coins the second source has already
+    /// seen spent were set aside there was nothing left to pay with.
+    ///
+    /// The likeliest cause is this wallet's own earlier payment. It confirmed,
+    /// the second source indexed the block, and the node being spent through
+    /// has not caught up and is still offering the coin that payment consumed.
+    ///
+    /// A separate variant rather than reusing the one above, because the two
+    /// tips point in opposite directions and so do the remedies: there the
+    /// second source has to catch up, here the node in use does. Telling
+    /// somebody to wait for a node that is already ahead is advice that never
+    /// comes true.
+    #[error(
+        "{secondary} has reached block {tip} and has already seen {count} of these coins spent"
+    )]
+    SecondSourceAhead {
         count: usize,
         secondary: String,
         tip: u32,

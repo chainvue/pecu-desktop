@@ -461,6 +461,14 @@ export component NoteText inherits Text {
         : root.note.code == "send-withheld"
             ? @tr("{1} agrees about the coins being spent. It has not yet reached the blocks {0} more of this node's outputs are in, so those are not in this payment.",
                   root.note.args[0], root.note.args[1])
+        // The other direction, and it is a different fact about a different
+        // node: the second source is ahead and has watched those outputs be
+        // spent, most likely by an earlier payment from this wallet that the
+        // node in use has not caught up with. Told as lag it would ask somebody
+        // to wait for an endpoint that has already arrived.
+        : root.note.code == "send-withheld-spent"
+            ? @tr("{1} agrees about the coins being spent. It is further ahead than this node and has already seen {0} more of this node's outputs spent, so those are not in this payment.",
+                  root.note.args[0], root.note.args[1])
 
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
@@ -600,11 +608,20 @@ export component NoticeTitle inherits Text {
                   root.note.args[0], root.note.args[1])
         : root.note.code == "spend-node-not-ready"
             ? @tr("The node is not ready to be spent through")
-        // The four ways corroboration can turn a spend away. Four sentences,
-        // because they have four remedies — chasing "add a second node" when
-        // one is already configured and merely quiet is the wrong problem.
+        // The five ways corroboration can turn a spend away. Five sentences,
+        // because they have five remedies — chasing "add a second node" when
+        // one is already configured and merely quiet is the wrong problem, and
+        // telling somebody to wait for a node that is already ahead is another.
+        //
+        // Not "has indexed the blocks of and never seen" any more. That was
+        // true of only one of the three ways this verdict is reached — the
+        // others are a coin from a block above the node's own tip, and a coin
+        // so far above the second endpoint's that lag cannot account for it,
+        // which is the shape the real cross-chain case has. Naming a mechanism
+        // that did not apply would be a wrong explanation attached to a
+        // correct refusal.
         : root.note.code == "spend-uncorroborated"
-            ? @tr("This node offers {0} coin(s) that {1} has indexed the blocks of and never seen. Nothing here will be spent — open Settings, Network and switch to the node that came with Pecu.",
+            ? @tr("This node offers {0} coin(s) that {1} has never seen, and the two nodes are not simply out of step. Nothing here will be spent — open Settings, Network and switch to the node that came with Pecu.",
                   root.note.args[0], root.note.args[1])
         // "outputs" and not "coins": the count is of everything this node
         // offered that the second one has not reached, which includes outputs
@@ -614,6 +631,13 @@ export component NoticeTitle inherits Text {
         // candidates for.
         : root.note.code == "spend-second-source-behind"
             ? @tr("{1} has only reached block {2}, so it cannot yet vouch for {0} of this node's outputs. Nothing is wrong — try again once it catches up.",
+                  root.note.args[0], root.note.args[1], root.note.args[2])
+        // The mirror of the one above, with the remedy the other way round: the
+        // node in use is the one that is behind, so waiting for the second
+        // source would be waiting for nothing. Both counts are of outputs
+        // rather than coins, for the reason given above.
+        : root.note.code == "spend-second-source-ahead"
+            ? @tr("{1} has reached block {2} and has already seen {0} of this node's outputs spent — most likely by a payment you have already made. Nothing is wrong — try again once the node you are using catches up.",
                   root.note.args[0], root.note.args[1], root.note.args[2])
         // No "add a second node" here, and no "switch back" either: the
         // endpoint that went quiet is the one that came with Pecu, so both of

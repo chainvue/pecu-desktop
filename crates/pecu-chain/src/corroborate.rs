@@ -56,24 +56,71 @@
 //! *omitting* or *misvaluing* a coin, and this attack *adds* one, whose value
 //! and script are perfectly true — about the wrong chain.
 //!
-//! **Not the tip as a comparison, but the tip as evidence.** Two healthy nodes
-//! disagree about the tip most of the time and neither tip is what a signature
-//! commits to, so the tips are never compared. The secondary's tip is read for
-//! something else entirely: to tell a node that is *behind* from a node that is
-//! on *another chain*. A withheld coin in a block above the secondary's tip is
-//! a coin the secondary demonstrably has not indexed yet; a withheld coin at or
-//! below it is a coin the secondary has looked for the block of and does not
-//! have. Only the second is a disagreement, and the difference is what keeps an
-//! honest lagging node from being accused of the attack — which on a
-//! single-coin address, the commonest wallet shape there is, would otherwise
-//! happen every time a payment confirmed into a block the second node had not
-//! reached.
+//! **Not the tips as a comparison, but both tips as evidence.** Two healthy
+//! nodes disagree about the tip most of the time and neither tip is what a
+//! signature commits to, so the tips are never compared for equality. They are
+//! read to sort a *withheld* coin into one of two piles: one the secondary has
+//! not looked for yet, and one it has looked for and does not have. Only the
+//! second is a disagreement, and the difference is what keeps an honest lagging
+//! node from being accused of the attack — which on a single-coin address, the
+//! commonest wallet shape there is, would otherwise happen every time a payment
+//! confirmed into a block the second node had not reached.
 //!
-//! The one honest case that still lands in the divergent bucket is a secondary
-//! that is *ahead* and has already seen the coin spent. It is rare — that coin
-//! was spent by this wallet's own key, from a node that would then know about
-//! it — and it fails closed rather than open, which is the direction to be
-//! wrong in on the money path.
+//! Three questions decide it, in this order, and it takes **both** tips to ask
+//! them:
+//!
+//! 1. Is the coin's block above the *primary's own* tip? Then the primary is
+//!    contradicting itself. `getaddressutxos` is confirmed-only, so no node
+//!    reports an output from a block it has not got. Divergence, and it is the
+//!    one rule the answering node cannot satisfy by choosing a number, because
+//!    both numbers are its own.
+//! 2. Is it above the *secondary's* tip? Then the secondary has not indexed
+//!    that block yet — the commonest honest state two nodes are ever in — but
+//!    only within [`CREDIBLE_LAG`]. Further above than that and the "lag" would
+//!    have to be weeks; the shape it actually has is a primary on a different
+//!    and much longer chain. Divergence.
+//! 3. Otherwise the secondary has indexed the block and does not have the coin.
+//!    A disagreement — *unless* the secondary is the one that is ahead, in
+//!    which case the likelier reading is that the coin has been spent in a
+//!    block the primary has not seen yet, by this wallet's own key, and the two
+//!    are simply out of step in the other direction.
+//!
+//! Rule 2 is why the scenario in the issue is caught at all. A node serving
+//! VRSC outputs while calling itself VRSCTEST offers coins from around block
+//! 4,207,412 against a VRSCTEST second source whose tip is around 1,203,115:
+//! three million blocks above it, so the withheld coins are not credibly
+//! unindexed and the verdict is [`Corroboration::Diverged`]. Written as "above
+//! the secondary's tip is lag" with no bound — which is how this module shipped
+//! first — the same reply reads as a node that is merely behind, and the wallet
+//! tells somebody under attack to try again later.
+//!
+//! # The heights are the answering node's own field
+//!
+//! Every height in the three rules above arrives in the primary's
+//! `getaddressutxos` reply, and so does the primary's tip. A node willing to
+//! invent an outpoint will give it whatever height suits it: report a tip just
+//! above the secondary's and put the invented coins in the blocks between the
+//! two, and rule 2 says lag; report a tip *below* the secondary's and rule 3
+//! says out of step. Both are worth stating plainly, and neither is the hole it
+//! looks like.
+//!
+//! What a chosen height buys is the softer **sentence**. What it cannot buy is
+//! a wider **allowed set**. All three answers withhold exactly the same
+//! outpoints from the build — the ones the secondary did not name — and what
+//! differs is the wording and whether the coins that *were* corroborated may
+//! still pay. An invented outpoint is unspendable under every verdict, because
+//! [`Corroborated`] is built from what the secondary recognised and from
+//! nothing else. The worst a chosen height achieves is a payment funded from
+//! the user's real coins, described by a caption about two nodes being out of
+//! step rather than by an accusation.
+//!
+//! So the heights sort honest disagreement from the attack; they do not contain
+//! it. The check that would settle which chain a node is on is a **block hash
+//! at a shared height** — ask both for `getblockhash` at some height both have
+//! reached, and two nodes on different chains cannot agree, however they choose
+//! to number things. That is one more request to each, it is not implemented
+//! here, and it is what would turn this module from a heuristic about heights
+//! into a statement about chains.
 //!
 //! **Not the mempool.** Legitimately different between two healthy nodes, and
 //! `getaddressutxos` does not report it in the first place.
@@ -100,52 +147,93 @@ use verus_sdk::network::{
 /// One unspent output, identified the only two ways that cannot be restated.
 pub type Outpoint = (Txid, u32);
 
+/// How far above a second source's tip a withheld coin may sit and still be
+/// read as that source not having got there yet.
+///
+/// A week of blocks, at Verus's one a minute. The number is a judgement and the
+/// judgement is asymmetric on purpose, so it is worth saying which way and why.
+///
+/// Too tight and an honest second source that has genuinely fallen behind —
+/// a shipped endpoint resyncing, a machine that was off — is accused of serving
+/// another chain the first time the wallet holds a coin newer than the gap.
+/// That is a false accusation with a remedy that does not apply, aimed at the
+/// one endpoint this build asks people to trust.
+///
+/// Too loose and a primary on a longer chain is excused. But note what a
+/// tighter bound would actually buy against a deliberate liar: nothing, because
+/// the same reply carries the coins' heights *and* the primary's own tip, so a
+/// node that wanted the softer verdict would report a tip a few blocks above
+/// the secondary's and put its invented coins in between — see the module docs.
+/// The bound is worth having because it catches the version of this attack that
+/// exists, a proxy forwarding a real mainnet node's answers unaltered, where the
+/// two chains' heights are three million blocks apart. Against that, a week and
+/// a day are the same check, and a week is the one that never accuses an honest
+/// node.
+pub const CREDIBLE_LAG: u32 = 10_080;
+
 /// What a second source said about the coins the primary offered.
 #[derive(Debug)]
 pub enum Corroboration {
     /// Every outpoint the primary offered is one the secondary also has.
     Agreed { checked: usize },
-    /// The secondary is missing coins, and every one of them is in a block it
-    /// has not reached.
+    /// The secondary is missing coins, and the two nodes being at different
+    /// heights explains every one of them.
     ///
-    /// `getaddressutxos` is confirmed-only, so an output in a block one node
-    /// has not indexed yet is missing from its answer — and that node's own tip
-    /// says so. The safe response is to spend the subset both nodes have and
+    /// Both directions land here, which is why this is not called `Lagging`.
+    /// Usually the secondary is behind: `getaddressutxos` is confirmed-only, so
+    /// an output in a block one node has not indexed yet is missing from its
+    /// answer, and that node's own tip says so. Occasionally the secondary is
+    /// *ahead* and the coin is one this wallet has already spent, whose
+    /// spending transaction the secondary has seen confirm and the primary has
+    /// not. The two want different sentences — one says wait for the second
+    /// node, the other says wait for the first — and the caller tells them
+    /// apart by comparing the two tips carried here.
+    ///
+    /// The safe response either way is to spend the subset both nodes have and
     /// say how much was left out: refusing outright would punish the commonest
     /// honest state, and filtering silently would let a send-all quietly move
     /// less than the balance on screen.
     ///
     /// `kept` can be zero. A wallet whose only coin confirmed a minute ago
     /// against a second node a block behind lands exactly there, and it is
-    /// still lag rather than divergence — which is the whole reason this
-    /// verdict is decided by height and not by whether anything survived.
-    Lagging {
+    /// still a difference of height rather than of chain — which is the whole
+    /// reason this verdict is decided by the heights and not by whether
+    /// anything survived.
+    OutOfStep {
         withheld: Vec<Outpoint>,
         kept: usize,
-        /// The secondary's tip, which is the evidence for this verdict and the
-        /// only figure that makes the sentence about it actionable.
-        tip: u32,
+        /// The secondary's tip, which is half the evidence for this verdict and
+        /// the figure that makes a sentence about it actionable.
+        secondary_tip: u32,
+        /// The primary's tip, as the caller read it. The other half: which of
+        /// the two is ahead is what decides which sentence this verdict gets.
+        primary_tip: u32,
     },
-    /// The secondary has indexed the blocks these coins claim to be in, and
-    /// does not have them.
+    /// The missing coins are not explained by the two nodes being at different
+    /// heights.
     ///
-    /// This is the shape of the attack: two chains' UTXO sets for one address
-    /// are disjoint, so a wallet reading mainnet coins from a node calling
-    /// itself testnet lands here. Kept apart from [`Corroboration::Lagging`]
-    /// because the two have different remedies, and apart from a filter
-    /// because filtering to the empty set would surface as "not enough funds",
-    /// which is the least useful sentence available for the one case it would
-    /// be describing.
+    /// This is the shape of the attack. Two chains' UTXO sets for one address
+    /// are disjoint, and a node serving mainnet outputs while calling itself
+    /// testnet offers coins from blocks around 4.2 million against a testnet
+    /// second source that has reached about 1.2 million — three million blocks
+    /// of "lag" that no honest pair has. A node offering a coin from a block
+    /// above *its own* tip lands here too, and that one it cannot talk its way
+    /// out of, because both numbers came from it.
+    ///
+    /// Kept apart from [`Corroboration::OutOfStep`] because the two have
+    /// different remedies, and apart from a filter because filtering to the
+    /// empty set would surface as "not enough funds", which is the least useful
+    /// sentence available for the one case it would be describing.
     ///
     /// Reached whatever `kept` is. A hostile endpoint that mixes one real coin
     /// in with fifty invented ones is not a node one block behind, and letting
     /// a non-empty `kept` downgrade it to a caption about lag would render the
     /// one signal that the active endpoint is lying as routine.
     Diverged {
-        /// The withheld outpoints at or below the secondary's tip — the ones it
-        /// has no excuse for. Withheld coins above its tip are lag and are not
-        /// counted here, because the number is going into a sentence accusing
-        /// somebody's node of serving another chain.
+        /// The withheld outpoints the heights do not account for. Withheld
+        /// coins that *are* accounted for are not counted here, because the
+        /// number is going into a sentence accusing somebody's node of serving
+        /// another chain.
         unexplained: Vec<Outpoint>,
         kept: usize,
     },
@@ -163,14 +251,38 @@ pub enum Corroboration {
 
 /// Ask `secondary` which of `address`'s outputs it also has.
 ///
-/// `offered` is what the **primary** answered for the same address. Nothing
-/// here reads the primary — the caller already has that answer, and asking
-/// again would be comparing two different moments.
+/// `offered` is what the **primary** answered for the same address, and
+/// `primary_tip` is the height it answered from. Nothing here reads the primary
+/// — the caller already has both, and asking again would be comparing two
+/// different moments.
 ///
-/// One request in the ordinary case. A second one — `getblockcount` — only when
-/// the two answers differ, because that is the only time the secondary's tip
-/// decides anything: it is what separates a node that has not reached a block
-/// from a node that has and disagrees about what is in it.
+/// # Why the caller supplies the primary's tip, and what it costs
+///
+/// Because the verdict needs it and there is nowhere free to get it. Two of the
+/// three rules in the module docs are about it: a coin above the primary's own
+/// tip is a node contradicting itself, and which of the two nodes is ahead is
+/// what separates "the second one has not got there" from "the second one has
+/// seen this coin spent".
+///
+/// `verus_flows::funding::spendable` reads a tip and hands it back on
+/// `Funding::tip`, so the obvious move is to reuse that one. It does not fit:
+/// `spendable` runs *inside* the build, after this answer has already been
+/// turned into the filtered reader the build is handed, and the whole point of
+/// the ordering is that nothing selects a coin before it has been corroborated.
+/// Hoisting `spendable` above this would mean running it twice — it costs three
+/// requests plus one per young coinbase — or moving corroboration below
+/// selection, which is the window this design exists to close.
+///
+/// So it is one `getblockcount` to the primary, on the send path, and only when
+/// a second source was required in the first place. The stale alternative was
+/// available and rejected: [`crate::SpendPermit`] carries the tip the last probe
+/// saw, and a tip a probe interval old, read low, would put honest coins above
+/// "the primary's own tip" and manufacture the accusation this rule exists to
+/// make possible.
+///
+/// One request to the secondary in the ordinary case. A second —
+/// `getblockcount` again, to it this time — only when the two answers differ,
+/// because that is the only time its tip decides anything.
 ///
 /// An empty `offered` costs no request at all. There is nothing to hold the
 /// primary to, the send is about to fail for want of coins whatever this said,
@@ -180,6 +292,7 @@ pub fn against(
     secondary: &impl ChainReader,
     address: &str,
     offered: &[AddressUtxo],
+    primary_tip: u32,
 ) -> Corroboration {
     if offered.is_empty() {
         return Corroboration::Agreed { checked: 0 };
@@ -203,14 +316,14 @@ pub fn against(
     }
 
     // Only now, and only because the verdict turns on it.
-    let tip = match secondary.block_count() {
+    let secondary_tip = match secondary.block_count() {
         Ok(tip) => tip,
         Err(reason) => return Corroboration::Unavailable { reason },
     };
 
     let unexplained: Vec<Outpoint> = missing
         .iter()
-        .filter(|utxo| utxo.height <= tip)
+        .filter(|utxo| !out_of_step(utxo.height, primary_tip, secondary_tip))
         .map(|utxo| (utxo.utxo.txid, utxo.utxo.vout))
         .collect();
     let withheld: Vec<Outpoint> = missing
@@ -219,14 +332,47 @@ pub fn against(
         .collect();
 
     if unexplained.is_empty() {
-        Corroboration::Lagging {
+        Corroboration::OutOfStep {
             withheld,
             kept,
-            tip,
+            secondary_tip,
+            primary_tip,
         }
     } else {
         Corroboration::Diverged { unexplained, kept }
     }
+}
+
+/// Whether the two nodes being at different heights accounts for one missing
+/// coin.
+///
+/// The three rules from the module docs, in the order they are argued there.
+/// `false` means the heights do not explain it, which is the accusation.
+fn out_of_step(height: u32, primary_tip: u32, secondary_tip: u32) -> bool {
+    if height > primary_tip {
+        // The primary is contradicting itself: `getaddressutxos` is
+        // confirmed-only, so this is an output from a block it says it has not
+        // got. Both numbers are its own, which is what makes this the one rule
+        // a chosen height cannot get around.
+        return false;
+    }
+    if height > secondary_tip {
+        // The secondary has not indexed that block — credible, up to a point,
+        // and [`CREDIBLE_LAG`] argues where the point is.
+        return height - secondary_tip <= CREDIBLE_LAG;
+    }
+    // The secondary has indexed the block and does not have the coin. That is a
+    // disagreement, unless the secondary is the node that is ahead: then the
+    // likelier reading is a coin this wallet already spent, whose spending
+    // transaction confirmed into a block the primary has not reached.
+    //
+    // Deliberately unbounded, where the branch above is bounded. The bound
+    // above guards the branch that lets a coin through as "merely new"; this
+    // one guards nothing, because a coin the secondary does not have is
+    // withheld from the build under either answer and only the sentence
+    // changes. A primary reporting an absurdly low tip to reach this branch
+    // buys a caption, not a coin.
+    secondary_tip > primary_tip
 }
 
 /// The outpoints of `offered` that `secondary` also has.
@@ -260,9 +406,9 @@ pub fn agreed_outpoints(offered: &[AddressUtxo], withheld: &[Outpoint]) -> HashS
 /// gets selected.
 ///
 /// It wraps the primary rather than replacing it. Every other question — the
-/// tip, the mempool, coinbase provenance — is still the primary's to answer,
-/// which is what keeps this one extra request rather than a doubling of the
-/// send path.
+/// mempool, coinbase provenance, the tip the build itself reads — is still the
+/// primary's to answer, which is what keeps corroboration a handful of extra
+/// requests rather than a doubling of the send path.
 ///
 /// # It answers about one address
 ///
@@ -375,6 +521,26 @@ mod tests {
             .expect("a scripted node answers")
     }
 
+    /// The whole comparison, with the primary's tip read off the primary.
+    ///
+    /// `send::corroborated_funding` reads it the same way and from the same
+    /// node, so a test that made one up could pin a verdict no caller can
+    /// produce.
+    fn hold(primary: &ScriptedReader, secondary: &impl ChainReader) -> Corroboration {
+        hold_offering(primary, secondary, &offered(primary))
+    }
+
+    /// The same, for the few tests that alter what the primary offered before
+    /// handing it over.
+    fn hold_offering(
+        primary: &ScriptedReader,
+        secondary: &impl ChainReader,
+        offered: &[AddressUtxo],
+    ) -> Corroboration {
+        let tip = primary.block_count().expect("a scripted node answers");
+        against(secondary, ADDRESS, offered, tip)
+    }
+
     /// A node that answers every other question and refuses one of these two.
     ///
     /// `ScriptedReader` has no builder for a failing read, and the cases matter
@@ -470,7 +636,7 @@ mod tests {
             .with_utxo(ADDRESS, 900, 100_000)
             .with_utxo(ADDRESS, 901, 200_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Agreed { checked } => assert_eq!(checked, 1),
             other => panic!("an honest node a block ahead was treated as a disagreement: {other:?}"),
         }
@@ -488,7 +654,7 @@ mod tests {
         let primary = older(ScriptedReader::new(1_000));
         let secondary = older(ScriptedReader::new(1_001)).with_utxo(ADDRESS, 1_001, 50_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Agreed { checked } => assert_eq!(checked, 2),
             other => panic!("the wrong verdict: {other:?}"),
         }
@@ -507,15 +673,17 @@ mod tests {
             .with_utxo(ADDRESS, 1_001, 200_000);
         let secondary = ScriptedReader::new(1_000).with_utxo(ADDRESS, 900, 100_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
-            Corroboration::Lagging {
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep {
                 withheld,
                 kept,
-                tip,
+                secondary_tip,
+                primary_tip,
             } => {
                 assert_eq!(withheld.len(), 1);
                 assert_eq!(kept, 1);
-                assert_eq!(tip, 1_000);
+                assert_eq!(secondary_tip, 1_000);
+                assert_eq!(primary_tip, 1_001);
             }
             other => panic!("a node one block behind was accused of something: {other:?}"),
         }
@@ -534,10 +702,12 @@ mod tests {
         let primary = ScriptedReader::new(1_001).with_utxo(ADDRESS, 1_001, 100_000);
         let secondary = ScriptedReader::new(1_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
-            Corroboration::Lagging { kept, tip, .. } => {
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep {
+                kept, secondary_tip, ..
+            } => {
                 assert_eq!(kept, 0);
-                assert_eq!(tip, 1_000);
+                assert_eq!(secondary_tip, 1_000);
             }
             other => panic!("a single-coin address against a lagging node was refused: {other:?}"),
         }
@@ -560,7 +730,7 @@ mod tests {
             .with_utxo(ADDRESS, 700, 100_000)
             .with_utxo(ADDRESS, 701, 200_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Diverged { unexplained, kept } => {
                 assert_eq!(unexplained.len(), 2);
                 assert_eq!(kept, 0);
@@ -586,12 +756,130 @@ mod tests {
         // blocks the other two claim to be in.
         let secondary = ScriptedReader::new(1_000).with_utxo(ADDRESS, 900, 100_000);
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Diverged { unexplained, kept } => {
                 assert_eq!(unexplained.len(), 2);
                 assert_eq!(kept, 1);
             }
             other => panic!("a mixed set was downgraded to lag: {other:?}"),
+        }
+    }
+
+    /// Issue #29's own numbers, which is the case the first version of this got
+    /// backwards.
+    ///
+    /// `api.verus.services` was at block 4,207,412 and `api.verustest.net` at
+    /// 1,203,115 when this was written. A proxy forwarding the first one's
+    /// answers while calling itself VRSCTEST therefore offers coins three
+    /// million blocks *above* anything the second source has reached — so a
+    /// rule that read "above the secondary's tip is lag" put the whole attack
+    /// in the lag bucket and told the user to try again later. The bound is
+    /// what makes the real scenario reach the verdict its own doc comment
+    /// claims.
+    #[test]
+    fn coins_three_million_blocks_above_the_second_sources_tip_are_a_disagreement_and_not_lag() {
+        let primary = ScriptedReader::new(4_207_412)
+            .with_utxo(ADDRESS, 4_206_912, 500_000_000)
+            .with_utxo(ADDRESS, 4_206_913, 300_000_000);
+        let secondary = ScriptedReader::new(1_203_115).with_utxo(ADDRESS, 1_203_000, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, kept } => {
+                assert_eq!(unexplained.len(), 2);
+                assert_eq!(kept, 0);
+            }
+            other => panic!("the scenario in the issue was read as lag: {other:?}"),
+        }
+    }
+
+    /// The far edge of the window is still lag, so the bound is a bound and not
+    /// a second, tighter rule by accident.
+    #[test]
+    fn a_coin_exactly_a_credible_lag_above_the_second_sources_tip_is_still_lag() {
+        let reached = 1_200_000;
+        let coin = reached + CREDIBLE_LAG;
+        let primary = ScriptedReader::new(coin).with_utxo(ADDRESS, coin, 100_000);
+        let secondary = ScriptedReader::new(reached);
+
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep { secondary_tip, .. } => assert_eq!(secondary_tip, reached),
+            other => panic!("a node inside the credible window was accused: {other:?}"),
+        }
+    }
+
+    /// And one block past it is not.
+    ///
+    /// The pair with the test above is the whole content of [`CREDIBLE_LAG`]:
+    /// a second source that would have to be more than a week behind is not
+    /// behind, it is on another chain.
+    #[test]
+    fn a_coin_one_block_past_the_credible_lag_window_is_a_disagreement() {
+        let reached = 1_200_000;
+        let coin = reached + CREDIBLE_LAG + 1;
+        let primary = ScriptedReader::new(coin).with_utxo(ADDRESS, coin, 100_000);
+        let secondary = ScriptedReader::new(reached);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, .. } => assert_eq!(unexplained.len(), 1),
+            other => panic!("a week and a day of lag was believed: {other:?}"),
+        }
+    }
+
+    /// A node cannot offer a coin from a block it says it has not got.
+    ///
+    /// This is the one rule the answering node cannot choose its way around,
+    /// because both numbers in it — the coin's height and the tip — come from
+    /// that node. It is deliberately checked before the out-of-step rule below:
+    /// the second source here is far *ahead*, so without this the same coin
+    /// would be excused as one the primary has not caught up with.
+    #[test]
+    fn a_coin_the_primary_places_above_its_own_tip_is_a_disagreement() {
+        let primary = ScriptedReader::new(1_000)
+            .with_utxo(ADDRESS, 900, 100_000)
+            .with_utxo(ADDRESS, 1_500, 200_000);
+        let secondary = ScriptedReader::new(2_000).with_utxo(ADDRESS, 900, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, kept } => {
+                assert_eq!(unexplained.len(), 1);
+                assert_eq!(kept, 1);
+            }
+            other => panic!("a node contradicting its own tip was excused: {other:?}"),
+        }
+    }
+
+    /// The mirror of lag, and it must not be an accusation.
+    ///
+    /// The primary is the node that is behind. A coin it still offers, at a
+    /// height the secondary indexed long ago, is one this wallet has already
+    /// spent — the spending transaction confirmed, the second node saw it, the
+    /// first has not caught up. Read as a disagreement it produces the sentence
+    /// written for an endpoint serving another chain, over the wallet's own
+    /// earlier payment.
+    #[test]
+    fn a_coin_the_second_source_has_already_seen_spent_is_out_of_step_and_not_an_accusation() {
+        let primary = ScriptedReader::new(1_000)
+            .with_utxo(ADDRESS, 900, 100_000)
+            .with_utxo(ADDRESS, 901, 200_000);
+        // Ten blocks ahead, and holding only the older coin: the newer one was
+        // spent in a block between the two tips.
+        let secondary = ScriptedReader::new(1_010).with_utxo(ADDRESS, 900, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep {
+                withheld,
+                kept,
+                secondary_tip,
+                primary_tip,
+            } => {
+                assert_eq!(withheld.len(), 1);
+                assert_eq!(kept, 1);
+                assert!(
+                    secondary_tip > primary_tip,
+                    "the pair this is about is the second node being ahead",
+                );
+            }
+            other => panic!("the wallet's own earlier spend was read as the attack: {other:?}"),
         }
     }
 
@@ -601,7 +889,7 @@ mod tests {
         let primary = ScriptedReader::new(1_000).with_utxo(ADDRESS, 900, 100_000);
         let secondary = Refuses::utxos(|| RpcError::Transport("connection reset".to_string()));
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Unavailable { .. } => {}
             other => panic!("silence was read as an answer: {other:?}"),
         }
@@ -622,7 +910,7 @@ mod tests {
             method: "getaddressutxos",
         });
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Unavailable { reason } => assert!(
                 matches!(reason, RpcError::MethodUnavailable { .. }),
                 "the reason was lost: {reason}",
@@ -642,7 +930,7 @@ mod tests {
         let primary = ScriptedReader::new(1_000).with_utxo(ADDRESS, 900, 100_000);
         let secondary = Refuses::tip(|| RpcError::Transport("timed out".to_string()));
 
-        match against(&secondary, ADDRESS, &offered(&primary)) {
+        match hold(&primary, &secondary) {
             Corroboration::Unavailable { .. } => {}
             other => panic!("a missing tip was guessed at: {other:?}"),
         }
@@ -671,7 +959,7 @@ mod tests {
             "the two answers were made identical, so this test proves nothing",
         );
 
-        match against(&secondary, ADDRESS, &mine) {
+        match hold_offering(&primary, &secondary, &mine) {
             Corroboration::Agreed { checked } => assert_eq!(checked, 1),
             other => panic!("one node's opinion of spendability decided a spend: {other:?}"),
         }
@@ -698,7 +986,7 @@ mod tests {
         mine.reverse();
         assert_ne!(mine, offered(&secondary));
 
-        match against(&secondary, ADDRESS, &mine) {
+        match hold_offering(&primary, &secondary, &mine) {
             Corroboration::Agreed { checked } => assert_eq!(checked, 2),
             other => panic!("the order the outputs arrived in decided a spend: {other:?}"),
         }
@@ -718,7 +1006,9 @@ mod tests {
         let secondary = ScriptedReader::new(1_000).with_utxo(ADDRESS, 900, 100_000);
 
         let mine = offered(&primary);
-        let Corroboration::Lagging { withheld, .. } = against(&secondary, ADDRESS, &mine) else {
+        let Corroboration::OutOfStep { withheld, .. } =
+            hold_offering(&primary, &secondary, &mine)
+        else {
             panic!("the scripted pair does not disagree the way this test needs");
         };
 
