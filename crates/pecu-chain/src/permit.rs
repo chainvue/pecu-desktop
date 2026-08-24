@@ -86,6 +86,69 @@ pub enum SpendRefused {
 
     #[error("the node is not ready to be spent through")]
     NodeNotReady { status: NodeStatus },
+
+    /// The primary offered coins the second source has indexed the blocks of
+    /// and does not have.
+    ///
+    /// None of the four variants below is raised by [`evaluate`], and none can
+    /// be: answering these questions costs a network call, and the whole reason
+    /// a [`SpendPermit`] is worth anything is that its only constructor does no
+    /// I/O. So corroboration is a runtime check on the prepare/confirm path and
+    /// these are carried here for their words, not because the permit covers
+    /// them — see [`crate::corroborate`], which says the same at more length.
+    ///
+    /// They are also **chain-independent**. Once corroboration has been
+    /// required for a send, every way it can fail refuses on testnet exactly as
+    /// it does on VRSC. [`crate::network::Network::may_be_real_money`] does not
+    /// gate any of them.
+    #[error("this node offers {count} output(s) that {secondary} does not have")]
+    Uncorroborated { count: usize, secondary: String },
+
+    /// The second source has not reached the blocks these coins are in, and
+    /// once they were set aside there was nothing left to pay with.
+    ///
+    /// Not a disagreement — the secondary's own tip says it has not indexed
+    /// them yet. Kept apart from [`SpendRefused::Uncorroborated`] because
+    /// accusing an honest pair of the attack is its own harm, and because the
+    /// remedy is to wait rather than to change anything.
+    #[error("{secondary} has only reached block {tip}, which is behind {count} of these coins")]
+    SecondSourceBehind {
+        count: usize,
+        secondary: String,
+        tip: u32,
+    },
+
+    /// Nothing exists that could hold the primary to anything.
+    ///
+    /// The narrow case: the active node is one the user added and the shipped
+    /// endpoint for this chain is itself answering about another chain, so
+    /// there is no configured endpoint whose answer would mean anything. The
+    /// remedy is the node list, and it is not "add a second node" — one is
+    /// already there.
+    #[error("nothing configured can corroborate what {primary} reports")]
+    NoSecondSource { primary: String },
+
+    /// A second source exists and could not answer.
+    ///
+    /// A timeout, a dial failure, or a filtering proxy answering `-32601` to
+    /// `getaddressutxos`. Distinct from [`SpendRefused::NoSecondSource`]
+    /// because the sentences have opposite remedies: telling somebody to look
+    /// at their node list when the node list is fine sends them after the wrong
+    /// problem, which [`crate::corroborate`] argues at the site. It names the
+    /// **secondary**, not the primary, for the same reason.
+    #[error("{secondary} could not be asked about these coins")]
+    SecondSourceSilent { secondary: String },
+
+    /// The bytes on the review were built before the active node changed.
+    ///
+    /// Reached only at the broadcast gate: a failover, or somebody switching
+    /// endpoints, between pressing Review and pressing Send. The signed bytes
+    /// are not wrong, but nothing has held them against the node list as it is
+    /// now, and the only remedy is to build the payment again — which is why
+    /// this is the one refusal that discards the prepared transaction instead
+    /// of leaving it for a second press of the same button.
+    #[error("the active node changed after this payment was prepared")]
+    PreparedBeforeNodeChange,
 }
 
 /// Run every check and, if they all pass, mint a permit.

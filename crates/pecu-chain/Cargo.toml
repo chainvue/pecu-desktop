@@ -35,3 +35,12 @@ tokio-rustls = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 webpki-roots = { workspace = true }
+
+[dev-dependencies]
+# `testing::ScriptedReader`, for the corroborator's unit tests: two scripted
+# nodes with different UTXO sets is the whole of what those tests need, and the
+# facade does not forward the `testing` feature. Pinned to the same revision as
+# every other SDK crate here — a different one would be testing a different SDK
+# than the one that ships. Already a dev-dependency of pecu-core, so this adds
+# nothing to the dependency graph.
+verus-flows = { workspace = true }

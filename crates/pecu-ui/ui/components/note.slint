@@ -446,6 +446,22 @@ export component NoteText inherits Text {
         : root.note.code == "halt-unconfigured"
             ? @tr("This build does not know where this chain announces protocol changes, so it cannot say whether conversions are being taken.")
 
+        // ── The second node the coins were checked against ──────────────
+        //
+        // These two render on the send review, which draws through `NoteText`
+        // and not through `NoticeTitle`. Filed in the wrong one of the two
+        // chains they would show on screen as their own code — which is what
+        // the fallback below is for, and it is a last line of defence rather
+        // than a place to leave things.
+        : root.note.code == "send-corroborated"
+            ? @tr("{0} agrees these coins exist", root.note.args[0])
+        // "outputs" for the same reason `spend-second-source-behind` uses it:
+        // the count is of everything the funding node offered, not of coins a
+        // payment would otherwise have spent.
+        : root.note.code == "send-withheld"
+            ? @tr("{1} agrees about the coins being spent. It has not yet reached the blocks {0} more of this node's outputs are in, so those are not in this payment.",
+                  root.note.args[0], root.note.args[1])
+
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
 
@@ -584,6 +600,39 @@ export component NoticeTitle inherits Text {
                   root.note.args[0], root.note.args[1])
         : root.note.code == "spend-node-not-ready"
             ? @tr("The node is not ready to be spent through")
+        // The four ways corroboration can turn a spend away. Four sentences,
+        // because they have four remedies — chasing "add a second node" when
+        // one is already configured and merely quiet is the wrong problem.
+        : root.note.code == "spend-uncorroborated"
+            ? @tr("This node offers {0} coin(s) that {1} has indexed the blocks of and never seen. Nothing here will be spent — open Settings, Network and switch to the node that came with Pecu.",
+                  root.note.args[0], root.note.args[1])
+        // "outputs" and not "coins": the count is of everything this node
+        // offered that the second one has not reached, which includes outputs
+        // a payment would never have been funded from anyway — an immature
+        // coinbase, something that is not pay-to-public-key-hash. Calling them
+        // coins would say money was held back from a payment they were never
+        // candidates for.
+        : root.note.code == "spend-second-source-behind"
+            ? @tr("{1} has only reached block {2}, so it cannot yet vouch for {0} of this node's outputs. Nothing is wrong — try again once it catches up.",
+                  root.note.args[0], root.note.args[1], root.note.args[2])
+        // No "add a second node" here, and no "switch back" either: the
+        // endpoint that went quiet is the one that came with Pecu, so both of
+        // those would be advice about a node the wallet has just failed to
+        // reach. Waiting is the honest remedy, and the second sentence says
+        // what happens if waiting does not work rather than leaving somebody to
+        // press Send until they work it out.
+        : root.note.code == "spend-second-source-silent"
+            ? @tr("{0} could not be asked whether these coins exist, so nothing was spent. Try again in a moment — while it stays quiet, nothing can check the node you are using.",
+                  root.note.args[0])
+        // Not "add a second node": one is configured and cannot be removed.
+        // This state means the shipped endpoint is answering about a different
+        // chain, so it is the node list that has something wrong with it and
+        // not the number of entries in it.
+        : root.note.code == "spend-no-second-source"
+            ? @tr("Nothing configured can check what {0} reports — the endpoint that came with Pecu is not answering about this chain. Open Settings, Network.",
+                  root.note.args[0])
+        : root.note.code == "spend-node-changed"
+            ? @tr("The node changed while this payment was waiting, so nothing has checked it against the one in use now. Prepare the payment again.")
         : root.note.code == "send-not-enough-spendable" ? @tr("Not enough spendable coins")
         : root.note.code == "send-build-failed" ? @tr("Could not build this payment")
         : root.note.code == "broadcast-rejected" ? @tr("The network rejected this transaction")

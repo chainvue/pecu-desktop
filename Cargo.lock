@@ -4229,6 +4229,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "verus-flows",
  "verus-sdk",
  "webpki-roots 0.26.11",
 ]

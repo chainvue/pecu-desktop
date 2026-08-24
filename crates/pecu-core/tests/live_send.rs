@@ -151,7 +151,11 @@ fn a_payment_built_by_this_wallet_is_accepted_by_the_network() {
     let verdict = send::validate(&draft, funding.total);
     assert!(verdict.ready, "the form refused its own draft: {verdict:?}");
 
-    let prepared = send::prepare(&chain, &vault, LABEL, &draft, "").expect("the build succeeds");
+    // No second source: this test talks to one live endpoint, which is the
+    // shape a default install is in. Corroboration is exercised offline in
+    // `send_corroboration.rs`, where both nodes can be scripted.
+    let prepared =
+        send::prepare(&chain, None, &vault, LABEL, &draft, "").expect("the build succeeds");
 
     // The review, from the signed bytes, before anything is sent. Printed
     // because it is what a person would have read on the screen at this point.

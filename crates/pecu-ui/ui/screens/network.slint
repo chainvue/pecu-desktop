@@ -160,7 +160,8 @@ export component NodesScreen inherits VerticalLayout {
                 }
             }
 
-            for node in NetworkState.nodes: ListRow {
+            for node in NetworkState.nodes: VerticalLayout {
+              ListRow {
                 glyph: node.active ? "●" : "○";
                 glyph-tone: node.status == "online" ? Theme.positive
                     : node.status == "degraded" ? Theme.warning
@@ -230,6 +231,27 @@ export component NodesScreen inherits VerticalLayout {
                         y: (parent.height - self.height) / 2;
                     }
                 }
+              }
+
+              // What using a node of your own costs, said where the choice is.
+              //
+              // A wallet reading from an endpoint somebody added has its coins
+              // held against the shipped one before a payment is signed — which
+              // is the point of the guard, and it means the shipped endpoint is
+              // told the funding address on every send. The person paying for
+              // that is exactly the person who added their own node so as not
+              // to talk to it. This screen already says of the light server
+              // that nothing about which notes are yours is sent to it; the
+              // same standard requires saying this.
+              //
+              // Under the active row rather than as a banner, because it is
+              // only true while a node of your own is the one in use.
+              if !node.builtin && node.active: Text {
+                  text: @tr("While this node is in use, the endpoint that came with Pecu is asked whether the coins a payment spends exist. That means it is told which address is paying, once per payment. Payments are refused rather than sent unchecked if it cannot answer.");
+                  font-size: Typo.caption;
+                  color: Theme.text-tertiary;
+                  wrap: word-wrap;
+              }
             }
         }
     }
@@ -245,5 +267,10 @@ export component NodesScreen inherits VerticalLayout {
     //
     // The core still refuses to remove a built-in, and `Command::AddNode` still
     // exists: nothing was taken out of the wallet, only out of the way in.
+    //
+    // If the form comes back, it owes the same sentence the active row above
+    // carries: adding a node means the shipped endpoint is asked about the
+    // funding address on every payment. That is the moment somebody is choosing
+    // it, and it is the moment to say what it costs.
     Rectangle { vertical-stretch: 1; }
 }

@@ -98,7 +98,16 @@ What is missing here is corroboration, not consent. The spending guard asks
 `Network::may_be_real_money`, which is true for every chain but VRSCTEST, so all
 three sit behind the same typed confirmation VRSC does and the word it asks for
 is the chain's own name. The gap this entry is about is narrower and harder: a
-wallet on one of these three has nothing to hold a node's answer against.
+wallet on one of these three has nothing to hold a node's *chain identity*
+against.
+
+The coins are a separate question and are partly covered now. When the active
+node is one the user added, `pecu_chain::corroborate` holds the outputs a
+transparent payment or a shield would spend against the shipped endpoint for
+that chain before anything is signed — on all five chains, this one included.
+That does not close this entry: it says nothing about which chain either
+endpoint is on, and it does nothing at all when the active node is the built-in,
+which is the default. Chain identity still rests on the node's word.
 
 **Why they cannot simply be derived.** A root chain's currency id *is* the id of
 its own name — `hash160(sha256d(lowercase(name)))`, which

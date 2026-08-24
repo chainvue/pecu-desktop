@@ -21,16 +21,20 @@
 //! then takes `&chain` unchanged, and mock mode costs zero duplicated flow
 //! code.
 
+pub mod corroborate;
 pub mod grpc;
 pub mod light;
 pub mod network;
 pub mod node;
 pub mod permit;
 
+pub use corroborate::{Corroborated, Corroboration, Outpoint};
 pub use grpc::GrpcTransport;
 pub use light::{validate_light_url, Dialect, LightRefused, LightServer, Transport};
 pub use network::Network;
-pub use node::{backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus};
+pub use node::{
+    backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus, SecondSource,
+};
 pub use permit::{SpendPermit, SpendRefused};
 
 use verus_sdk::money::Amount;
@@ -54,6 +58,21 @@ impl Chain {
     /// A client for a real endpoint.
     pub fn live(url: &str) -> Result<Self, RpcError> {
         Ok(Self::Live(connect(url, node::REQUEST_TIMEOUT)?))
+    }
+
+    /// The same, on the tighter budget a corroborating endpoint gets.
+    ///
+    /// A separate constructor rather than a parameter on [`Chain::live`],
+    /// because the timeout is a policy about *what this client is for* and not
+    /// a knob: a second source is advisory infrastructure held open while a
+    /// send is in flight, and it does not get to decide how long the wallet
+    /// holds a decrypted key. See [`node::SECOND_SOURCE_TIMEOUT`].
+    ///
+    /// # Errors
+    ///
+    /// If the URL is not one this wallet may talk to.
+    pub fn second_source(url: &str) -> Result<Self, RpcError> {
+        Ok(Self::Live(connect(url, node::SECOND_SOURCE_TIMEOUT)?))
     }
 
     /// The scripted chain, answering for the addresses this wallet holds.
@@ -125,7 +144,7 @@ impl Broadcaster for Permitted<'_> {
 
 /// Forward every `ChainReader` method to whichever backend is in use.
 ///
-/// A macro because the trait has 25 methods and hand-writing them twice is how
+/// A macro because the trait has 29 methods and hand-writing them twice is how
 /// one quietly ends up behaving differently from the other.
 macro_rules! delegate {
     ($($method:ident ( $($arg:ident : $ty:ty),* ) -> $ret:ty;)*) => {

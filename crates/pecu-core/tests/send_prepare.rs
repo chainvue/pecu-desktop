@@ -170,6 +170,10 @@ fn preparing_a_send_all_resolves_the_amount_and_writes_it_onto_the_review() {
 
     let prepared = send::prepare(
         &wallet.chain,
+        // One scripted node, so nothing corroborates it — the shape a
+        // default install is in. `send_corroboration.rs` is where two
+        // nodes are put against each other.
+        None,
         &wallet.vault,
         LABEL,
         &sweep_to(&to),
@@ -231,6 +235,7 @@ fn preparing_a_send_all_prices_a_verusid_recipient_as_a_smart_output() {
     let plain = wallet(&COINS);
     let prepared = send::prepare(
         &plain.chain,
+        None,
         &plain.vault,
         LABEL,
         &sweep_to(&recipient()),
@@ -246,6 +251,7 @@ fn preparing_a_send_all_prices_a_verusid_recipient_as_a_smart_output() {
     let smart = wallet(&COINS);
     let prepared = send::prepare(
         &smart.chain,
+        None,
         &smart.vault,
         LABEL,
         &sweep_to(&identity()),
@@ -275,6 +281,7 @@ fn preparing_a_send_all_from_a_key_that_cannot_pay_a_fee_is_refused() {
     // so the success arm is named rather than unwrapped into a message.
     let outcome = send::prepare(
         &wallet.chain,
+        None,
         &wallet.vault,
         LABEL,
         &sweep_to(&recipient()),

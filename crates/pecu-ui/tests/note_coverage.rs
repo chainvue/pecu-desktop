@@ -215,3 +215,83 @@ fn no_sentence_is_written_for_a_reason_nobody_names() {
         orphans.join("\n  "),
     );
 }
+
+/// …and the review's own line has its words in the component that draws it.
+///
+/// # Why the test above cannot catch this
+///
+/// It greps the whole file for `"code"`, so a sentence filed in `NoticeTitle`
+/// satisfies it whatever renders the note. That is right for most codes — a
+/// refusal reaching a field and a refusal reaching a toast are the same fact —
+/// but the send review's corroboration line only ever draws through `NoteText`,
+/// and a sentence for it in the wrong chain renders on screen as its own code.
+/// It happened: both of these were filed in `NoticeTitle`, and the one guard on
+/// this screen a person is supposed to be able to see would have read
+/// `send-corroborated`.
+///
+/// Narrow on purpose. It reads the codes out of the one function in the core
+/// that fills that field, so adding a third one is covered without anybody
+/// updating a list here.
+#[test]
+fn the_review_line_about_the_second_source_has_its_words_where_the_review_draws_it() {
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/")
+            .join("pecu-core")
+            .join("src")
+            .join("send.rs"),
+    )
+    .expect("send.rs is readable");
+
+    let start = text
+        .find("fn corroboration_note(")
+        .expect("the review still builds its corroboration line somewhere");
+    let body = &text[start..];
+    let end = body.find("\n}\n").expect("the function ends");
+    let codes: Vec<String> = kebab_in(&body[..end]);
+    assert!(
+        !codes.is_empty(),
+        "no codes found — this test has stopped reading what it thinks it reads",
+    );
+
+    let words = words();
+    let note_text = words
+        .get(
+            ..words
+                .find("export component NoticeTitle")
+                .expect("NoticeTitle is still the second chain"),
+        )
+        .expect("a prefix of the file");
+
+    let missing: Vec<&String> = codes
+        .iter()
+        .filter(|code| !note_text.contains(&format!("\"{code}\"")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the send review draws through `NoteText`, and these have no branch in it \
+         — on screen they render as their own code:\n  {missing:?}\n\nA sentence in \
+         `NoticeTitle` or `NoticeBody` does not reach this call site.",
+    );
+}
+
+/// Every kebab-case string literal in a fragment of Rust.
+fn kebab_in(fragment: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = fragment;
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let Some(end) = after.find('"') else { break };
+        let literal = &after[..end];
+        if literal.contains('-')
+            && literal
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            found.push(literal.to_string());
+        }
+        rest = &after[end + 1..];
+    }
+    found
+}
