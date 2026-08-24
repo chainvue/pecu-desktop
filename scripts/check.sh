@@ -30,14 +30,21 @@
 #
 # # The half nothing had ever run
 #
-# `mock` is not a default feature, so the `test` half compiles four of
-# pecu-core's test files to empty binaries — send_prepare, demo_chain,
-# currency_launch and currency_from_a_new_name are all `#![cfg(feature =
-# "mock")]`. They report "0 passed; 0 filtered out" and the run goes green.
-# That is twenty-one tests, 528 without the feature against 549 with it, and
-# they are the only offline coverage of `send::prepare`, of defining a currency
-# and of the scripted-chain demo: everything that builds and signs a
-# transaction without a node. Nothing here had ever run them.
+# `mock` is not a default feature, so the `test` half compiles six of
+# pecu-core's test files to empty binaries — send_prepare, send_corroboration,
+# demo_chain, currency_launch, currency_from_a_new_name and identity_changes
+# are all `#![cfg(feature = "mock")]`. They report "0 passed; 0 filtered out"
+# and the run goes green. That is thirty-nine tests — 3, 11, 12, 4, 2 and 7 —
+# on top of the 528 the `test` half counts at this commit: 526 across its test
+# binaries and two doc-tests. They are the only offline coverage of
+# `send::prepare`, of corroborating a payment against a second node, of the
+# five ways an identity is changed, of defining a currency and of the scripted
+# chain demo: everything that builds and signs a transaction without a node.
+# Nothing here had ever run them.
+#
+# Both figures are re-measured rather than carried forward, because they are
+# the kind that drifts silently: every one of them is a number about a run
+# nobody is looking at.
 #
 # `--features mock` rather than `--all-features`, and today those are the same
 # command. This workspace declares exactly one feature — `mock`, in pecu-app,
@@ -54,7 +61,7 @@
 # whether it still says all of it. `src` as well as `tests`, because a
 # `#[cfg(all(test, feature = "mock"))]` module inside a crate is compiled away
 # by the `test` half exactly as quietly as a whole file is, and this half would
-# run it. Today that returns seventeen sites: those four files, and thirteen in
+# run it. Today that returns nineteen sites: those six files, and thirteen in
 # pecu-chain's and pecu-core's `src`, none of which is a test module.
 #
 # `--exclude pecu-ui`, because the feature cannot reach it: pecu-ui depends on
@@ -62,7 +69,7 @@
 # `mock` feature, so its thirteen test files — fourteen binaries, counting the
 # lib's own unit tests, which `--exclude` drops too — are the same bytes the
 # `test` half already built and ran. They are also the largest single share of
-# the suite's runtime: 54 tests, and a little over two fifths of the seconds
+# the suite's runtime: 55 tests, and a little over two fifths of the seconds
 # the `test` half spends inside test binaries — three warm runs at d04a74d on
 # the machine this was written on came out at 42%, 43% and 47%, with
 # tests/visual.rs alone about a third of the half every time. The absolute
@@ -70,7 +77,7 @@
 # seconds of test time on one machine, so it is the share that travels to a
 # runner and not the clock. What `--exclude` does not skip is compiling
 # pecu-ui: pecu-app depends on the lib, so this half still pays for the crate,
-# just not for its tests. Everything else stays selected, not just the four
+# just not for its tests. Everything else stays selected, not just the six
 # files — those thirteen `#[cfg(feature = "mock")]` sites in pecu-chain and
 # pecu-core mean the rest of pecu-core's suite is running against a differently
 # compiled crate, which is the other thing this half is for.

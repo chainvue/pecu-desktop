@@ -4281,75 +4281,11 @@ const SCAN_ATTEMPTS: u32 = 3;
         self.busy(TaskKind::PreparingSend, true);
 
         self.blocking.dispatch(
-            move || {
-                // One `with_key`, used for both roles. The funding key and the
-                // identity key are the same here: this wallet is changing an
-                // identity its own key controls, which is the only case it
-                // offers. A multisig identity would need every signer, and this
-                // is where that would go.
-                let built = vault.with_key(&label, |key| match &change {
-                    identity::Change::Unlock { extra_blocks } => {
-                        verus_sdk::network::prepare_identity_unlock(
-                            &*chain,
-                            key,
-                            &[key],
-                            &address,
-                            *extra_blocks,
-                        )
-                        .map(identity::Prepared::Updated)
-                        .map_err(|error| error.to_string())
-                    }
-                    // Signed by the **authority's** keys, not the identity's.
-                    // For an identity that is its own authority they are the
-                    // same key, which is the only case this wallet serves — and
-                    // the SDK checks the authority before signing, so a wallet
-                    // that does not hold them is told which ones were needed
-                    // rather than meeting a script verification failure the
-                    // daemon will not explain.
-                    identity::Change::Revoke => verus_sdk::network::prepare_identity_revocation(
-                        &*chain,
-                        key,
-                        &[key],
-                        &address,
-                    )
-                    .map(identity::Prepared::Revoked)
-                    .map_err(|error| error.to_string()),
-                    identity::Change::Recover => verus_sdk::network::prepare_identity_recovery(
-                        &*chain,
-                        key,
-                        &[key],
-                        &address,
-                        // Nothing restored beyond clearing the revocation. A
-                        // recovery may legitimately hand the identity to new
-                        // primary addresses, and offering that without a screen
-                        // built for it would be the most dangerous default here.
-                        &verus_sdk::network::IdentityChange::new(),
-                    )
-                    .map(identity::Prepared::Recovered)
-                    .map_err(|error| error.to_string()),
-                    other => match identity::as_sdk_change(other) {
-                        Ok(sdk) => verus_sdk::network::prepare_identity_update(
-                            &*chain,
-                            key,
-                            &[key],
-                            &address,
-                            &sdk,
-                        )
-                        .map(identity::Prepared::Updated)
-                        .map_err(|error| error.to_string()),
-                        Err(reason) => Err(reason),
-                    },
-                });
-
-                Work::IdentityChangePrepared {
-                    ticket,
-                    described,
-                    needs_confirmation,
-                    result: Box::new(match built {
-                        Ok(inner) => inner,
-                        Err(vault) => Err(vault.to_string()),
-                    }),
-                }
+            move || Work::IdentityChangePrepared {
+                ticket,
+                described,
+                needs_confirmation,
+                result: Box::new(identity::prepare(&chain, &vault, &label, &address, &change)),
             },
             self.work.clone(),
         );
@@ -5759,17 +5695,24 @@ const SCAN_ATTEMPTS: u32 = 3;
     ///
     /// # Why it no longer searches identities
     ///
-    /// It searched the identities these keys control and the currencies they
-    /// define, and both of those screens are out of the rail for this build.
-    /// A result that lands on a screen the wallet is otherwise not offering is
-    /// worse than no result — there is no visible way back from it. The two
-    /// loops are deleted rather than filtered, because a filter here would have
-    /// to encode which screens the interface is currently showing, and the core
-    /// does not know that and should not learn it.
+    /// It searched the identities these keys control, and that screen is out of
+    /// the rail for this build. A result that lands on a screen the wallet is
+    /// otherwise not offering is worse than no result — there is no visible way
+    /// back from it. The loop is deleted rather than filtered, because a filter
+    /// here would have to encode which screens the interface is currently
+    /// showing, and the core does not know that and should not learn it.
+    ///
+    /// Why the screen is out of the rail is **not** a fact about this function
+    /// and is not restated here: `docs/LATER.md` §0b is the record of it,
+    /// along with what it would take to bring it back. Two code
+    /// comments describing the same decision are two chances to describe it
+    /// differently, and this decision already had five.
     ///
     /// `kind` is the whole of the contract: it picks the icon and the screen.
-    /// Adding identities back is one loop in [`palette_hits`] and one arm in
-    /// `wire_search`.
+    /// Adding identities back is one loop in [`palette_hits`], one arm in
+    /// `wire_search`, the icon branch in `overlay.slint` — which is binary
+    /// today — the palette's placeholder, which names the kinds it searches,
+    /// and the assertion below that pins them to exactly two.
     fn search(&mut self, query: &str) {
         let hits = match &self.store {
             Some(store) => palette_hits(query, &store.known_addresses(), &self.market_names),

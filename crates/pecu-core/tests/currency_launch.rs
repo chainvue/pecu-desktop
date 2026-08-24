@@ -16,6 +16,10 @@
 //! same builder, the same signature, against a scripted chain — stopping one
 //! step short of the network.
 //!
+//! `docs/LATER.md` §0b records that gate and what closing it has to show,
+//! beside the identity gate it rides with: both are what keep the Currencies
+//! and Profile screens out of the rail, and one criterion covers the pair.
+//!
 //! # Zero broadcasts, measured rather than argued
 //!
 //! `currency::prepare` is handed a `ChainReader` and no `Broadcaster`, so it is

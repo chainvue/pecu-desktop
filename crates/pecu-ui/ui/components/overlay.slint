@@ -21,9 +21,13 @@ import { NoticeBody, NoticeTitle } from "note.slint";
 // named — the two things it holds that have a name and an identifier, and whose
 // screens are both in the rail. It used to search identities as well; that
 // destination is hidden in this build, and a result nobody can get back from is
-// worse than no result. See `Core::search`.
+// worse than no result. `Core::search` is where that is decided, and
+// `docs/LATER.md` §0b is the record of why.
 //
-// **Not screens**: those are reachable with ⌘1–⌘7 and ⌘,, which this wallet
+// The icon below is binary — address or currency — so a third kind is an edit
+// here too, not only in the core. `Core::search` counts them.
+//
+// **Not screens**: those are reachable with ⌘1–⌘6 and ⌘,, which this wallet
 // already has and the design's shortcut map also lists, and putting the
 // navigation into the core's search would mean the core knowing what the
 // interface is arranged into.

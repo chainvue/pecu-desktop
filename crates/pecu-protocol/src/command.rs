@@ -440,10 +440,15 @@ pub enum Command {
     },
     /// What the command palette is looking for.
     ///
-    /// Answered from what the core already holds — identities and currencies —
+    /// Answered from what the core already holds — the addresses this wallet
+    /// has paid or named, and the currencies the markets read has named —
     /// rather than by asking the chain. A keystroke that costs a round trip is
     /// a search box that stutters, and both lists are refreshed on their own
     /// schedule anyway.
+    ///
+    /// It answered with identities too until they went out of the rail. What
+    /// comes back is two kinds, and `Core::search` says what it would take to
+    /// make it three.
     ///
     /// An empty query is not "everything": it clears the results. A palette
     /// that opens showing the entire wallet has answered a question nobody

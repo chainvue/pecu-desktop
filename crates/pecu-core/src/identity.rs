@@ -617,6 +617,94 @@ impl Prepared {
     }
 }
 
+/// Build and sign a change, without sending it.
+///
+/// Blocking, and the key exists only inside the closure. It cannot send, and
+/// the reason is the permit rather than the reader: `pecu_chain::Chain` does
+/// hand out a broadcaster, but only in exchange for a `SpendPermit`, and the
+/// only thing that issues one is `NodeManager::spend_permit`. No `NodeManager`
+/// appears in this signature, so `Permitted` is unreachable from here —
+/// the same property [`crate::currency::prepare`] and the send path rely on.
+///
+/// # Why the five arms live here rather than in the actor
+///
+/// They were inline in `Core::prepare_identity_change`, which is private and
+/// reachable only by putting a `Command` on the actor's queue. That made the
+/// wallet's own dispatch — which of the four SDK entry points a described
+/// change belongs to — untestable except through the whole core, so a test
+/// that wanted to sign a revocation had to write the match a second time and
+/// then assert against its own copy. Lifted, the test drives the same function
+/// the actor does, and matches the shape every other flow in this crate
+/// already has: `send::prepare`, `shield::plan`, `currency::prepare`.
+///
+/// One `with_key`, used for both roles. The funding key and the identity key
+/// are the same here: this wallet is changing an identity its own key
+/// controls, which is the only case it offers. A multisig identity would need
+/// every signer, and this is where that would go.
+///
+/// # Errors
+///
+/// If the vault will not open the key, if the change names an authority that
+/// is not an i-address, or if the SDK refuses to build the transaction — a
+/// revoked identity being updated, an unlock on something that is not locked,
+/// a revocation whose subject is its own recovery authority.
+pub fn prepare(
+    chain: &pecu_chain::Chain,
+    vault: &pecu_keystore::Vault,
+    label: &str,
+    address: &str,
+    change: &Change,
+) -> Result<Prepared, String> {
+    let built = vault.with_key(label, |key| match change {
+        Change::Unlock { extra_blocks } => verus_sdk::network::prepare_identity_unlock(
+            chain,
+            key,
+            &[key],
+            address,
+            *extra_blocks,
+        )
+        .map(Prepared::Updated)
+        .map_err(|error| error.to_string()),
+        // Signed by the **authority's** keys, not the identity's. For an
+        // identity that is its own authority they are the same key, which is
+        // the only case this wallet serves — and the SDK checks the authority
+        // before signing, so a wallet that does not hold them is told which
+        // ones were needed rather than meeting a script verification failure
+        // the daemon will not explain.
+        Change::Revoke => {
+            verus_sdk::network::prepare_identity_revocation(chain, key, &[key], address)
+                .map(Prepared::Revoked)
+                .map_err(|error| error.to_string())
+        }
+        Change::Recover => verus_sdk::network::prepare_identity_recovery(
+            chain,
+            key,
+            &[key],
+            address,
+            // Nothing restored beyond clearing the revocation. A recovery may
+            // legitimately hand the identity to new primary addresses, and
+            // offering that without a screen built for it would be the most
+            // dangerous default here.
+            &verus_sdk::network::IdentityChange::new(),
+        )
+        .map(Prepared::Recovered)
+        .map_err(|error| error.to_string()),
+        other => match as_sdk_change(other) {
+            Ok(sdk) => {
+                verus_sdk::network::prepare_identity_update(chain, key, &[key], address, &sdk)
+                    .map(Prepared::Updated)
+                    .map_err(|error| error.to_string())
+            }
+            Err(reason) => Err(reason),
+        },
+    });
+
+    match built {
+        Ok(inner) => inner,
+        Err(vault) => Err(vault.to_string()),
+    }
+}
+
 /// The word somebody has to type before a revocation is sent.
 ///
 /// Defined in `pecu-protocol` and re-exported here, because it is a term of
@@ -1101,9 +1189,15 @@ mod tests {
     /// identity that is its own recovery authority, by nobody. That asymmetry
     /// is the whole reason for the extra step, and the wording has to carry it
     /// or the step is just friction.
+    ///
+    /// The word itself is pinned here too. `Core::confirm_identity_change`
+    /// compares against it, `fixtures.rs` types it into the review screen, and
+    /// the two would agree with each other while both drifting from what the
+    /// button says if nothing named the string.
     #[test]
     fn only_the_change_that_cannot_be_undone_asks_for_a_word() {
         assert!(Change::Revoke.needs_typed_confirmation());
+        assert_eq!(REVOKE_CONFIRMATION, "revoke");
 
         for ordinary in [
             Change::Lock { delay: 10 },

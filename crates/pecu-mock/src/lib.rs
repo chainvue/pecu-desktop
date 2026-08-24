@@ -517,6 +517,55 @@ impl MockChain {
             .map_or(usize::MAX, |state| state.broadcast_attempts)
     }
 
+    /// Add an identity the *change* flows can work on, and answer with its
+    /// i-address.
+    ///
+    /// # Why this is not in [`MockChain::demo`]
+    ///
+    /// Because the demo build's identity list is a fixture with assertions on
+    /// its length — `demo_chain.rs` pins it at four in five places, and it has
+    /// broken a navigation test before by moving. The identities a change test
+    /// needs are not the identities a demo needs: a revocable subject, a
+    /// locked one and a revoked one, in states chosen to reach a code path
+    /// rather than to show a screen. Seeded by the test that wants them, the
+    /// demo stays what it is and nothing has to be counted twice.
+    ///
+    /// `flags` and `unlock_after` are the raw pair consensus carries, and they
+    /// mean different things together — `unlock_after` is a delay when
+    /// `FLAG_LOCKED` is set and an absolute height when it is not. Both the
+    /// output script and `getidentity`'s rendering are written from the same
+    /// two, so no script can describe an identity the two disagree about.
+    ///
+    /// # Errors
+    ///
+    /// If the state is unreadable, if the primary or recovery address does not
+    /// parse, or if the identity's output script cannot be built.
+    pub fn seed_changeable_identity(
+        &self,
+        name: &str,
+        primary: &str,
+        flags: u32,
+        unlock_after: u32,
+        recovery: &RecoveryAuthority,
+    ) -> Result<String, RpcError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| RpcError::Unexpected("mock state poisoned".into()))?;
+        // One transaction per identity, counted from the one the launchable
+        // identity already holds so nothing collides with it.
+        let holding = LAUNCHABLE_HOLDING + 1 + state.identity_outputs.len();
+        seed_derived_identity(
+            &mut state,
+            name,
+            primary,
+            flags,
+            unlock_after,
+            recovery,
+            holding,
+        )
+    }
+
     /// Read the script, applying the configured latency first so that loading
     /// states in the UI are actually reachable.
     fn read<T>(&self, f: impl FnOnce(&MockState) -> Result<T, RpcError>) -> Result<T, RpcError> {
@@ -1158,15 +1207,8 @@ fn seed_identities(state: &mut MockState, address: &str) {
 /// made of those renders a picker in which nothing can be chosen — which is a
 /// state worth being able to show, and a poor one to only ever show.
 ///
-/// # Why this one's address is derived and theirs are borrowed
-///
-/// Theirs are real VRSCTEST i-addresses, taken so anything that parses one gets
-/// a valid address. That is enough for every screen that only reads them. It is
-/// not enough here: the launch builder recomputes `identity_id(name, parent)`
-/// and refuses a definition whose identity does not match, so a borrowed
-/// address belonging to a differently-named identity fails at the last step
-/// with a message about neither. Derived, the script agrees with the chain's
-/// own arithmetic.
+/// Its address is derived rather than borrowed, and
+/// [`seed_derived_identity`] says why.
 ///
 /// # Errors
 ///
@@ -1180,6 +1222,81 @@ fn seed_launchable_identity(state: &mut MockState, primary: &str) -> Result<(), 
     // script's own parent, and the script has no network.
     const NAME: &str = "maker";
 
+    // Its own revocation and recovery authority, which is what a freshly
+    // registered identity looks like. That is also why it is no use to a
+    // revocation — see [`RecoveryAuthority`].
+    seed_derived_identity(
+        state,
+        NAME,
+        primary,
+        0,
+        0,
+        &RecoveryAuthority::ItsOwn,
+        LAUNCHABLE_HOLDING,
+    )?;
+    Ok(())
+}
+
+/// The transaction the launchable identity is held in.
+///
+/// Named rather than written twice because [`MockChain::seed_changeable_identity`]
+/// counts from it, and two identities sharing a txid would have
+/// `getrawtransaction` answer about the wrong one.
+const LAUNCHABLE_HOLDING: usize = 21;
+
+/// Whose keys can bring a scripted identity back.
+///
+/// # Why this is a choice a script has to make
+///
+/// Every identity in this script used to be its own revocation *and* recovery
+/// authority, which is the shape a registration lands in — and the shape that
+/// cannot be revoked at all. `verus-tx-identity` refuses it before a signature
+/// exists, with `RevocationWouldStrand`, because consensus refuses it too: an
+/// identity that is its own recovery authority has no way back from a
+/// revocation. So a script made only of those identities can exercise four of
+/// the five changes this wallet offers and never the fifth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecoveryAuthority {
+    /// Itself. What a registration starts as, and what a revocation refuses.
+    ItsOwn,
+    /// Another identity, named by the i-address this chain knows it at.
+    ///
+    /// Whether the wallet can *sign* a recovery then depends on that
+    /// identity's own primary addresses, which the flow reads from the chain
+    /// rather than assuming — so the other identity has to be one this script
+    /// also holds.
+    Another(String),
+}
+
+/// Seed an identity whose chain-side bytes exist, and answer with its
+/// i-address.
+///
+/// # Why this one's address is derived and the borrowed ones are not enough
+///
+/// The four in [`seed_identities`] carry real VRSCTEST i-addresses, taken so
+/// anything that parses one gets a valid address. That is enough for every
+/// screen that only reads them. It is not enough for anything that *changes*
+/// an identity: those flows recompute `identity_id(name, parent)` and refuse an
+/// object whose id does not match, and they read the identity out of the
+/// output script rather than out of `getidentity`'s rendering — so a borrowed
+/// address belonging to a differently-named identity fails at the last step
+/// with a message about neither. Derived, the script agrees with the chain's
+/// own arithmetic.
+///
+/// # Errors
+///
+/// If the primary address is not a transparent one, if the named recovery
+/// authority is not an address, or if the identity's own output script cannot
+/// be built.
+fn seed_derived_identity(
+    state: &mut MockState,
+    name: &str,
+    primary: &str,
+    flags: u32,
+    unlock_after: u32,
+    recovery: &RecoveryAuthority,
+    holding_index: usize,
+) -> Result<String, RpcError> {
     let parent: Address = state
         .chain_id
         .parse()
@@ -1189,26 +1306,35 @@ fn seed_launchable_identity(state: &mut MockState, primary: &str) -> Result<(), 
         .map_err(|_| unsupported("a primary address that is not an address"))?
         .hash();
 
-    let id_hash = verus_sdk::identity::identity_id(NAME, Some(parent.hash()));
+    let id_hash = verus_sdk::identity::identity_id(name, Some(parent.hash()));
     let id_address = Address::new(verus_sdk::verus_keys::AddressKind::Identity, id_hash);
 
-    // The identity as the chain holds it. `revocation`/`recovery` point at
-    // itself, which is what a freshly registered identity looks like and what
-    // the JSON below already says.
+    let recovery_hash = match recovery {
+        RecoveryAuthority::ItsOwn => id_hash,
+        RecoveryAuthority::Another(address) => address
+            .parse::<Address>()
+            .map_err(|_| unsupported("a recovery authority that is not an address"))?
+            .hash(),
+    };
+
+    // The identity as the chain holds it. Revocation stays with the identity
+    // itself: that is the authority a wallet holding the primary keys can
+    // actually satisfy, and it is the pair — self-revocation, delegated
+    // recovery — that makes a revocation both signable and legal.
     let held = verus_sdk::identity::Identity {
         version: 3,
-        flags: 0,
+        flags,
         primary_addresses: vec![verus_sdk::decode::Destination::PubKeyHash(primary_hash)],
         min_sigs: 1,
         parent: parent.hash(),
-        name: NAME.to_string(),
+        name: name.to_string(),
         content_multimap: Vec::new(),
         content_map: Vec::new(),
         revocation_authority: id_hash,
-        recovery_authority: id_hash,
+        recovery_authority: recovery_hash,
         private_addresses: Vec::new(),
         system_id: parent.hash(),
-        unlock_after: 0,
+        unlock_after,
     };
     let script = verus_sdk::identity::identity_primary_script(
         id_hash,
@@ -1222,21 +1348,27 @@ fn seed_launchable_identity(state: &mut MockState, primary: &str) -> Result<(), 
 
     // Its own transaction, because `raw_transaction` is asked by txid and has
     // no other way to tell whose output it is being asked about.
-    let holding = fixture_txid(21);
+    let holding = fixture_txid(holding_index);
     let mut record = identity(
-        &format!("{NAME}.{}@", state.chain_name),
+        &format!("{name}.{}@", state.chain_name),
         &id_address.to_string(),
         primary,
-        0,
-        0,
+        flags,
+        unlock_after,
     );
     record.outpoint = (holding, 0);
+    // The rendering has to agree with the bytes. It is what the detail screen
+    // reads, and a script whose JSON says one authority while its output script
+    // says another describes a chain that cannot exist.
+    record.identity["recoveryauthority"] =
+        serde_json::json!(Address::new(verus_sdk::verus_keys::AddressKind::Identity, recovery_hash)
+            .to_string());
 
     state
         .identity_outputs
         .insert(holding.to_display_hex(), hex_of(&script));
-    state.identities.insert(format!("{NAME}@"), record);
-    Ok(())
+    state.identities.insert(format!("{name}@"), record);
+    Ok(id_address.to_string())
 }
 
 /// Bytes as lowercase hex, the way a daemon writes a script.
