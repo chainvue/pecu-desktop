@@ -176,11 +176,16 @@ export component AppWindow inherits Window {
         // "Profile", not "Identities", and the screen behind it is unchanged:
         // it is where you are, and where the other names you hold are listed.
         //
-        // Both are `hidden` for now: this build is the ordinary wallet —
-        // holding, sending, receiving, converting — and identities and the
-        // currencies they define are a second product on top of it. They are
-        // built and tested and keep their reference images; they are simply
-        // not in the rail. Flip the two bools to bring them back.
+        // Both are `hidden`, and the reason is not the one that used to be
+        // written here. It is not product scope: it is that the identity write
+        // operations have never been run against a real chain, and that a
+        // currency has never been launched on one. Those are two gates, not
+        // one, and `docs/LATER.md` §0b is the record of both — the exit
+        // criterion for each, and what the flip actually costs, which is not
+        // two bools. The cost is deliberately not summarised here: a précis
+        // that has to be re-measured in two places is a précis that goes stale
+        // in one of them. The screens themselves are built and tested and keep
+        // their reference images.
         { id: "identities",label: @tr("Profile"),    icon: "profile",  enabled: true, badge: "", hidden: true },
         { id: "currencies",label: @tr("Currencies"), icon: "currency", enabled: true, badge: "", hidden: true },
         { id: "settings",  label: @tr("Settings"),   icon: "settings", enabled: true, badge: "" },
@@ -371,6 +376,13 @@ export component AppWindow inherits Window {
                 // 8 and 9 are unbound while Profile and Currencies are out of
                 // the rail — a shortcut to a screen with no visible way back is
                 // a place a person gets stranded.
+                //
+                // And when they come back, 8 and 9 are the wrong numbers to
+                // bind: with `nodes` still hidden, Profile is the *seventh*
+                // visible entry, so binding what `nav-index` calls 7 and 8 to
+                // ⌘8 and ⌘9 would leave ⌘7 dead and break the rule this
+                // comment block opens with. `docs/LATER.md` §0b records that
+                // as a decision somebody has to make rather than a bind.
                 if (event.text == ",") { root.go("settings"); return EventResult.accept; }
                 // Slint reports the character produced, and `⌘L` without shift
                 // produces a lower-case `l`.

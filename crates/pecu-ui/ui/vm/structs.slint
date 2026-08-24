@@ -42,11 +42,17 @@ export struct NavItem {
     // Reserving the space visibly is a promise; hiding it is a surprise later.
     enabled: bool,
     badge: string,
-    // Built, and deliberately kept out of the rail for now.
+    // A screen that is built and kept out of the rail.
     //
     // Distinct from `enabled: false`, which reserves visible space for
-    // something unbuilt. This is the opposite case: the screen works, and is
-    // not part of the wallet being shown yet.
+    // something unbuilt. This is the opposite case: the screen works and is
+    // simply not shown, so nothing is promised and nothing is greyed out.
+    //
+    // Why a given entry is hidden is not a property of this field and is not
+    // written here. `docs/LATER.md` §0b holds it for `identities` and
+    // `currencies`, which are waiting on two runs against a real chain;
+    // `nodes` is hidden for its own unrelated reason, recorded beside it in
+    // `app.slint`.
     //
     // It is a field rather than a shorter `nav` list because `nav` is also
     // what says a screen exists at all — see `nav-index` and the `ComingSoon`

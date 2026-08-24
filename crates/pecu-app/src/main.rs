@@ -1379,7 +1379,9 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
         //
         // Both arms land on a screen that is in the rail. That is the whole
         // reason the core stopped answering with identities — a result whose
-        // only destination is hidden strands whoever picked it.
+        // only destination is hidden strands whoever picked it. Why that
+        // destination is hidden, and what it would take to unhide it, is in
+        // `docs/LATER.md` §0b and deliberately not here.
         let weak = ui.as_weak();
         search.on_pick(move |hit| {
             let Some(ui) = weak.upgrade() else {

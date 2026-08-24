@@ -16,6 +16,17 @@
 //! same builder, the same signature, against a scripted chain — stopping one
 //! step short of the network.
 //!
+//! `docs/LATER.md` §0b records that gate and what closing it has to show,
+//! beside the identity gate it rides with. The two gates together are what
+//! keep the Currencies and Profile screens out of the rail, and §0b carries
+//! **two** exit criteria, one per gate — because the evidence is not
+//! interchangeable. Five txids from `tests/live_identity.rs` say that this
+//! wallet can lock, revoke and recover an identity on a real chain; they say
+//! nothing about whether a currency it defined was ever accepted by one. A
+//! criterion drawn from the identity gate alone would authorise shipping
+//! Currencies on identity evidence, which is the mistake §0b exists to stop.
+//! Closing this gate takes the launch described above and nothing less.
+//!
 //! # Zero broadcasts, measured rather than argued
 //!
 //! `currency::prepare` is handed a `ChainReader` and no `Broadcaster`, so it is

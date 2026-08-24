@@ -43,6 +43,188 @@ cross-chain transfer — all three `TransferDestination` constructors hard-code
 
 ---
 
+## 0b. Identities and Currencies are built, and switched off
+
+**Status:** built, screenshotted, covered offline, and never run against a
+chain — out of the rail deliberately, and until the two runs below have
+happened.
+
+`crates/pecu-ui/ui/app.slint` carries `hidden: true` on the `identities` and
+`currencies` entries of `nav`, ⌘8 and ⌘9 are unbound, and `Core::search`
+answers with addresses and currencies and nothing else. The execution is
+clean: there are no dangling entry points. `Actions.refresh-identities()` is
+called from one place — the Refresh button on the hidden screen — and
+`ScreenId::Identities` is produced only by the rail, so `IdentityState.rows` is
+empty by construction and the two things outside that screen which read it, the
+nav chip and Receive's "or by name" panel, draw nothing.
+
+That is 44 of the 150 reference images, over 22 screens and states, reachable
+from nowhere.
+
+**Why it is off, said properly rather than in five code comments.** It was
+written in `app.slint`, in `Core::search`, in `wire_search`, in the palette
+overlay and on `NavItem.hidden`, and the reason all five gave was product
+scope: this build is the ordinary wallet, and identities and the currencies
+they define are a second product on top of it. That is true and it is not the
+blocker. The blocker is the one §0 already
+names: **the identity write operations have never been run against a real
+chain.** Shipping the rail entry without those runs ships untested transaction
+paths that alter identities, revocation and recovery among them.
+
+§0 is generous about the coverage that does exist, and this is the place to be
+exact about it. "Locking, unlocking, revoking and recovering are covered by the
+scripted chain" — as *states*, yes: the script seeds an identity that is
+locked, one that is unlocking and one that is revoked, and the wallet's reading
+of each is tested. As *operations*, they were covered by nothing at all until
+`tests/identity_changes.rs`, which now builds and signs all five against the
+scripted chain and measures that none of them reaches the network. That closes
+the half that can be had for nothing. The chain still refuses every broadcast,
+so what has never happened is still what §0 said had never happened.
+
+**And a second gate §0 does not mention.** A currency has never been defined or
+launched against a real chain either. `crates/pecu-core/tests/currency_launch.rs`
+records why in its own header — two hundred coins on VRSCTEST, and it cannot be
+undone. Its four tests build and sign against the scripted chain and stop one
+step short of the network. Nothing in this file recorded that gate before now,
+and Currencies rides on the same two bools as Profile: an exit criterion drawn
+from §0 alone would authorise shipping the Currencies screen on identity
+evidence.
+
+**Exit criterion — two runs, one per gate,** recorded here the way §0 records
+the payment to `dude.VRSCTEST@`: txid, block, and what the screen said
+beforehand.
+
+1. **Five txids from `tests/live_identity.rs`, and the blocks they confirmed
+   in, written into this entry** — one each for authorities, lock, unlock,
+   revoke and recover — together with the answer to the question the run is
+   there to settle: whether consensus accepts a revocation of an identity that
+   is still counting down. The file asks the chain and prints the answer either
+   way; nowhere else in this tree says.
+
+   **Not "the test went green".** It is `#[ignore]`d, and every precondition it
+   cannot satisfy is a skip that returns early from a test which then reports as
+   passing: no `PECU_LIVE_SEND`, no `PECU_LIVE_IDENTITY`, a key that is not
+   among the subject's primary addresses, a subject that is its own recovery
+   authority, an authority this key cannot sign for, a balance too short to pay
+   five fees — or, on the branch that only recovers an identity an earlier run
+   left revoked, too short to pay one. That is deliberate — running the whole suite with `--ignored`
+   should not fail on a wallet nobody provisioned — and it means a green
+   `live_identity` on an unset environment is evidence of nothing. The txids are
+   the evidence.
+
+   The order is forced and the file says why: authorities, lock, unlock, revoke,
+   recover, in one test, because a revoked identity cannot be updated and a
+   recovery needs something to act on. It needs a subject whose recovery
+   authority is a **second identity the same key controls** — a revocation whose
+   subject is its own recovery authority is refused before a signature exists,
+   and a freshly registered identity is exactly that.
+2. One currency defined and launched, by hand, from an identity claimed for the
+   purpose — and the record has to show two things, not one: the currency
+   answering `getcurrency` after its start block, and the three figures on the
+   launch review checked against the transaction the chain kept. The second is
+   the point of doing it by hand. §4b records that this screen omits the miner
+   fee, which is exactly the kind of discrepancy only a hand-run catches.
+   Written down here, not turned into a test — each run costs a name and two
+   hundred coins and consumes the identity, since an identity defines exactly
+   one currency. A harness that pretended otherwise would be a harness nobody
+   could run twice.
+
+**What the flip costs, so it is on the table before somebody starts.** It is
+not two booleans.
+
+- **134 of the 150 reference images move.** Every snapshot renders the whole
+  window at 1240×800 with the rail expanded, and `visual.rs` compares pixels
+  with a per-channel tolerance of 1 and a noise budget. Two new rail entries
+  change the rail in every image that shows the shell, and only eight of the
+  seventy-five draw over it: the two onboarding states, the two locked states,
+  and the four backup steps, which take the whole window. So 67 names have to be
+  re-recorded and re-reviewed. The 44 identity and currency images change twice
+  over — they also gain a *selected* rail entry, which none of them has today
+  (see `docs/shots/identities-light.png`: the Profile screen, with no Profile
+  in the rail).
+- **The shortcut numbers stop counting down the rail.** `app.slint` states the
+  invariant about itself: "In rail order, so the number is what somebody counts
+  down to". `Network` is still `hidden`, so Profile is the *seventh* visible
+  entry while `nav-index` calls it 7 and the comment reserves ⌘8 for it.
+  Binding 8 and 9 would give the seventh item ⌘8 and leave ⌘7 dead. That is a
+  design decision, not a mechanical bind.
+- **Search is two restorations, not one.** `1142a29` deleted two loops, one per
+  hidden screen — the identities these keys control, and the currencies they
+  define — and only the first goes back cheaply.
+  - *Restoring the identities* is **three edits, a string and an assertion**:
+    one loop in `palette_hits`, one arm in `wire_search`, the icon branch in
+    `overlay.slint` — which is binary today,
+    `hit.kind == "address" ? "send" : "currency"` — plus the placeholder, which
+    names the two kinds it searches, and
+    `the_palette_puts_addresses_above_currencies` in `lib.rs`, which pins the
+    kinds to exactly those two and goes red for anybody who did the other four.
+  - *Restoring the currencies you define* is that again and a **third kind**.
+    `"currency"` no longer means what it meant when the loop was deleted: it is
+    now a market hit, and `wire_search` routes it to the markets detail through
+    the i-address `OpenMarket` takes. A definition hit reusing that string would
+    open the wrong screen carrying the right label, and the row would look
+    correct in the list on the way there. So it needs a `kind` of its own, its
+    own icon branch, its own arm in `wire_search` — and the assertion becomes
+    three kinds rather than two.
+- **The German catalogue is stale.** `crates/pecu-ui/translations/de/LC_MESSAGES/pecu-ui.po`
+  has `Identities`; the rail label was renamed to `Profile`, which has no
+  entry. A German window would show an English word the moment the rail shows
+  it.
+- **Two features come alive, and four reference images already show them.** The
+  nav chip and Receive's "or by name" panel are both driven by
+  `IdentityState.rows`. `receiving` in `crates/pecu-ui/src/fixtures.rs` sets one
+  row on purpose and `receiving_without_a_phrase` builds on it, so
+  `receive-light.png`, `receive-dark.png` and the two `receive-no-phrase` shots
+  carry `robert.VRSCTEST@` twice over: in the OR BY NAME panel and on the chip
+  at the foot of the rail. Neither feature is unphotographed and neither is
+  unreviewed. What is unrepresentative is every *other* fixture: they leave
+  `rows` empty, and `shell.slint` draws the chip only `if root.account != ""`,
+  so it is **absent** rather than blank — a wallet that controls a name
+  photographed as one that does not. Whether that is worth fixing is a
+  judgement about how far a reference image has to be a session somebody could
+  actually have had. It is not a blocker and it is not another 134 images; it
+  overlaps the re-recording the rail already forces.
+
+**What is already in place, and the one thing that is not.**
+`ScreenEntered(Identities)` and `ScreenEntered(Currencies)` both refresh, so
+both lists fill on arrival — the currency walk chains off `finish_identities`
+rather than starting at `enter_screen`, because a currency is a flag on an
+identity and the identity list has to exist before it can be walked.
+`accessibility.rs` already walks both screens, and the rail items are labelled
+by one loop in `shell.slint` that `hidden` only makes invisible.
+`shortcuts.rs` needs nothing unless the shortcuts change.
+
+The new-block poller is the exception, and only for Currencies. It re-reads the
+identities on a new block **while Identities is the screen being polled** —
+`Core::finish_tip` tests `self.polling.screen == ScreenId::Identities` and
+nothing else — so somebody sitting on Currencies when a block lands sees
+neither list move: the currency walk hangs off a `finish_identities` that the
+poller never starts there. `Core::refresh` does not cover it either; it reads
+balances and history and never touches identities.
+
+The arm is one extra screen in that condition and it is deliberately **not**
+being added by this change. This change touches no code path that puts a
+request on the wire, the screen the arm would fix cannot be reached, and an arm
+that nobody can exercise until the flip is a behaviour change with no way to
+observe it — the same argument that keeps the two booleans where they are. It
+belongs to the flip, so it is written down here beside the images and the
+shortcut numbers rather than half-done now.
+
+**First move.** Provision the two testnet identities `live_identity.rs` asks
+for and run it. Everything before that step is done: `identity::prepare` is a
+free function the test drives instead of duplicating the wallet's own dispatch,
+`tests/identity_changes.rs` covers the same five changes offline, and
+`pecu-mock` can seed a subject whose recovery authority is somebody else —
+which it could not, because every scripted identity was its own, so no
+revocation could be prepared against any of them. And while writing the result
+into this entry: there is still no one page saying how to run the live suite.
+Ten files document themselves and `README.md` mentions none of them — the eight
+`live_*.rs` in `crates/pecu-core/tests`, plus `crates/pecu-chain/tests/live_light.rs`
+and `crates/pecu-chain/tests/live_probe.rs`, each of which carries its own
+`--ignored --nocapture` line and is part of the page that does not exist.
+
+---
+
 ## 1. Choosing a chain — what is left of it
 
 **Status:** built. `Command::SetRequestedNetwork` is handled, `Paths` owns the
