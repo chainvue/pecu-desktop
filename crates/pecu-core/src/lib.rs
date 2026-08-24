@@ -5695,16 +5695,17 @@ const SCAN_ATTEMPTS: u32 = 3;
     ///
     /// # Why it no longer searches identities
     ///
-    /// It searched the identities these keys control, and that screen is out of
-    /// the rail for this build. A result that lands on a screen the wallet is
-    /// otherwise not offering is worse than no result — there is no visible way
-    /// back from it. The loop is deleted rather than filtered, because a filter
-    /// here would have to encode which screens the interface is currently
-    /// showing, and the core does not know that and should not learn it.
+    /// It searched the identities these keys control and the currencies they
+    /// define, and both of those screens are out of the rail for this build. A
+    /// result that lands on a screen the wallet is otherwise not offering is
+    /// worse than no result — there is no visible way back from it. The two
+    /// loops are deleted rather than filtered, because a filter here would have
+    /// to encode which screens the interface is currently showing, and the core
+    /// does not know that and should not learn it.
     ///
-    /// Why the screen is out of the rail is **not** a fact about this function
-    /// and is not restated here: `docs/LATER.md` §0b is the record of it,
-    /// along with what it would take to bring it back. Two code
+    /// Why those two screens are out of the rail is **not** a fact about this
+    /// function and is not restated here: `docs/LATER.md` §0b is the record of
+    /// it, along with what it would take to bring them back. Two code
     /// comments describing the same decision are two chances to describe it
     /// differently, and this decision already had five.
     ///
@@ -5713,6 +5714,13 @@ const SCAN_ATTEMPTS: u32 = 3;
     /// `wire_search`, the icon branch in `overlay.slint` — which is binary
     /// today — the palette's placeholder, which names the kinds it searches,
     /// and the assertion below that pins them to exactly two.
+    ///
+    /// Adding the currencies these keys define back is that again plus a
+    /// **third** kind, and it is worth knowing before somebody reuses the
+    /// string: `"currency"` no longer means what it meant when the loop was
+    /// deleted. It is a market hit, and `wire_search` sends it to the markets
+    /// detail. A definition hit borrowing it would carry the right label to the
+    /// wrong screen.
     fn search(&mut self, query: &str) {
         let hits = match &self.store {
             Some(store) => palette_hits(query, &store.known_addresses(), &self.market_names),

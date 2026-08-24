@@ -106,7 +106,8 @@ beforehand.
    passing: no `PECU_LIVE_SEND`, no `PECU_LIVE_IDENTITY`, a key that is not
    among the subject's primary addresses, a subject that is its own recovery
    authority, an authority this key cannot sign for, a balance too short to pay
-   five fees. That is deliberate — running the whole suite with `--ignored`
+   five fees — or, on the branch that only recovers an identity an earlier run
+   left revoked, too short to pay one. That is deliberate — running the whole suite with `--ignored`
    should not fail on a wallet nobody provisioned — and it means a green
    `live_identity` on an unset environment is evidence of nothing. The txids are
    the evidence.
@@ -147,29 +148,67 @@ not two booleans.
   entry while `nav-index` calls it 7 and the comment reserves ⌘8 for it.
   Binding 8 and 9 would give the seventh item ⌘8 and leave ⌘7 dead. That is a
   design decision, not a mechanical bind.
-- **Search is three edits, a string and an assertion**: one loop in
-  `palette_hits`, one arm in `wire_search`, the icon branch in `overlay.slint`
-  — which is binary today, `hit.kind == "address" ? "send" : "currency"` — plus
-  the placeholder, which names the two kinds it searches, and
-  `the_palette_puts_addresses_above_currencies` in `lib.rs`, which pins the
-  kinds to exactly those two and goes red for anybody who did the other four.
+- **Search is two restorations, not one.** `1142a29` deleted two loops, one per
+  hidden screen — the identities these keys control, and the currencies they
+  define — and only the first goes back cheaply.
+  - *Restoring the identities* is **three edits, a string and an assertion**:
+    one loop in `palette_hits`, one arm in `wire_search`, the icon branch in
+    `overlay.slint` — which is binary today,
+    `hit.kind == "address" ? "send" : "currency"` — plus the placeholder, which
+    names the two kinds it searches, and
+    `the_palette_puts_addresses_above_currencies` in `lib.rs`, which pins the
+    kinds to exactly those two and goes red for anybody who did the other four.
+  - *Restoring the currencies you define* is that again and a **third kind**.
+    `"currency"` no longer means what it meant when the loop was deleted: it is
+    now a market hit, and `wire_search` routes it to the markets detail through
+    the i-address `OpenMarket` takes. A definition hit reusing that string would
+    open the wrong screen carrying the right label, and the row would look
+    correct in the list on the way there. So it needs a `kind` of its own, its
+    own icon branch, its own arm in `wire_search` — and the assertion becomes
+    three kinds rather than two.
 - **The German catalogue is stale.** `crates/pecu-ui/translations/de/LC_MESSAGES/pecu-ui.po`
   has `Identities`; the rail label was renamed to `Profile`, which has no
   entry. A German window would show an English word the moment the rail shows
   it.
-- **Two features come alive that no reference image shows.** The nav chip and
-  Receive's "or by name" panel are driven by `IdentityState.rows`, and no
-  fixture outside the identities set populates them. Either those fixtures gain
-  rows and the shots change again, or the images stay knowingly
-  unrepresentative.
+- **Two features come alive, and four reference images already show them.** The
+  nav chip and Receive's "or by name" panel are both driven by
+  `IdentityState.rows`. `receiving` in `crates/pecu-ui/src/fixtures.rs` sets one
+  row on purpose and `receiving_without_a_phrase` builds on it, so
+  `receive-light.png`, `receive-dark.png` and the two `receive-no-phrase` shots
+  carry `robert.VRSCTEST@` twice over: in the OR BY NAME panel and on the chip
+  at the foot of the rail. Neither feature is unphotographed and neither is
+  unreviewed. What is unrepresentative is every *other* fixture: they leave
+  `rows` empty, and `shell.slint` draws the chip only `if root.account != ""`,
+  so it is **absent** rather than blank — a wallet that controls a name
+  photographed as one that does not. Whether that is worth fixing is a
+  judgement about how far a reference image has to be a session somebody could
+  actually have had. It is not a blocker and it is not another 134 images; it
+  overlaps the re-recording the rail already forces.
 
-**What is already in place.** `ScreenEntered(Identities)` and
-`ScreenEntered(Currencies)` both refresh, and the new-block poller refreshes
-while one of them is the screen being polled, so nothing has to be wired for
-the lists to fill once they are reachable. `accessibility.rs` already walks
-both screens, and the rail items are labelled by one loop in `shell.slint` that
-`hidden` only makes invisible. `shortcuts.rs` needs nothing unless the
-shortcuts change.
+**What is already in place, and the one thing that is not.**
+`ScreenEntered(Identities)` and `ScreenEntered(Currencies)` both refresh, so
+both lists fill on arrival — the currency walk chains off `finish_identities`
+rather than starting at `enter_screen`, because a currency is a flag on an
+identity and the identity list has to exist before it can be walked.
+`accessibility.rs` already walks both screens, and the rail items are labelled
+by one loop in `shell.slint` that `hidden` only makes invisible.
+`shortcuts.rs` needs nothing unless the shortcuts change.
+
+The new-block poller is the exception, and only for Currencies. It re-reads the
+identities on a new block **while Identities is the screen being polled** —
+`Core::finish_tip` tests `self.polling.screen == ScreenId::Identities` and
+nothing else — so somebody sitting on Currencies when a block lands sees
+neither list move: the currency walk hangs off a `finish_identities` that the
+poller never starts there. `Core::refresh` does not cover it either; it reads
+balances and history and never touches identities.
+
+The arm is one extra screen in that condition and it is deliberately **not**
+being added by this change. This change touches no code path that puts a
+request on the wire, the screen the arm would fix cannot be reached, and an arm
+that nobody can exercise until the flip is a behaviour change with no way to
+observe it — the same argument that keeps the two booleans where they are. It
+belongs to the flip, so it is written down here beside the images and the
+shortcut numbers rather than half-done now.
 
 **First move.** Provision the two testnet identities `live_identity.rs` asks
 for and run it. Everything before that step is done: `identity::prepare` is a

@@ -51,7 +51,10 @@
 //! This file is therefore its own way out: it reads the subject before it
 //! builds anything, and a subject that is **already revoked** sends it straight
 //! to step 5 and nowhere else. Run it once to recover, then again for the
-//! sequence.
+//! sequence. That branch is checked *before* the balance gate for the whole
+//! sequence and carries its own, for one fee rather than five — a wallet stuck
+//! mid-run is one that has already been spending, and being skipped for want of
+//! four fees it is not about to pay is exactly how an identity stays revoked.
 //!
 //! # What the operator has to provision
 //!
@@ -115,6 +118,15 @@ const LABEL: &str = "live";
 /// fee. Small on a chain whose coins are free, and the point of checking is to
 /// fail with "fund it" rather than three steps later with "insufficient funds".
 const NEEDED_SATS: u64 = 1_000_000;
+
+/// One of those five, for the branch that only ever sends one transaction.
+///
+/// Derived from `NEEDED_SATS` rather than written out again, so a revision of
+/// the fee estimate moves both. The recovery escape is gated on this and not on
+/// the full budget: it spends one fee, and refusing to run it on a wallet that
+/// cannot afford four more would strand a revoked identity for want of coins it
+/// was never going to spend.
+const ONE_FEE_SATS: u64 = NEEDED_SATS / 5;
 
 /// The delay the lock publishes. Any figure does — the wait that follows is set
 /// by the transaction's expiry, not by this.
@@ -499,6 +511,36 @@ fn must_send(
     );
 }
 
+/// Whether a refusal is consensus saying no *to the timelock*.
+///
+/// Two conditions, and both are load-bearing. It has to be a node that answered
+/// — `RpcError::Node` carries a code and a message the daemon chose, whereas a
+/// transport failure, a malformed reply or a `MethodUnavailable` from a
+/// filtering proxy mean the daemon either never saw the transaction or never
+/// said why. And the message has to name the lock, because a daemon rejects
+/// transactions for a dozen reasons that have nothing to do with a countdown,
+/// and "the node said no" is not the same claim as "consensus refuses this
+/// while the identity is counting down".
+///
+/// The needles are several because the exact wording is a daemon string this
+/// workspace has never seen — that is the entire reason this file asks rather
+/// than asserts — and a single guess would be a guess that reads as a fact. But
+/// they are not bare `"lock"`: `"blocked"` contains `"locked"`, and a daemon
+/// that says a transaction was blocked for any other reason would otherwise be
+/// recorded as consensus's verdict on a countdown. Hence the leading space on
+/// `" locked"`. The asymmetry is deliberate — a miss costs a printed
+/// "NO ANSWER" and a rerun, a false positive puts a wrong answer in
+/// `docs/LATER.md` where nobody will know to doubt it.
+fn names_the_timelock(error: &FlowError) -> bool {
+    let FlowError::Rpc(verus_sdk::network::RpcError::Node { message, .. }) = error else {
+        return false;
+    };
+    let said = message.to_lowercase();
+    ["timelock", "time lock", "time-lock", "unlock", " locked"]
+        .iter()
+        .any(|needle| said.contains(needle))
+}
+
 /// Revoke it, and answer the question this tree does not answer.
 ///
 /// The identity is counting down when this runs, and whether consensus permits
@@ -512,6 +554,16 @@ fn must_send(
 /// reported as one. Nothing was broadcast, consensus was never asked, and
 /// waiting three quarters of an hour to ask a second time would not change a
 /// decision made in this process.
+///
+/// Neither is *any* refusal the node happened to produce. §0b designates the
+/// printed answer as evidence closing the identity gate, so it is printed only
+/// for a node refusal whose words name the timelock — see
+/// [`names_the_timelock`]. A fee rejection, a `-32601` from a proxy that
+/// filters `sendrawtransaction`, a transport failure that never reached a
+/// daemon: each of those is a `FlowError` and none of them is consensus's
+/// verdict on a timelocked revocation. Printing the verdict for them would put
+/// a false answer in the log of a run that then retried after the countdown
+/// and went green.
 fn revoke(chain: &Chain, nodes: &NodeManager, vault: &Vault, address: &str) {
     let from = held_at(chain, address);
     let refused = match send(chain, nodes, vault, address, &Change::Revoke) {
@@ -532,13 +584,24 @@ fn revoke(chain: &Chain, nodes: &NodeManager, vault: &Vault, address: &str) {
         Err(Refused::ByTheChain(error)) => error,
     };
 
-    println!("\nANSWER: a revocation of an identity that is still counting down is refused.");
-    println!("  the chain said: {refused}");
+    // Before anything is printed, because an uncertain broadcast is not a
+    // refusal at all: the transaction may be propagating, and an ANSWER printed
+    // above this line would stand in the log of a run that fails on the next
+    // one.
     assert!(
         !matches!(refused, FlowError::BroadcastUncertain { .. }),
         "the revocation reported an unknown outcome, which sends the wallet down the \
          resolve-then-resend path for a revocation that may already be propagating: {refused}",
     );
+
+    if names_the_timelock(&refused) {
+        println!("\nANSWER: a revocation of an identity that is still counting down is refused.");
+        println!("  the chain said: {refused}");
+    } else {
+        println!("\nNO ANSWER: the revocation did not come back as a verdict on the timelock.");
+        println!("  what came back: {refused}");
+        println!("  do not record this in docs/LATER.md §0b as the chain's answer.");
+    }
 
     println!("\nwaiting for the countdown to elapse before trying again");
     assert!(
@@ -597,15 +660,6 @@ fn every_identity_change_this_wallet_offers_is_accepted_by_the_network() {
     // a bug in the builder.
     let funding = verus_sdk::network::spendable(&chain, &signer).expect("the funding read");
     println!("spendable {}", funding.total.to_coins_string());
-    if funding.total.to_sat() < NEEDED_SATS {
-        eprintln!(
-            "skipping: {signer} has {} and five changes need a little over {}. Fund it \
-             and run again.",
-            funding.total.to_coins_string(),
-            Amount::from_sat(NEEDED_SATS).to_coins_string(),
-        );
-        return;
-    }
 
     let (_dir, vault) = vault_holding(key);
     let at = subject.address.as_str();
@@ -613,10 +667,37 @@ fn every_identity_change_this_wallet_offers_is_accepted_by_the_network() {
     // An earlier run that died between step 4 and step 5. Nothing else can be
     // done to a revoked identity, so this is the only useful thing to do with
     // it — and doing it is how a stuck wallet gets unstuck. See the header.
+    //
+    // Ahead of the five-fee gate, and gated on one fee instead. This branch
+    // sends exactly one transaction, and the wallet it exists to rescue is
+    // precisely the one that has been spending: a balance that no longer covers
+    // five changes is a normal way to arrive here. Skipping the recovery for
+    // want of four fees it will never pay would leave the identity revoked and
+    // the operator with no way out of it inside this harness — which is the
+    // failure this branch was written to prevent.
     if subject.status == "Revoked" {
+        if funding.total.to_sat() < ONE_FEE_SATS {
+            eprintln!(
+                "skipping: {signer} has {} and a recovery needs about {}. Fund it and \
+                 run again — the identity is still revoked.",
+                funding.total.to_coins_string(),
+                Amount::from_sat(ONE_FEE_SATS).to_coins_string(),
+            );
+            return;
+        }
         println!("\nalready revoked — recovering it and stopping there");
         recover(&chain, &nodes, &vault, at);
         println!("\nrecovered. Run this again for the whole sequence.");
+        return;
+    }
+
+    if funding.total.to_sat() < NEEDED_SATS {
+        eprintln!(
+            "skipping: {signer} has {} and five changes need a little over {}. Fund it \
+             and run again.",
+            funding.total.to_coins_string(),
+            Amount::from_sat(NEEDED_SATS).to_coins_string(),
+        );
         return;
     }
 
