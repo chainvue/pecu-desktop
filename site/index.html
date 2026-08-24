@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pecu — a Verus wallet that needs no full node</title>
+<meta name="description" content="A self-custodial desktop wallet for Verus. No verusd, no 30-gigabyte sync, no runtime to install — one binary that talks to a node someone else already runs.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:title" content="Pecu — a Verus wallet that needs no full node">
+<meta property="og:description" content="Self-custodial, one binary, no verusd and no sync. Your keys stay on your machine. In development.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://chainvue.github.io/pecu-desktop/">
+<meta property="og:image" content="https://chainvue.github.io/pecu-desktop/shots/dashboard-funded.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Palette, type, spacing and radii are the project's own design tokens —
+   docs/design/pecu-tokens.json — rather than anything invented here. */
+:root {
+  --bg:#0B0D10; --surface:#14181D; --field:#0F1216; --line:#232A32;
+  --text:#FFFFFF; --text-sub:#8B95A3;
+  --accent:#12D6B4; --on-accent:#062A24;
+  --negative:#FF5C7A; --warning:#FDBE3B;
+  --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui:"Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r-card:12px; --r-button:9px; --r-chip:999px;
+  --wrap:1120px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%; scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--ui); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--wrap); margin:0 auto; padding:0 24px}
+a{color:var(--accent)}
+a:focus-visible{outline:1.5px solid var(--accent); outline-offset:3px}
+img{max-width:100%; display:block}
+code{font-family:var(--mono); font-size:.9em}
+
+/* ── wordmark ─────────────────────────────────────────────────────────── */
+.mark{font-family:var(--mono); font-weight:700; letter-spacing:-.02em; display:inline-flex; align-items:baseline}
+.mark .at{color:var(--accent)}
+.cursor{
+  display:inline-block; width:.42em; height:.95em; background:var(--accent);
+  margin-left:.06em; transform:translateY(.08em);
+  animation:blink 1100ms step-end infinite;
+}
+/* The token file drops the cursor below 32px, so the small marks carry none. */
+@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cursor{animation:none}}
+
+/* ── the laptop ───────────────────────────────────────────────────────────
+   Drawn rather than photographed: a mockup image would be one more asset to
+   keep in step with a screenshot set the test suite already regenerates, and
+   the proportions here are the ones the screenshots were rendered at. */
+.stage{position:relative; margin:64px auto 0; max-width:960px}
+.stage::before{
+  content:""; position:absolute; inset:-14% -12% -30%;
+  background:radial-gradient(60% 50% at 50% 42%, rgba(18,214,180,.16), transparent 70%);
+  filter:blur(28px); z-index:0; pointer-events:none;
+}
+.laptop{position:relative; z-index:1}
+.lid{
+  background:linear-gradient(#232A32,#1A1F26);
+  border:1px solid #2E3742; border-radius:15px 15px 7px 7px;
+  padding:13px 13px 20px; box-shadow:0 26px 60px rgba(0,0,0,.55);
+}
+.camera{width:5px; height:5px; border-radius:50%; background:#0B0D10; margin:0 auto 9px; box-shadow:inset 0 0 0 1px #384250}
+.screen{border-radius:5px; overflow:hidden; background:#000; aspect-ratio:1240/800; line-height:0}
+.screen img{width:100%; height:100%; object-fit:cover; object-position:top center}
+.deck{
+  position:relative; width:114%; margin-left:-7%; height:13px;
+  background:linear-gradient(#2A313A 0 42%, #1B2027 42% 100%);
+  border-radius:0 0 11px 11px; border:1px solid #2E3742; border-top:0;
+  box-shadow:0 16px 26px rgba(0,0,0,.45);
+}
+.deck::after{
+  content:""; position:absolute; left:50%; transform:translateX(-50%);
+  top:0; width:15%; height:5px; background:#12161B; border-radius:0 0 5px 5px;
+}
+@media (max-width:640px){
+  .lid{padding:8px 8px 13px; border-radius:11px 11px 5px 5px}
+  .camera{width:4px; height:4px; margin-bottom:6px}
+  .deck{height:10px}
+}
+
+/* ── header ───────────────────────────────────────────────────────────── */
+header{border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(11,13,16,.86); backdrop-filter:blur(8px); z-index:10}
+header .wrap{display:flex; align-items:center; justify-content:space-between; gap:16px; height:60px}
+header .mark{font-size:20px}
+nav{display:flex; gap:22px; font-size:14px; align-items:center}
+nav a{color:var(--text-sub); text-decoration:none}
+nav a:hover{color:var(--text)}
+@media (max-width:720px){nav a:not(.repo){display:none}}
+
+/* ── hero ─────────────────────────────────────────────────────────────── */
+.hero{padding:76px 0 96px; text-align:center; overflow:hidden}
+.hero .mark{font-size:clamp(34px,6.4vw,52px); line-height:1}
+.tagline{font-family:var(--mono); color:var(--text-sub); font-size:clamp(12px,2.2vw,15px); margin:14px 0 0}
+h1{
+  font-size:clamp(31px,5.6vw,54px); line-height:1.1; letter-spacing:-.02em;
+  margin:30px auto 0; max-width:18ch; font-weight:700;
+}
+h1 em{font-style:normal; color:var(--accent)}
+.lede{font-size:clamp(16px,2.3vw,19px); max-width:52ch; margin:22px auto 0; color:var(--text-sub)}
+
+.facts{display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin:32px 0 0; padding:0; list-style:none}
+.facts li{
+  font-family:var(--mono); font-size:12.5px; color:var(--text);
+  border:1px solid var(--line); border-radius:var(--r-chip);
+  padding:7px 15px; background:var(--surface);
+}
+.facts li b{color:var(--accent); font-weight:700}
+
+/* ── sections ─────────────────────────────────────────────────────────── */
+section{padding:80px 0; border-top:1px solid var(--line)}
+.eyebrow{
+  font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--accent); margin:0 0 14px;
+}
+h2.title{font-size:clamp(23px,3.6vw,31px); margin:0 0 16px; letter-spacing:-.01em; max-width:22ch}
+.intro{color:var(--text-sub); max-width:60ch; margin:0 0 40px; font-size:17px}
+
+/* ── the no-node explainer ────────────────────────────────────────────── */
+.compare{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:0 0 34px}
+@media (max-width:720px){.compare{grid-template-columns:1fr}}
+.side{border:1px solid var(--line); border-radius:var(--r-card); padding:24px; background:var(--surface)}
+.side.ours{border-color:var(--accent)}
+.side h3{margin:0 0 14px; font-size:15px; font-family:var(--mono); letter-spacing:.02em}
+.side.ours h3{color:var(--accent)}
+.side ul{margin:0; padding:0; list-style:none}
+.side li{color:var(--text-sub); font-size:14.5px; padding:7px 0 7px 26px; position:relative}
+.side li::before{position:absolute; left:0; top:7px; font-family:var(--mono); font-size:13px}
+.side.theirs li::before{content:"—"; color:var(--text-sub)}
+.side.ours li::before{content:"→"; color:var(--accent)}
+
+/* ── features ─────────────────────────────────────────────────────────── */
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:18px}
+.card{border:1px solid var(--line); border-radius:var(--r-card); padding:24px; background:var(--surface)}
+.card h3{margin:0 0 10px; font-size:16.5px}
+.card p{margin:0; color:var(--text-sub); font-size:14.5px}
+
+/* ── shots ────────────────────────────────────────────────────────────── */
+.shots{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:20px}
+figure{margin:0; border:1px solid var(--line); border-radius:var(--r-card); overflow:hidden; background:var(--surface)}
+figure img{width:100%; height:auto}
+figcaption{padding:13px 15px; font-size:13.5px; color:var(--text-sub); border-top:1px solid var(--line)}
+figcaption b{color:var(--text); font-weight:500; display:block; margin-bottom:2px}
+
+/* ── trust ────────────────────────────────────────────────────────────── */
+.trust{display:grid; grid-template-columns:minmax(150px,190px) 1fr; gap:20px; padding:20px 0; border-bottom:1px solid var(--line)}
+.trust:last-child{border-bottom:0}
+.trust dt{font-family:var(--mono); font-size:13px; color:var(--accent)}
+.trust dd{margin:0; color:var(--text-sub); font-size:15px}
+@media (max-width:640px){.trust{grid-template-columns:1fr; gap:6px}}
+
+/* ── status ───────────────────────────────────────────────────────────── */
+#status{background:var(--surface)}
+.statusgrid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:0 0 30px}
+@media (max-width:720px){.statusgrid{grid-template-columns:1fr}}
+.box{border:1px solid var(--line); border-radius:var(--r-card); padding:22px; background:var(--bg)}
+.box.works{border-color:var(--accent)}
+.box.notyet{border-color:var(--warning)}
+.box h3{margin:0 0 12px; font-size:14px; font-family:var(--mono); letter-spacing:.02em}
+.box.works h3{color:var(--accent)}
+.box.notyet h3{color:var(--warning)}
+.box ul{margin:0; padding-left:20px}
+.box li{color:var(--text-sub); font-size:14.5px; padding:4px 0}
+
+/* ── cta ──────────────────────────────────────────────────────────────── */
+.cta{display:flex; flex-wrap:wrap; gap:12px; margin:34px 0 0}
+.btn{
+  display:inline-block; padding:12px 22px; border-radius:var(--r-button);
+  font-size:15px; font-weight:500; text-decoration:none; border:1px solid var(--line);
+}
+.btn.primary{background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:700}
+.btn.ghost{color:var(--text)}
+.btn.ghost:hover{border-color:var(--text-sub)}
+
+/* ── footer ───────────────────────────────────────────────────────────── */
+footer{padding:48px 0 72px; color:var(--text-sub); font-size:14px; border-top:1px solid var(--line)}
+footer .mark{font-size:16px; color:var(--text-sub)}
+footer .mark .at{color:var(--text-sub)}
+footer p{margin:14px 0 0; max-width:62ch}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="mark">pecu<span class="at">@</span></span>
+    <nav>
+      <a href="#how">No full node</a>
+      <a href="#screens">Screens</a>
+      <a href="#trust">What you trust</a>
+      <a href="#status">Status</a>
+      <a class="repo" href="https://github.com/chainvue/pecu-desktop">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="mark">pecu<span class="at">@</span><span class="cursor" aria-hidden="true"></span></div>
+    <p class="tagline">// your identity. your money. your wallet.</p>
+
+    <h1>A Verus wallet that needs <em>no full node</em>.</h1>
+    <p class="lede">Self-custodial, one binary, nothing to sync. Your keys are generated and stay on your machine — the chain data comes from a node somebody else already runs.</p>
+
+    <ul class="facts">
+      <li><b>0</b> GB to download</li>
+      <li><b>no</b> verusd</li>
+      <li><b>no</b> runtime</li>
+      <li>Rust <b>+</b> Slint</li>
+      <li>Windows · macOS · Linux</li>
+    </ul>
+
+    <div class="stage">
+      <div class="laptop">
+        <div class="lid">
+          <div class="camera" aria-hidden="true"></div>
+          <div class="screen">
+            <img src="shots/dashboard-funded.png" alt="A laptop showing the Pecu dashboard: a total balance, a breakdown into spendable and maturing, an asset list, a market panel and recent activity." width="1240" height="800">
+          </div>
+        </div>
+        <div class="deck" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">The difference</p>
+    <h2 class="title">Running a node is a commitment. Holding coins should not be.</h2>
+    <p class="intro">A full node is the right tool if you want to validate the chain yourself. It is a poor tool if you want to check a balance on a laptop. Pecu is a light client: it asks a node the same questions your wallet would have asked its own, and it does not keep one.</p>
+
+    <div class="compare">
+      <div class="side theirs">
+        <h3>Wallet with a bundled node</h3>
+        <ul>
+          <li>Tens of gigabytes of chain to download</li>
+          <li>An initial sync measured in hours or days</li>
+          <li>Re-syncs every time you have been away</li>
+          <li>A daemon running beside the wallet</li>
+          <li>Disk and memory a laptop notices</li>
+        </ul>
+      </div>
+      <div class="side ours">
+        <h3>Pecu</h3>
+        <ul>
+          <li>Open it and it is ready</li>
+          <li>Nothing to sync, nothing to catch up on</li>
+          <li>One binary — no runtime, no daemon, no installer for a language</li>
+          <li>Endpoints for Verus, vARRR, CHIPS and vDEX ship with it</li>
+          <li>Point it at your own node instead, if you have one</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="intro" style="margin-bottom:0">If you <em>do</em> run <code>verusd</code>, nothing is wasted. Pecu will use your node as its endpoint, and for shielded transactions it looks for the Sapling proving parameters your node already downloaded before it considers fetching its own.</p>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="wrap">
+    <p class="eyebrow">Screens</p>
+    <h2 class="title">What it looks like</h2>
+    <p class="intro">Not mockups. Every image here is a reference screenshot the test suite renders and compares on each run — 150 of them, in both themes. A layout change nobody looked at fails the build.</p>
+    <div class="shots">
+      <figure><img src="shots/send-form.png" alt="The send form: a source key, a recipient, an amount, and a panel describing the payment." loading="lazy" width="1240" height="800"><figcaption><b>Send</b>Pay an address or a VerusID by name. The fee and the total on the next step are read back from the transaction that was signed, not estimated here.</figcaption></figure>
+      <figure><img src="shots/receive.png" alt="The receive screen: an address, a QR code, and the names that point at it." loading="lazy" width="1240" height="800"><figcaption><b>Receive</b>An address and a QR code — and the names that point at it, if you hold any.</figcaption></figure>
+      <figure><img src="shots/convert.png" alt="The convert screen: a pay currency, a receive currency and a quote." loading="lazy" width="1240" height="800"><figcaption><b>Convert</b>Verus' on-chain conversions, quoted from the reserve state the chain publishes.</figcaption></figure>
+      <figure><img src="shots/markets.png" alt="The markets screen, listing currencies with prices, changes and reserves." loading="lazy" width="1240" height="800"><figcaption><b>Markets</b>Prices and reserves, with the window labelled — a column headed differently would look precise and not be.</figcaption></figure>
+      <figure><img src="shots/activity.png" alt="The activity screen, listing transactions grouped by day." loading="lazy" width="1240" height="800"><figcaption><b>Activity</b>What happened, kept locally, with a detail sheet per transaction.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Built in</p>
+    <h2 class="title">The careful parts</h2>
+    <p class="intro">Most of what matters in a wallet is where it declines to be clever on your behalf.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Keys never leave the machine</h3>
+        <p>Generated locally, encrypted on disk with Argon2id at roughly three and a half times the OWASP interactive minimum. The interface crate cannot even name the type that carries a private key — that is a compile error, not a rule.</p>
+      </div>
+      <div class="card">
+        <h3>You confirm the real transaction</h3>
+        <p>The review screen is decoded from the signed bytes: the outputs, the fee and the change as they actually are, not re-rendered from what you typed into the form.</p>
+      </div>
+      <div class="card">
+        <h3>It never guesses which money you meant</h3>
+        <p>A key can hold transparent and shielded funds. Choosing for you would decide whether a payment is traceable, silently. It asks.</p>
+      </div>
+      <div class="card">
+        <h3>Spending real money is deliberate</h3>
+        <p>Anything that could move value sits behind a typed confirmation — not only the main chain. Only the one chain positively known to be worthless is exempt.</p>
+      </div>
+      <div class="card">
+        <h3>Zero and “we don't know” are different</h3>
+        <p>An unknown price is a dash. A pool nobody has scanned says so. A zero is a number somebody measured. The wallet would rather admit a gap than fill it.</p>
+      </div>
+      <div class="card">
+        <h3>Nothing secret reaches the logs</h3>
+        <p>A test walks the log files on every run and fails the build if a key, a passphrase or a recovery phrase appears in one.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="trust">
+  <div class="wrap">
+    <p class="eyebrow">The trade</p>
+    <h2 class="title">What you give up, and what is done about it</h2>
+    <p class="intro">Not running a node means asking somebody else's. That is a real trade and it deserves a plain answer rather than a footnote.</p>
+    <dl>
+      <div class="trust"><dt>Your keys</dt><dd>Not part of the trade. They are generated on your machine, encrypted there, and never sent anywhere. A remote node signs nothing.</dd></div>
+      <div class="trust"><dt>Your balances</dt><dd>Come from the node. A wrong answer shows you a wrong number — which is why the wallet distinguishes a figure it measured from one it could not.</dd></div>
+      <div class="trust"><dt>Your transactions</dt><dd>Built and signed locally, then handed over to be broadcast. The node cannot alter one: the signature commits to every output.</dd></div>
+      <div class="trust"><dt>Which chain you are on</dt><dd>The sharp edge, because addresses look identical across Verus chains. A node's word about its own identity is treated as a claim, not a fact — and where a second endpoint is available, the coins a payment is funded from are held against it before anything is signed.</dd></div>
+      <div class="trust"><dt>Your privacy</dt><dd>The node sees which addresses you ask about. Pointing Pecu at your own <code>verusd</code> removes that, and is one setting.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <p class="eyebrow">Status</p>
+    <h2 class="title">Under active development, in the open</h2>
+    <p class="intro">Built in public, with the reasoning written down as it goes. Here is what runs today and what is being worked on next.</p>
+
+    <div class="statusgrid">
+      <div class="box works">
+        <h3>Working today</h3>
+        <ul>
+          <li>Wallet creation, recovery phrase, encrypted keystore</li>
+          <li>Balances, send, receive and transaction history</li>
+          <li>Paying a VerusID by name</li>
+          <li>On-chain conversions and live market data</li>
+          <li>Several chains, and several keys per chain</li>
+          <li>Shielded balances and spends on testnet</li>
+        </ul>
+      </div>
+      <div class="box notyet">
+        <h3>On the way</h3>
+        <ul>
+          <li>Sending tokens — today they can be received and converted</li>
+          <li>Identity and currency management, already built and being validated</li>
+          <li>Payment and login links, opened straight from a QR code</li>
+          <li>Shielded support beyond testnet</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="intro" style="margin:0">Every decision, including the ones deliberately postponed, is written down in the repository. Releases will land here when they are ready to install.</p>
+
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/chainvue/pecu-desktop">Follow on GitHub</a>
+      <a class="btn ghost" href="https://github.com/chainvue/pecu-desktop/issues">Open issues</a>
+      <a class="btn ghost" href="https://github.com/chainvue/pecu-desktop/blob/main/docs/LATER.md">The roadmap</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span class="mark">pecu<span class="at">@</span></span>
+    <p>Apache-2.0. Source and issues at <a href="https://github.com/chainvue/pecu-desktop">github.com/chainvue/pecu-desktop</a>.</p>
+    <p>Pecu is an independent wallet for the Verus protocol. It is not affiliated with, endorsed by, or operated by the Verus project. Self-custody means the keys are yours, and so is the responsibility for them.</p>
+  </div>
+</footer>
+
+</body>
+</html>

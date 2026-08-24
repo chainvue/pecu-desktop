@@ -1,0 +1,60 @@
+# The project page at chainvue.github.io/pecu-desktop, published from `site/`.
+#
+# Separate from `checks.yml` on purpose. That workflow is the merge gate and
+# takes twenty minutes; this one copies a directory and takes seconds, and
+# neither has anything to say about the other. Coupling them would mean either
+# a page that waits on a Rust compile or a gate that goes green on a page.
+#
+# It runs only when `site/` itself changes, so the ordinary flow of work does
+# not redeploy a page nobody edited.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  # For the first deploy, and for re-publishing after a Pages setting changes
+  # without having to push an empty commit at it.
+  workflow_dispatch:
+
+# `pages: write` and `id-token: write` are what the deploy action needs, and
+# `contents: read` is what checkout needs. Nothing here writes to the repository.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one in flight: a half-finished
+# publish would leave the live page in whatever state the cancellation caught
+# it in. A queued run supersedes an older queued run, which is the part worth
+# collapsing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The page is static and self-contained — no build step, no bundler, no
+      # node_modules. `site/` is what gets served, verbatim. The only thing it
+      # fetches at run time is the two Google fonts the design package names,
+      # and both have a fallback stack.
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
