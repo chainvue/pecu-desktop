@@ -294,6 +294,19 @@ export global SendState {
     // somebody shown only the name is being asked to trust a lookup nobody told
     // them happened. Both halves, or neither is worth anything.
     in property <string> recipient-name: "";
+    // Which second node vouched for the coins this payment spends, and what it
+    // would not vouch for. Empty when nothing did — which is the usual answer,
+    // because the wallet ships one endpoint per chain, so on a default install
+    // the active node is the shipped one and there is nothing independent to
+    // hold it to.
+    //
+    // The review hides the line when this is empty rather than printing
+    // "nothing checked this" on every ordinary payment, which is a warning
+    // people learn to stop seeing. What that costs — a guard nobody can see is
+    // a guard nobody notices has stopped working — is paid for on the Network
+    // screen instead, where the arrangement that decides it is the thing being
+    // looked at. See `send.slint`, which argues the same trade at the site.
+    in property <Note> corroboration;
 
     // Payments handed over whose outcome is unknown. Survives a restart,
     // because the bytes do.

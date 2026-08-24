@@ -98,7 +98,16 @@ What is missing here is corroboration, not consent. The spending guard asks
 `Network::may_be_real_money`, which is true for every chain but VRSCTEST, so all
 three sit behind the same typed confirmation VRSC does and the word it asks for
 is the chain's own name. The gap this entry is about is narrower and harder: a
-wallet on one of these three has nothing to hold a node's answer against.
+wallet on one of these three has nothing to hold a node's *chain identity*
+against.
+
+The coins are a separate question and are partly covered now. When the active
+node is one the user added, `pecu_chain::corroborate` holds the outputs a
+transparent payment or a shield would spend against the shipped endpoint for
+that chain before anything is signed — on all five chains, this one included.
+That does not close this entry: it says nothing about which chain either
+endpoint is on, and it does nothing at all when the active node is the built-in,
+which is the default. Chain identity still rests on the node's word.
 
 **Why they cannot simply be derived.** A root chain's currency id *is* the id of
 its own name — `hash160(sha256d(lowercase(name)))`, which
@@ -1083,3 +1092,57 @@ down here rather than done in passing.
 `sending_everything_leaves_behind_a_coin_that_costs_more_to_spend_than_it_is_worth`
 in `pecu-core/tests/send_build.rs` is the case that produces it: 1 500 satoshis
 left in the key, deliberately.
+
+---
+
+## 14. A second shipped endpoint per chain — and the code that has to ship with it
+
+**Status:** the check is built, and on a default install nothing runs it.
+
+`pecu_chain::corroborate` holds the outputs a transparent payment or a `t→z`
+shield would spend against a second node before anything is signed. It is real,
+it is tested, and it fires only when the *active* node is one the user added.
+`Network::builtin_nodes` returns exactly one endpoint for each of the five
+shipped chains — `every_shipped_chain_is_complete_and_distinct` asserts it — so
+on a fresh install the active node is that one built-in, there is no independent
+endpoint to hold it to, and the spend goes through uncorroborated. Requiring
+corroboration unconditionally today would refuse every spend on every chain.
+
+**What this entry is really about is that it takes two changes, not one.**
+Finding a second, independently operated endpoint per real-money chain and
+paying for it is an operator decision. Turning it into a check is not, and it is
+easy to record this as purely an operator problem and then ship a second URL
+that changes nothing:
+
+```rust
+// NodeManager::second_source
+if active.builtin {
+    return SecondSource::Unheld;
+}
+```
+
+That early return is the default install's whole exemption. Add a second
+built-in and it still fires — the active node is a built-in, so nothing is held
+against anything, and the second URL sits in the list being a failover target.
+The two have to land together: a second endpoint, and a `second_source` that
+looks for *another* endpoint of independent provenance rather than asking
+whether the active one was shipped.
+
+**What it costs, so the trade is on the table before somebody starts.** Every
+transparent send and every shield gains a round trip to a server the user did
+not choose, and that server is told which address is paying, once per payment —
+the sentence on the network screen already says this for the added-node case and
+would then be true for everyone. Corroboration fails closed, so a build that
+required it everywhere would refuse to spend for as long as the second endpoint
+was unreachable; the trap that already exists for users on their own node — see
+the limits list on `pecu_chain::network::Network` — would become the trap for
+everybody. Two shipped endpoints agreeing is also not proof: they defeat *one*
+endpoint being wrong, and share an operator's mistakes if they share an
+operator.
+
+**First move.** Two endpoints for VRSC and VRSCTEST, run by different people,
+recorded in `builtin_nodes` with a note on where each came from. Then rewrite
+`second_source` around provenance rather than around the active node's
+`builtin` flag, and decide what a build does when the second one is down —
+because "refuse" and "spend uncorroborated" are the only two answers, and the
+first one is the reason this is not just a configuration change.

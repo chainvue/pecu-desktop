@@ -584,6 +584,10 @@ fn token_inputs(chain: &Chain, address: &str, source: &str) -> Result<Vec<Utxo>,
     }
 
     let wanted = currency_id(source)?;
+    // The active node's word, and nobody else's. `pecu_chain::corroborate`
+    // holds this same question against a second endpoint on the send path; a
+    // conversion is not one of the two routes it covers, so what comes back
+    // here is uncorroborated.
     let funding = network::spendable(chain, address)?;
 
     let mut usable = Vec::new();

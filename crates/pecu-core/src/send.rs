@@ -19,11 +19,11 @@
 //! coins, produce different bytes, and could spend twice. The only safe move is
 //! to re-send the *same bytes*, which is why [`Prepared`] keeps them.
 
-use pecu_chain::{Chain, SpendPermit};
+use pecu_chain::{corroborate, Chain, Corroboration, SpendPermit, SpendRefused};
 use pecu_keystore::{Vault, VaultError};
 use pecu_protocol::{NoteVm, ReviewOutputVm, SendDraft, SendReviewVm};
 use verus_sdk::money::{Amount, DEFAULT_FEE_PER_KB};
-use verus_sdk::network::{self, FlowError, Funding, Sent, Unsent};
+use verus_sdk::network::{self, ChainReader, FlowError, Funding, Sent, Unsent};
 use verus_sdk::verus_keys::{Address, AddressKind};
 // `estimate_fee` is not in any of the curated `verus_sdk` facades — `money` and
 // `send` expose the types and the builders, not the fee heuristic. Reaching
@@ -79,6 +79,18 @@ pub enum SendError {
     Vault(#[from] VaultError),
     #[error(transparent)]
     Flow(#[from] FlowError),
+
+    /// The spending guard's own vocabulary, raised from the build rather than
+    /// from the permit.
+    ///
+    /// Only the corroboration refusals reach here. They cannot come from
+    /// `NodeManager::spend_permit`, because answering them costs a network call
+    /// and that constructor deliberately does none — see
+    /// [`pecu_chain::corroborate`]. Carried as [`pecu_chain::SpendRefused`]
+    /// rather than as more `SendError` variants so that the send form and the
+    /// broadcast gate say the same sentence about the same fact.
+    #[error(transparent)]
+    Refused(#[from] SpendRefused),
 }
 
 /// A signed payment that has not been sent, and what it is for.
@@ -105,6 +117,43 @@ pub struct Prepared {
     /// Empty otherwise. Carried so the review can show the question as well as
     /// the answer.
     pub name: String,
+    /// The endpoint that held the funding node's coins to account, or empty
+    /// when nothing did.
+    ///
+    /// Read twice. The review names it, because a guard nobody can see is a
+    /// guard nobody notices has stopped working; and `confirm_send` refuses to
+    /// broadcast bytes that were built without one when the node list says one
+    /// was required. Empty on the two routes that spend shielded notes, whose
+    /// inputs come from one lightwalletd with no second one to ask — but *not*
+    /// on a `t→z` shield, which is funded from transparent coins and is checked
+    /// like any other. See [`pecu_chain::corroborate`].
+    pub corroborated_by: String,
+    /// What the second source would not vouch for, and which this transaction
+    /// therefore does not spend.
+    ///
+    /// Almost always nothing, and it can only ever be the two nodes being at
+    /// different heights: a second source whose disagreement the heights do not
+    /// account for does not produce a filtered payment, it refuses the whole
+    /// one. Carried out so the review can say so — a send-all that quietly
+    /// moves less than the balance on screen is its own bug.
+    pub withheld: Withheld,
+}
+
+/// Outputs a build was not allowed to fund from, and why.
+///
+/// Two fields rather than a count, because the review has two sentences to
+/// choose between and choosing the wrong one is a lie about which node the
+/// person should be waiting for. See [`pecu_chain::corroborate`] for the pair
+/// of cases.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Withheld {
+    /// How many outputs were set aside. Zero when the second source vouched
+    /// for everything, which is the ordinary answer.
+    pub count: usize,
+    /// True when the second source is the node that is *ahead*, so these
+    /// outputs are ones it has already seen spent rather than ones it has not
+    /// reached yet.
+    pub already_spent: bool,
 }
 
 /// Signed bytes, and the only way to send them.
@@ -452,13 +501,123 @@ pub fn resolve_send_all(funding: &Funding, has_smart_outputs: bool) -> Result<Am
 
 // ── Building ────────────────────────────────────────────────────────────────
 
+/// The second endpoint a send is held against, and the URL to name it by.
+///
+/// A `Chain` does not carry the URL it was built from, and every sentence this
+/// check can produce needs one: the review names the endpoint that did the
+/// checking, and each refusal names the endpoint that could not. Carrying it
+/// beside the reader is cheaper than teaching `Chain` to remember where it came
+/// from, and it keeps the scripted chain — a `Chain` with no URL at all —
+/// expressible.
+pub struct Corroborator<'a> {
+    /// The second node, as something that can be read.
+    pub chain: &'a Chain,
+    /// Where it lives. Shown on the review, and named in every refusal that is
+    /// about *this* endpoint rather than about the funding one.
+    pub url: &'a str,
+}
+
+/// What a second source vouched for, and what it set aside.
+struct Vouched {
+    /// The outpoints a build may fund from.
+    allowed: std::collections::HashSet<pecu_chain::Outpoint>,
+    /// Present when the two nodes are at different heights and some coins were
+    /// left out because of it. Absent when the second source vouched for
+    /// everything.
+    out_of_step: Option<OutOfStep>,
+}
+
+/// Two nodes at different heights, and what that cost this build.
+#[derive(Clone, Copy)]
+struct OutOfStep {
+    count: usize,
+    /// The secondary's tip. Carried because "it has only reached block N" is
+    /// the difference between a sentence somebody can act on and an accusation.
+    tip: u32,
+    /// Which of the two is behind. True in the ordinary case — the second
+    /// source has not caught up — and false when the second source is ahead and
+    /// the coins it will not vouch for are ones it has watched be spent.
+    secondary_behind: bool,
+}
+
+impl OutOfStep {
+    /// The refusal for the case where nothing survived the filter.
+    ///
+    /// One place, because `prepare` and `prepare_shield` both need it and the
+    /// two arriving at different sentences for the same state is exactly the
+    /// drift a shared function prevents.
+    fn refusal(self, secondary: &str) -> SpendRefused {
+        if self.secondary_behind {
+            SpendRefused::SecondSourceBehind {
+                count: self.count,
+                secondary: secondary.to_string(),
+                tip: self.tip,
+            }
+        } else {
+            SpendRefused::SecondSourceAhead {
+                count: self.count,
+                secondary: secondary.to_string(),
+                tip: self.tip,
+            }
+        }
+    }
+
+    /// What the review carries out of this.
+    fn withheld(self) -> Withheld {
+        Withheld {
+            count: self.count,
+            already_spent: !self.secondary_behind,
+        }
+    }
+}
+
 /// Build and sign, without sending. **Blocking.**
 ///
 /// The private key exists for the duration of `with_key` and no longer — the
 /// build, the signature and the drop all happen inside that closure. There is
 /// no accessor anywhere in this workspace that returns one.
+///
+/// # `second` is what stops this node inventing coins
+///
+/// A second, independently configured endpoint and its URL, or `None` when the
+/// caller decided there is nothing to hold this one to — that decision is
+/// `NodeManager::second_source`'s and is argued there, not here. When it is
+/// present, the funding node's outputs are held against it **before** anything
+/// is selected, so the transaction that comes out is corroborated by
+/// construction: `Corroborated` is handed to the builder in place of the chain,
+/// and it is incapable of offering an outpoint the second node has never heard
+/// of. Checking afterwards instead would leave a window where selection had
+/// already picked a coin the check then had to refuse — and would have to
+/// refuse the whole payment over one coin that is merely newer than the second
+/// node.
+///
+/// It costs one extra `getaddressutxos` to each node — one to read what the
+/// primary offers, one to ask the second whether it has them — plus a
+/// `getblockcount` to each: the primary's always, because two of the three
+/// height rules are about it, and the second's only when the two answers
+/// differ, because that is the only time its tip decides anything. Read
+/// [`pecu_chain::corroborate`] for the comparison rule, for why the primary's
+/// tip cannot be borrowed from anywhere cheaper, and for what this does not
+/// cover.
+///
+/// # Every round trip the check costs happens outside `with_key`
+///
+/// The funding address is read from the vault's public side, which works while
+/// the vault is locked, so all of the check's network calls — both tips and
+/// both UTXO reads — are made before the key is decrypted rather than inside
+/// the window the signature opens. That matters because the second endpoint is *someone else's*: a slow
+/// one — or a deliberately slow one — could otherwise hold this wallet's
+/// decrypted private key resident for the length of its own timeout, on demand.
+/// The keystore treats the length of that window as a deliberate trade, and it
+/// is not a trade to hand to a third party.
+///
+/// The address cannot drift from the key that signs. `Vault::with_key`
+/// re-derives the address from the decrypted scalar and refuses if it does not
+/// match the entry this one was read from, so either they are the same address
+/// or nothing is signed at all.
 pub fn prepare(
     chain: &Chain,
+    second: Option<&Corroborator<'_>>,
     vault: &Vault,
     label: &str,
     draft: &SendDraft,
@@ -492,28 +651,35 @@ pub fn prepare(
         Some(amount)
     };
 
-    let (unsent, amount) = vault.with_key(label, |key| {
-        // Resolving needs the coins, reading the coins needs the address, and
-        // the address needs the key — so the extra read happens inside the
-        // window the signature already opens rather than opening a second one.
-        // It is a second `spendable` round trip: `prepare_send` reads the same
-        // set again a moment later. Folding the two together would mean
-        // reimplementing `prepare_send` here, and a second copy of the build
-        // path is the worse trade on the money path than three RPC calls.
-        //
-        // The set can change in between. If it does, the build still succeeds —
-        // the resolved amount is at most the new total — and the review shows
-        // whatever it actually left behind, which is the same window every
-        // offline builder has.
-        let amount = if let Some(amount) = typed {
-            amount
-        } else {
-            let funding = network::spendable(chain, &key.address().to_string())?;
-            resolve_send_all(&funding, has_smart_outputs)?
-        };
-        let unsent = network::prepare_send(chain, key, to, amount)?;
-        Ok::<_, SendError>((unsent, amount))
-    })??;
+    let from = funding_address(vault, label)?;
+
+    // Asked before anything reads a coin, and before the key is opened: the
+    // whole value of the answer is that it arrives before selection does.
+    let vouched = match second {
+        None => None,
+        Some(secondary) => Some(corroborated_funding(chain, secondary, &from)?),
+    };
+    let (allowed, out_of_step) = match vouched {
+        Some(vouched) => (Some(vouched.allowed), vouched.out_of_step),
+        None => (None, None),
+    };
+
+    let built = vault.with_key(label, |key| match allowed {
+        Some(allowed) => {
+            let reader = pecu_chain::Corroborated::new(chain, &from, allowed);
+            build_transparent(&reader, key, &from, to, typed, has_smart_outputs)
+        }
+        None => build_transparent(chain, key, &from, to, typed, has_smart_outputs),
+    })?;
+    let (unsent, amount) = match built {
+        Ok(built) => built,
+        Err(error) => {
+            return Err(match (out_of_step, second) {
+                (Some(gap), Some(secondary)) => shortfall(error, gap, secondary.url),
+                _ => error,
+            })
+        }
+    };
 
     Ok(Prepared {
         signed: Signed::Transparent(unsent),
@@ -526,7 +692,192 @@ pub fn prepare(
         route: pecu_protocol::Route::Transparent,
         spends: Vec::new(),
         name: name.to_string(),
+        corroborated_by: second.map_or_else(String::new, |second| second.url.to_string()),
+        withheld: out_of_step.map_or_else(Withheld::default, OutOfStep::withheld),
     })
+}
+
+/// Which address a key pays from, without opening the vault.
+///
+/// `Vault::keys` works while locked — it reads the public half of each entry —
+/// so the corroboration round trips can happen before the key is decrypted.
+/// The answer is not taken on trust: `with_key` derives the address from the
+/// decrypted scalar and refuses the whole operation if it disagrees with the
+/// entry, so a wrong answer here cannot become a signature over a different
+/// address's coins.
+fn funding_address(vault: &Vault, label: &str) -> Result<String, SendError> {
+    vault
+        .keys()
+        .into_iter()
+        .find(|key| key.label == label)
+        .map(|key| key.address)
+        .ok_or_else(|| SendError::Vault(VaultError::NoSuchKey(label.to_string())))
+}
+
+/// Say why a build ran out of coins when some were held back.
+///
+/// Without this the commonest honest disagreement — a second node one block
+/// behind — reaches the send form as "Not enough spendable coins" beside a
+/// balance the screen still shows in full, which is the same least-useful
+/// sentence that made `Diverged` a distinct verdict in the first place.
+/// Anything else the build objected to is its own answer and is passed
+/// through: the coins being filtered does not make a bad address a funding
+/// problem.
+fn shortfall(error: SendError, gap: OutOfStep, secondary: &str) -> SendError {
+    match error {
+        SendError::Flow(FlowError::InsufficientFunds { .. }) | SendError::NotEnoughForFee => {
+            gap.refusal(secondary).into()
+        }
+        other => other,
+    }
+}
+
+/// Which outpoints at `address` a second node will vouch for, and what it set
+/// aside.
+///
+/// Two requests to the primary, one or two to the secondary. The primary's
+/// answer is read here rather than taken from a later `spendable`, because a
+/// comparison wants both sides from the same moment — and because the build
+/// below is then handed a filter rather than a verdict.
+///
+/// # Why the primary's tip is read here too
+///
+/// Because the verdict needs both tips, and there is no free one to reuse.
+/// `verus_flows::spendable` reads a tip and returns it on `Funding::tip`, but it
+/// runs *inside* the build — after this answer has already become the filtered
+/// reader the build is handed — and the ordering is the point: nothing may
+/// select a coin before it has been corroborated. So the cost is one
+/// `getblockcount` to the node being checked, on the send path, and only when a
+/// second source was required at all. `pecu_chain::corroborate::against` argues
+/// the rules that spend it, and why the tip a `SpendPermit` already carries is
+/// the wrong number to reach for.
+///
+/// The two reads are issued together and unwrapped after, the way `spendable`
+/// does it: neither needs the other, and against a driver that cannot answer
+/// immediately a `?` on the first would abandon the second.
+///
+/// Every way this can fail is a refusal, never a silent pass. The SDK's own
+/// second source puts the rule plainly and it is worth repeating at the site:
+/// *"a source that cannot answer is a failure, not a pass … an uncorroborated
+/// one silently substituted would make the whole thing decorative the first
+/// time a node went down."* A caller reaching this function has already decided
+/// corroboration is required.
+///
+/// The verdicts get different sentences, deliberately. "These two nodes
+/// disagree", "the second one is behind", "the second one is ahead and has seen
+/// this coin spent", "the second one could not answer" and "there is no second
+/// one" have five different remedies, and merging any of them sends somebody
+/// after the wrong problem.
+fn corroborated_funding<R: ChainReader>(
+    reader: &R,
+    secondary: &Corroborator<'_>,
+    address: &str,
+) -> Result<Vouched, SendError> {
+    let offered = reader.address_utxos(&[address]);
+    let primary_tip = reader.block_count();
+    let offered = offered.map_err(|error| SendError::Flow(error.into()))?;
+    let primary_tip = primary_tip.map_err(|error| SendError::Flow(error.into()))?;
+
+    match corroborate::against(secondary.chain, address, &offered, primary_tip) {
+        Corroboration::Agreed { .. } => Ok(Vouched {
+            allowed: corroborate::agreed_outpoints(&offered, &[]),
+            out_of_step: None,
+        }),
+        // The common honest case: one node has indexed a block the other has
+        // not, and the two tips are the evidence. Spend the subset both have
+        // and carry the count out, so the review can say what was left behind
+        // rather than a send-all silently moving less than the screen said.
+        //
+        // `kept` may be zero — one coin at the address, confirmed a minute ago,
+        // is the commonest wallet shape there is — and that is still a
+        // difference of height rather than of chain. It gets its own refusal
+        // instead of being filtered to nothing and reaching the form as "not
+        // enough funds".
+        //
+        // Which of the two nodes is ahead decides which refusal, and it is not
+        // a detail: "wait for the second source to catch up" is false advice
+        // when the second source is the one in front, and the person would be
+        // waiting on a node that has already arrived.
+        Corroboration::OutOfStep {
+            withheld,
+            kept,
+            secondary_tip,
+            primary_tip,
+        } => {
+            let gap = OutOfStep {
+                count: withheld.len(),
+                tip: secondary_tip,
+                secondary_behind: secondary_tip < primary_tip,
+            };
+            if kept == 0 {
+                return Err(gap.refusal(secondary.url).into());
+            }
+            Ok(Vouched {
+                out_of_step: Some(gap),
+                allowed: corroborate::agreed_outpoints(&offered, &withheld),
+            })
+        }
+        // The shape of the attack. Two chains' unspent outputs for one address
+        // are disjoint and their heights are millions of blocks apart, so a
+        // node serving another chain's coins lands here — and so does one that
+        // mixes a real coin in with invented ones, which is why this arm does
+        // not care what survived. Named, because filtering to the empty set
+        // would surface as "not enough funds", the least useful sentence
+        // available for the one case it would be describing.
+        Corroboration::Diverged { unexplained, .. } => Err(SpendRefused::Uncorroborated {
+            count: unexplained.len(),
+            secondary: secondary.url.to_string(),
+        }
+        .into()),
+        // Refused, and the reason goes to the log rather than into the
+        // sentence. Which endpoint went silent is what a person can act on;
+        // whether it timed out or refused the method outright is what somebody
+        // debugging it needs, and the two want different words. A filtering
+        // proxy that does not serve `getaddressutxos` at all makes this
+        // permanent, which is exactly the state a log line has to explain.
+        Corroboration::Unavailable { reason } => {
+            tracing::warn!(
+                secondary = %secondary.url,
+                %reason,
+                "the second source could not be asked about the funding address",
+            );
+            Err(SpendRefused::SecondSourceSilent {
+                secondary: secondary.url.to_string(),
+            }
+            .into())
+        }
+    }
+}
+
+/// Resolve the amount if it was not typed, then build and sign.
+///
+/// Generic over the reader so that the corroborated and uncorroborated paths
+/// run the **same** build. A second copy of this, filtered, is how the two
+/// would come to disagree about the fee ladder.
+///
+/// It is still two `spendable` round trips on a send-all — `prepare_send` reads
+/// the funding set again a moment later. Folding them together would mean
+/// reimplementing `prepare_send` here, and a second copy of the build path is
+/// the worse trade on the money path than three RPC calls. The set can change
+/// in between; if it does the build still succeeds, because the resolved amount
+/// is at most the new total, and the review shows whatever it actually left
+/// behind.
+fn build_transparent<R: ChainReader>(
+    reader: &R,
+    key: &verus_sdk::verus_keys::PrivateKey,
+    from: &str,
+    to: &str,
+    typed: Option<Amount>,
+    has_smart_outputs: bool,
+) -> Result<(Unsent<Sent>, Amount), SendError> {
+    let amount = if let Some(amount) = typed {
+        amount
+    } else {
+        let funding = network::spendable(reader, from)?;
+        resolve_send_all(&funding, has_smart_outputs)?
+    };
+    let unsent = network::prepare_send(reader, key, to, amount)?;
+    Ok((unsent, amount))
 }
 
 // ── Reviewing ───────────────────────────────────────────────────────────────
@@ -569,6 +920,41 @@ pub fn review(
         from_address: from.to_string(),
         first_time_recipient: !known_recipient,
         recipient_name: prepared.name.clone(),
+        corroboration: corroboration_note(prepared),
+    }
+}
+
+/// What the review says about the second node, if there was one.
+///
+/// Three answers, and the empty one is a real answer rather than a missing one:
+/// on a default install, and on the two routes that spend notes, nothing
+/// corroborated these coins and the review must not imply otherwise. Where
+/// something did, the endpoint is named — a guard nobody can see is a guard
+/// nobody notices has stopped working — and where that endpoint had not reached
+/// every output's block, the count comes with it, because a send-all that moves
+/// less than the balance on screen owes an explanation.
+fn corroboration_note(prepared: &Prepared) -> NoteVm {
+    if prepared.corroborated_by.is_empty() {
+        NoteVm::none()
+    } else if prepared.withheld.count == 0 {
+        NoteVm::with("send-corroborated", [prepared.corroborated_by.clone()])
+    } else {
+        // Two codes for the two directions. "It has not reached those blocks
+        // yet" and "it has already watched those coins be spent" are different
+        // facts about different nodes, and the second one printed as the first
+        // would tell somebody to wait for an endpoint that is already ahead.
+        let code = if prepared.withheld.already_spent {
+            "send-withheld-spent"
+        } else {
+            "send-withheld"
+        };
+        NoteVm::with(
+            code,
+            [
+                prepared.withheld.count.to_string(),
+                prepared.corroborated_by.clone(),
+            ],
+        )
     }
 }
 
@@ -745,16 +1131,60 @@ pub fn broadcast(
 /// The proving parameters are loaded here, inside the worker, because that is
 /// where the seconds can be spent. Whether they *exist* was settled before this
 /// was ever dispatched — see [`SendError::ParamsMissing`].
+/// # A shield is corroborated, and the shielded routes are not
+///
+/// It would be easy to read "touches the shielded pool" as "has no second
+/// source" and skip the check here. That is wrong, and it is the wrong that
+/// would have left the whole guard one character away from being bypassed: a
+/// `t→z` has no input notes, no witnesses and no anchor to fetch. It is funded
+/// by `shield::plan` from `network::spendable` at a transparent address —
+/// `getaddressutxos` on the RPC node, byte for byte the set a transparent
+/// payment reads. Typing a `zs…` into the same Send form instead of an `R…`
+/// changes the outputs, not where the coins come from.
+///
+/// So the same `Corroborated` reader is handed to the planner, and the same
+/// refusals apply. `prepare_shielded` — `z→z` and `z→t` — is the one that
+/// really has nothing to ask, because its inputs are notes from a single
+/// lightwalletd.
 pub fn prepare_shield(
     reader: &impl verus_sdk::network::ChainReader,
+    second: Option<&Corroborator<'_>>,
     vault: &Vault,
     label: &str,
     from_address: &str,
     draft: &SendDraft,
     located: &crate::params::Located,
 ) -> Result<Prepared, SendError> {
-    let planned = crate::shield::plan(reader, from_address, &draft.to, &draft.amount)
-        .map_err(shield_error)?;
+    let vouched = match second {
+        None => None,
+        Some(secondary) => Some(corroborated_funding(reader, secondary, from_address)?),
+    };
+
+    let attempt = match &vouched {
+        Some(vouched) => {
+            let filtered =
+                pecu_chain::Corroborated::new(reader, from_address, vouched.allowed.clone());
+            crate::shield::plan(&filtered, from_address, &draft.to, &draft.amount)
+        }
+        None => crate::shield::plan(reader, from_address, &draft.to, &draft.amount),
+    };
+    let out_of_step = vouched.as_ref().and_then(|vouched| vouched.out_of_step);
+    let planned = match attempt {
+        Ok(planned) => planned,
+        Err(error) => {
+            return Err(match (&error, out_of_step) {
+                // The same courtesy the transparent route gets, and it has to
+                // be done on the shield's own error rather than through
+                // `shortfall`: this route's shortfall is
+                // `ShieldError::NotEnough`, which flattens to a sentence about
+                // shielding rather than to the SDK's `InsufficientFunds`.
+                (crate::shield::ShieldError::NotEnough { .. }, Some(gap)) => gap
+                    .refusal(second.map_or("", |second| second.url))
+                    .into(),
+                _ => shield_error(error),
+            })
+        }
+    };
 
     let params = crate::params::load(located).map_err(|_| SendError::ParamsMissing)?;
     let shield = crate::shield::prepare(vault, label, &params, &planned).map_err(shield_error)?;
@@ -765,6 +1195,8 @@ pub fn prepare_shield(
         route: pecu_protocol::Route::Shield,
         spends: Vec::new(),
         name: String::new(),
+        corroborated_by: second.map_or_else(String::new, |second| second.url.to_string()),
+        withheld: out_of_step.map_or_else(Withheld::default, OutOfStep::withheld),
         signed: Signed::Shield(shield),
     })
 }
@@ -809,6 +1241,13 @@ pub fn prepare_shielded<T: verus_sdk::light::LightTransport>(
         route,
         spends: planned.nullifiers(),
         name: String::new(),
+        // Genuinely out of scope, and the only route that is: the inputs are
+        // notes, and the notes, the witnesses and the anchor all come from one
+        // lightwalletd with no second one to ask. Said as a blank rather than
+        // as a claim — see `pecu_chain::corroborate`, and see `prepare_shield`
+        // for why a `t→z` is *not* in this group.
+        corroborated_by: String::new(),
+        withheld: Withheld::default(),
     })
 }
 

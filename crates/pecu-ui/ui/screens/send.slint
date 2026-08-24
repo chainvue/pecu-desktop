@@ -587,6 +587,38 @@ export component SendScreen inherits VerticalLayout {
                     }
                 }
 
+                // Who else was asked about these coins.
+                //
+                // Under the funding address rather than above the outputs,
+                // because it is about where the coins came from and not about
+                // where they are going. Shown only when there was a second
+                // node: an empty line reading "nothing checked this" on every
+                // ordinary payment is a warning people learn to stop seeing,
+                // and the wallet ships one endpoint per chain, so that would be
+                // most of them.
+                //
+                // The second line is here rather than on the Network screen
+                // because this is where it is true: the address above was sent
+                // to that endpoint to ask about, and it went before this screen
+                // appeared, so there was no point earlier at which cancelling
+                // would have stopped it.
+                if SendState.corroboration.code != "": VerticalLayout {
+                    spacing: Sp.s2;
+                    Eyebrow { text: @tr("CHECKED AGAINST"); }
+                    NoteText {
+                        note: SendState.corroboration;
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("The address above was sent to it to ask about.");
+                        font-size: Typo.caption;
+                        color: Theme.text-tertiary;
+                        wrap: word-wrap;
+                    }
+                }
+
                 VerticalLayout {
                     spacing: Sp.s2;
                     Eyebrow { text: @tr("OUTPUTS"); }

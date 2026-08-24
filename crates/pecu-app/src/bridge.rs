@@ -911,6 +911,7 @@ fn apply_review(ui: &AppWindow, vm: &pecu_protocol::SendReviewVm) {
     send.set_from_address(vm.from_address.clone().into());
     send.set_first_time_recipient(vm.first_time_recipient);
     send.set_recipient_name(vm.recipient_name.clone().into());
+    send.set_corroboration(note(&vm.corroboration));
 
     let outputs: Vec<ReviewOutput> = vm
         .outputs

@@ -1310,6 +1310,15 @@ pub struct SendReviewVm {
     /// seen, and somebody shown only the name is being asked to trust a lookup
     /// they were not told happened.
     pub recipient_name: String,
+    /// Which second node vouched for the coins this spends, and what it would
+    /// not vouch for.
+    ///
+    /// Empty when nothing did, which is the honest answer on a default install
+    /// and on the two routes that spend shielded notes — the wallet ships one
+    /// endpoint per chain, so there is usually nothing to hold the funding node
+    /// to. Named when there was one, because a guard nobody can see is a guard
+    /// nobody notices has stopped working.
+    pub corroboration: NoteVm,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
