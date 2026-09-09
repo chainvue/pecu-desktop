@@ -1038,6 +1038,68 @@ mod tests {
         }
     }
 
+    /// The interface is told which Activity tabs can fill. This is that list,
+    /// held against what actually comes out of here.
+    ///
+    /// `pecu_protocol::HISTORY_KINDS_PRODUCED` is read by the Activity screen's
+    /// empty state to decide between "nothing has happened yet" and "nothing
+    /// can reach this list yet" — see `ui/screens/activity.slint`. The list and
+    /// the producer are on opposite sides of the boundary
+    /// `pecu-ui/tests/dependency_boundary.rs` enforces, so nothing but this
+    /// keeps them in step.
+    ///
+    /// It is a tripwire rather than a proof. It catches the direction that
+    /// happens by accident — a new kind emitted here and not added there, which
+    /// would leave a tab excusing itself for being empty while rows exist for
+    /// it. The other direction, a kind added to the list before anything
+    /// produces it, puts the wallet back in the state issue #12 reported and
+    /// cannot be caught from here: it is exactly what the change that lands
+    /// `login` alongside #9 is supposed to do, one commit before it is true.
+    #[test]
+    fn the_kinds_this_list_is_built_from_are_the_kinds_the_interface_is_promised() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let entry = HistoryEntry {
+            txid: "0".repeat(64).parse().expect("a txid"),
+            height: 100,
+            block_index: 0,
+            block_time: 1_000,
+            net_native: SignedAmount::from_sat(1),
+            net_currencies: BTreeMap::new(),
+            spent_something: false,
+        };
+        // Every shape a row can be built from, so a kind chosen by the entry
+        // rather than hard-coded would show up here.
+        let entries = [
+            HistoryEntry {
+                net_native: SignedAmount::from_sat(-1),
+                spent_something: true,
+                ..entry.clone()
+            },
+            HistoryEntry {
+                height: 0,
+                block_time: 0,
+                ..entry.clone()
+            },
+            entry,
+        ];
+
+        let rows = rows_from(&entries, &BTreeMap::new(), 2_000, "all");
+        let produced: BTreeSet<&str> = rows.iter().map(|row| row.kind.as_str()).collect();
+        let promised: BTreeSet<&str> = pecu_protocol::HISTORY_KINDS_PRODUCED
+            .iter()
+            .copied()
+            .collect();
+
+        let unannounced: Vec<&&str> = produced.difference(&promised).collect();
+        assert!(
+            unannounced.is_empty(),
+            "the history now carries {unannounced:?}, which \
+             pecu_protocol::HISTORY_KINDS_PRODUCED does not list — the Activity \
+             screen is still telling people those tabs cannot fill",
+        );
+    }
+
     #[test]
     fn an_addition_that_cannot_be_represented_saturates_rather_than_wrapping() {
         let huge = Amount::from_sat(u64::MAX);

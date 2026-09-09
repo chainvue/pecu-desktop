@@ -314,7 +314,43 @@ pub fn history(ui: &AppWindow) {
 pub fn history_filtered(ui: &AppWindow) {
     history(ui);
     filter_history(ui, "payment");
-    ui.global::<ActivityState>().set_filter("payment".into());
+    tab(ui, "payment");
+}
+
+/// A wallet with no history at all, on the tab that shows all of it.
+///
+/// The plainest of the three empty states and the one that was already
+/// written; it is here because the two below only read as a distinction beside
+/// it. Nothing is invented, so this fixture is not in mock mode.
+pub fn history_empty(ui: &AppWindow) {
+    unlocked(ui);
+    ui.set_screen("activity".into());
+    ui.global::<WalletState>().set_ticker("VRSCTEST".into());
+    tab(ui, "all");
+}
+
+/// The Logins tab, which cannot have contents in this build.
+///
+/// The picture issue #12 is about. The list is empty for a reason that has
+/// nothing to do with what this wallet has done, and what the screen says has
+/// to be different from what it says above — that is the whole change, and a
+/// difference between two sentences is the kind of thing a reference image is
+/// good at holding and prose is not.
+pub fn history_cannot_fill(ui: &AppWindow) {
+    history_empty(ui);
+    tab(ui, "login");
+}
+
+/// Choose an Activity tab, the way the wallet chooses one.
+///
+/// Two properties rather than one. `main.rs::wire_history` sets the filter and
+/// the core's answer about whether that kind can have rows together, so a
+/// fixture that set only the first would photograph a state the wallet cannot
+/// be in — and would photograph it as the bug this screen just stopped having.
+fn tab(ui: &AppWindow, kind: &str) {
+    let activity = ui.global::<ActivityState>();
+    activity.set_filter(kind.into());
+    activity.set_filter_can_fill(pecu_protocol::history_filter_can_fill(kind));
 }
 
 /// Keep only the history rows of one kind, which is what the core sends when a

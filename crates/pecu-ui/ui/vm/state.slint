@@ -765,6 +765,18 @@ export global ActivityState {
     // so the pressed chip does not wait for a round trip to look pressed.
     in-out property <string> filter: "all";
     callback filter-changed(string);
+    // Whether the kind on `filter` is one this build can put rows in at all.
+    //
+    // Not a question about this wallet — a question about this build. Three of
+    // the five tabs filter for a kind nothing produces yet, so their lists are
+    // empty for a reason that has nothing to do with what the person using it
+    // has done, and the empty state says a different sentence on each side of
+    // this. `pecu_protocol::history_filter_can_fill` is the one place that
+    // knows; it is set from Rust beside every write to `filter` above.
+    //
+    // Defaults to true, which is the answer for `"all"` — the filter this
+    // starts on, and the one that is never a gap in what the core reads.
+    in property <bool> filter-can-fill: true;
     // The summary strip. Four figures the core does not compute yet — see the
     // fixtures, which invent them.
     in property <[Stat]> stats: [];
