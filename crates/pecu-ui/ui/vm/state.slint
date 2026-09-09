@@ -996,6 +996,21 @@ export global AppInfo {
     // Where the log files are. On screen because a wallet started from the
     // Finder has no terminal, so this is the only way anybody finds them.
     in property <string> log-path: "";
+    // The shortest passphrase the vault will accept when one is being chosen.
+    //
+    // `pecu_protocol::MIN_PASSPHRASE_CHARS`, which is where the reasoning for
+    // the number lives. Here so that the three forms that ask for a passphrase
+    // can say the requirement out loud and switch their own button off below
+    // it, instead of letting somebody type `cat123`, press Create wallet and
+    // find out from a refusal.
+    //
+    // A default rather than only a value set from Rust, because these forms are
+    // photographed by the snapshot suite through `pecu-ui` alone, with no
+    // `pecu-app` to seed anything. `the_interface_states_the_rule_the_vault_
+    // applies` in tests/passphrase_rule.rs holds the default against the
+    // constant, so a floor that moves in the vault and not here is a red test
+    // rather than a screen quoting a rule nobody enforces.
+    in property <int> min-passphrase-chars: 12;
 }
 
 // Every UI→core call lives in this one global.

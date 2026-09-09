@@ -1,13 +1,14 @@
-// The four building blocks more than one screen needs.
+// The five building blocks more than one screen needs.
 //
 // Everything else in this interface belongs to exactly one screen and lives
-// beside it. These do not: `Field` is in twenty places, and the other three sit
-// in two families each.
+// beside it. These do not: `Field` is in twenty places, `PassphraseRule` is on
+// the three forms that seal a vault, and the other three sit in two families
+// each.
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn } from "base.slint";
 import { FlowStep } from "../vm/structs.slint";
-import { Actions, WalletState } from "../vm/state.slint";
+import { Actions, AppInfo, WalletState } from "../vm/state.slint";
 import { NoteText } from "note.slint";
 
 // A single-line input.
@@ -79,6 +80,79 @@ export component Field inherits Rectangle {
         vertical-alignment: root.multiline ? top : center;
         accepted => { root.accepted(); }
         edited => { root.edited(); }
+    }
+}
+
+// What a passphrase has to clear, and what actually makes one good.
+//
+// # Why this says so little
+//
+// The obvious thing to put here is a strength meter, and it would be a lie. The
+// bar that calls `Passw0rd!` strong is scoring character classes, which is what
+// a password rule from 2003 measured and not what an offline attacker's
+// dictionary is made of — and a meter is believed precisely because it looks
+// like a measurement. Nothing that runs in this process can tell whether a
+// passphrase is in somebody's word list. So this states the one thing that is
+// checkable — the length — and then says what makes a passphrase good, as
+// advice, in the wallet's own voice rather than as a score.
+//
+// # Above the box, not below it
+//
+// Every caller puts this between the label and the field, which is unusual for
+// a validation message and right for this one: a requirement is worth reading
+// *before* a passphrase is invented, not after the button has gone dead. The
+// three forms that ask for one all have a sentence of explanation above the
+// box already, and this reads as the last line of it.
+//
+// The complaint sits there too, which is the part that looks odd written down
+// and does not look odd on screen. `PassphraseChange` already turns the label
+// above a box red to complain about that box, so this is that file's own
+// idiom rather than a new one.
+//
+// # Why it is a component and not three copies
+//
+// Three forms ask for a passphrase: setting up, restoring, and changing. The
+// issue this closes is that the weak one moves to whichever of them nobody
+// touched, and three copies of a sentence is exactly how the fourth form gets
+// written without one. The rule is read from `AppInfo` and the words are here,
+// once.
+//
+// The *refusal* is not here and cannot be. `pecu_keystore::Vault` applies the
+// same floor when the passphrase is set, so this is a form that tells the truth
+// early rather than a check anything relies on.
+export component PassphraseRule inherits VerticalLayout {
+    // The passphrase as typed. Read only for its length — never displayed,
+    // never sent anywhere, and this component has no `accessible-value`, so it
+    // does not put a masked secret into the accessibility tree.
+    in property <string> typed;
+    in property <bool> centred: false;
+    // Whether the box may be submitted. Callers gate their button on this
+    // instead of on `text != ""`, which is what they used to do.
+    out property <bool> long-enough:
+        root.typed.character-count >= AppInfo.min-passphrase-chars;
+    // Quiet until there is something to be short *of*. Complaining at the first
+    // keystroke is the same mistake the confirmation box already avoids.
+    out property <bool> too-short: root.typed != "" && !root.long-enough;
+
+    spacing: Sp.s2;
+
+    Text {
+        text: @tr("At least {} characters. Length is what makes a passphrase hard to guess — several unrelated words are stronger than a short one with digits and punctuation in it.", AppInfo.min-passphrase-chars);
+        font-size: Typo.caption;
+        color: root.too-short ? Theme.negative : Theme.text-tertiary;
+        horizontal-alignment: root.centred ? center : left;
+        wrap: word-wrap;
+    }
+
+    // Said in words as well as in colour, because a colour is not a message to
+    // somebody who cannot see it and this is the only signal that the button
+    // below has gone dead.
+    if root.too-short: Text {
+        text: @tr("Too short.");
+        font-size: Typo.caption;
+        color: Theme.negative;
+        horizontal-alignment: root.centred ? center : left;
+        wrap: word-wrap;
     }
 }
 

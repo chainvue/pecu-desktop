@@ -262,9 +262,13 @@ async fn no_secret_reaches_the_log() {
     });
     wait_for_wallet(&mut events, |vm| !vm.locked).await;
 
+    // The NEW one clears `MIN_PASSPHRASE_CHARS` on purpose. The vault judges
+    // the new passphrase before it verifies the old one, so a short new one
+    // would be refused a step early and `wrong again` would never reach the
+    // derivation — which is the exact path this case exists to walk.
     dispatcher.send(Command::ChangePassphrase {
         old: Secret::from("wrong again"),
-        new: Secret::from("a new one"),
+        new: Secret::from("a new one entirely"),
     });
     wait_for_notice(&mut events).await;
 

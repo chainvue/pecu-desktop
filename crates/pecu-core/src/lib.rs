@@ -1254,11 +1254,9 @@ impl Core {
                 self.refresh();
             }
             Err(error) => {
-                self.notice(
-                    "wallet_create",
-                    NoteVm::plain("wallet-create-failed"),
-                    &error,
-                );
+                let note = passphrase_note(&error)
+                    .unwrap_or_else(|| NoteVm::plain("wallet-create-failed"));
+                self.notice("wallet_create", note, &error);
             }
         }
         self.busy(TaskKind::CreatingWallet, false);
@@ -3451,11 +3449,16 @@ impl Core {
                 // worth saying before anything else on that screen.
                 self.emit_registration(None);
             }
-            Err(error) => self.notice(
-                "change_passphrase",
-                NoteVm::plain("passphrase-wrong"),
-                &error,
-            ),
+            // Not always "wrong passphrase" any more. A new one below the
+            // length floor is refused before the old one is even checked, and
+            // saying "that is not the passphrase this wallet is using" to
+            // somebody who typed their current passphrase correctly would send
+            // them looking for a fault that is not there.
+            Err(error) => {
+                let note = passphrase_note(&error)
+                    .unwrap_or_else(|| NoteVm::plain("passphrase-change-failed"));
+                self.notice("change_passphrase", note, &error);
+            }
         }
     }
 
@@ -7305,6 +7308,32 @@ const SCAN_ATTEMPTS: u32 = 3;
     }
 }
 
+/// The passphrase-specific half of a vault refusal, when there is one.
+///
+/// `None` for everything else — a locked wallet, a write that failed — because
+/// the right sentence for those depends on what was being attempted, and each
+/// of the three callers already has one. What must **not** vary between them is
+/// the wording for the reasons that are about the passphrase itself: those want
+/// the same words wherever they occur, and each wants a different next step
+/// from the others. Type it again, or choose a longer one, are not the same
+/// advice.
+fn passphrase_note(error: &pecu_keystore::VaultError) -> Option<NoteVm> {
+    use pecu_keystore::VaultError;
+
+    match error {
+        // The number travels with the note rather than being spelled again in
+        // `note.slint`, so the sentence on screen cannot end up naming a floor
+        // the vault is not actually applying.
+        VaultError::PassphraseTooShort { minimum } => Some(NoteVm::with(
+            "passphrase-too-short",
+            [minimum.to_string()],
+        )),
+        VaultError::EmptyPassphrase => Some(NoteVm::plain("passphrase-empty")),
+        VaultError::WrongPassphrase => Some(NoteVm::plain("passphrase-wrong")),
+        _ => None,
+    }
+}
+
 /// The one sentence the import screen shows when it refuses.
 ///
 /// Three distinct messages for the three distinct failures, because they call
@@ -7322,7 +7351,12 @@ fn import_note(error: &wallet::ImportError) -> NoteVm {
         // here — and "invalid key" would leave someone staring at a key that
         // is perfectly valid, just not for this chain.
         wallet::ImportError::Key(_) => return NoteVm::plain("import-not-a-verus-key"),
-        wallet::ImportError::Vault(_) => return NoteVm::plain("import-failed"),
+        // A restore on a fresh install creates the vault, so the passphrase
+        // chosen on that form is judged here too — and "could not import" is
+        // the wrong sentence for a passphrase that is merely short.
+        wallet::ImportError::Vault(problem) => {
+            return passphrase_note(problem).unwrap_or_else(|| NoteVm::plain("import-failed"))
+        }
     };
 
     match problem {
@@ -8145,6 +8179,53 @@ fn now() -> i64 {
 mod tests {
     use super::*;
 
+    /// A passphrase these tests can actually set.
+    ///
+    /// It has to clear `pecu_protocol::MIN_PASSPHRASE_CHARS`, and named rather
+    /// than spelled at each call site so that a floor which moves again is one
+    /// edit rather than eight.
+    const TEST_PASSPHRASE: &str = "correct horse battery staple";
+
+    // ── What a refused passphrase is called on screen ───────────────────────
+
+    /// A passphrase that is merely short must not be reported as the wrong one.
+    ///
+    /// Both refusals arrive as a `VaultError` from the same call, and both
+    /// screens used to render whatever single sentence the caller had picked:
+    /// "Could not create the wallet" from setup, and "That is not the
+    /// passphrase this wallet is using" from Change passphrase. The second is
+    /// the one that costs something — it is a confident, wrong answer, and the
+    /// person reading it typed their current passphrase correctly.
+    #[test]
+    fn a_short_passphrase_is_not_reported_as_the_wrong_passphrase() {
+        use pecu_keystore::VaultError;
+
+        let note = passphrase_note(&VaultError::PassphraseTooShort {
+            minimum: pecu_protocol::MIN_PASSPHRASE_CHARS,
+        })
+        .expect("a passphrase reason");
+        assert_eq!(note.code, "passphrase-too-short");
+        // The number travels with the note, so the sentence cannot name a
+        // floor the vault is not applying.
+        assert_eq!(
+            note.args,
+            vec![pecu_protocol::MIN_PASSPHRASE_CHARS.to_string()],
+        );
+
+        assert_eq!(
+            passphrase_note(&VaultError::WrongPassphrase).map(|n| n.code),
+            Some("passphrase-wrong".to_string()),
+        );
+        assert_eq!(
+            passphrase_note(&VaultError::EmptyPassphrase).map(|n| n.code),
+            Some("passphrase-empty".to_string()),
+        );
+
+        // Everything else stays the caller's to word: what to say about a
+        // locked wallet depends on what was being attempted.
+        assert!(passphrase_note(&VaultError::Locked).is_none());
+    }
+
     // ── The command palette's matcher ───────────────────────────────────────
 
     /// Case is ignored on both sides, because neither side controls it: a name
@@ -8467,7 +8548,7 @@ mod tests {
 
         dispatcher.send(Command::CreateWallet {
             name: "test".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
 
         // Wait until the wallet reports itself unlocked, so the clock is only
@@ -8521,7 +8602,7 @@ mod tests {
 
         dispatcher.send(Command::CreateWallet {
             name: "test".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
 
         let positions = loop {
@@ -8614,7 +8695,7 @@ mod tests {
 
         dispatcher.send(Command::CreateWallet {
             name: "test".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
         let positions = loop {
             match events.recv().await {
@@ -8640,7 +8721,7 @@ mod tests {
 
         dispatcher.send(Command::RevealBackup {
             label: "main".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
         loop {
             match events.recv().await {
@@ -8721,7 +8802,7 @@ mod tests {
 
         dispatcher.send(Command::CreateWallet {
             name: "test".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
         loop {
             match events.recv().await {
@@ -8736,7 +8817,7 @@ mod tests {
             material: pecu_protocol::ImportMaterial::Wif(pecu_protocol::Secret::from(
                 "UusoQWsobQKUkezgBJa22D9G4t9Avo6k8wD5UUxmmfAEoTN8bawc",
             )),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
         loop {
             match events.recv().await {
@@ -8748,8 +8829,8 @@ mod tests {
 
         for (label, passphrase, expected) in [
             ("main", "not the passphrase", "passphrase-wrong"),
-            ("cold", "a passphrase", "reveal-no-phrase"),
-            ("renamed-since", "a passphrase", "key-not-here"),
+            ("cold", TEST_PASSPHRASE, "reveal-no-phrase"),
+            ("renamed-since", TEST_PASSPHRASE, "key-not-here"),
         ] {
             dispatcher.send(Command::RevealBackup {
                 label: label.to_string(),
@@ -8795,7 +8876,7 @@ mod tests {
                 "abandon abandon abandon abandon abandon abandon \
                  abandon abandon abandon abandon abandon abandon",
             )),
-            passphrase: pecu_protocol::Secret::from("pass"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
 
         let notice = loop {
@@ -8820,7 +8901,7 @@ mod tests {
                 "abandon abandon abandon abandon abandon abandon \
                  abandon abandon abandon abandon abandon about",
             )),
-            passphrase: pecu_protocol::Secret::from("pass"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
 
         let vm = loop {
@@ -9400,7 +9481,7 @@ mod tests {
     ) {
         dispatcher.send(Command::CreateWallet {
             name: "test".to_string(),
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
 
         let positions = loop {
@@ -9521,7 +9602,7 @@ mod tests {
             },
         );
         dispatcher.send(Command::Unlock {
-            passphrase: pecu_protocol::Secret::from("a passphrase"),
+            passphrase: pecu_protocol::Secret::from(TEST_PASSPHRASE),
         });
         let vm = wallet_until(&mut events, |vm| !vm.locked).await;
         assert_eq!(vm.keys.len(), 2);
