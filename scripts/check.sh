@@ -30,17 +30,18 @@
 #
 # # The half nothing had ever run
 #
-# `mock` is not a default feature, so the `test` half compiles six of
+# `mock` is not a default feature, so the `test` half compiles seven of
 # pecu-core's test files to empty binaries — send_prepare, send_corroboration,
-# demo_chain, currency_launch, currency_from_a_new_name and identity_changes
-# are all `#![cfg(feature = "mock")]`. They report "0 passed; 0 filtered out"
-# and the run goes green. That is thirty-nine tests — 3, 11, 12, 4, 2 and 7 —
-# on top of the 528 the `test` half counts at this commit: 526 across its test
-# binaries and two doc-tests. They are the only offline coverage of
-# `send::prepare`, of corroborating a payment against a second node, of the
+# demo_chain, currency_launch, currency_from_a_new_name, identity_changes and
+# refused_reads are all `#![cfg(feature = "mock")]`. They report "0 passed; 0
+# filtered out" and the run goes green. That is forty-three tests — 3, 11, 12,
+# 4, 2, 7 and 4 — on top of the 528 the `test` half counts at this commit: 526
+# across its test binaries and two doc-tests. They are the only offline coverage
+# of `send::prepare`, of corroborating a payment against a second node, of the
 # five ways an identity is changed, of defining a currency and of the scripted
-# chain demo: everything that builds and signs a transaction without a node.
-# Nothing here had ever run them.
+# chain demo — everything that builds and signs a transaction without a node —
+# and, since #30, of the screens that read the chain without going through
+# `refresh`. Nothing here had ever run them.
 #
 # Both figures are re-measured rather than carried forward, because they are
 # the kind that drifts silently: every one of them is a number about a run
@@ -61,7 +62,7 @@
 # whether it still says all of it. `src` as well as `tests`, because a
 # `#[cfg(all(test, feature = "mock"))]` module inside a crate is compiled away
 # by the `test` half exactly as quietly as a whole file is, and this half would
-# run it. Today that returns nineteen sites: those six files, and thirteen in
+# run it. Today that returns twenty sites: those seven files, and thirteen in
 # pecu-chain's and pecu-core's `src`, none of which is a test module.
 #
 # `--exclude pecu-ui`, because the feature cannot reach it: pecu-ui depends on
