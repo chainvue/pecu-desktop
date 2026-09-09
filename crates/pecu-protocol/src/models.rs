@@ -1130,7 +1130,16 @@ pub struct TxDetailVm {
     pub direction: TxDirection,
     /// Non-native currencies this transaction moved, pre-formatted.
     pub currency_lines: Vec<String>,
-    /// Where to look this up. Not opened for you — see the Advanced section.
+    /// Where to look this up: shown, copyable, and openable, which is the
+    /// one convention every screen in this wallet that shows a transaction
+    /// id now uses. This said "Not opened for you" and the send screens
+    /// opened it anyway (#18).
+    ///
+    /// The privacy cost is real and is why the URL is on screen rather than
+    /// behind the word "open": handing a txid to an explorer tells a third
+    /// party this wallet did not choose that somebody is watching this
+    /// transaction. What changed is who decides — the person reading the
+    /// host, rather than this field.
     pub explorer_url: Option<String>,
     /// Raw decoded JSON, shown only under Advanced. `None` when the node
     /// declined or has not been asked.

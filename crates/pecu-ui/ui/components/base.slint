@@ -682,7 +682,107 @@ export component ListRow inherits Rectangle {
     }
 }
 
-// A transaction id, readable, with the two things anybody wants to do to one.
+// A square control that is a picture rather than a word.
+//
+// # Why this is a component and not another hand-rolled rectangle
+//
+// Because it is a shape this interface has already got wrong. The title bar's
+// Refresh, Lock and theme controls were a `TouchArea` and an `accessible-label`
+// and nothing else — announced correctly, unreachable by Tab, and inert when a
+// screen reader activated them — and `shell.slint` records fixing all three.
+// The copy button beside a transaction id was the same shape with the same
+// three defects, and there are now two of these on the card rather than one.
+// Hand-rolling the second one would have been a second chance to leave one of
+// the three out.
+//
+// # Why the confirmation is the icon and not a word
+//
+// A copy that gives no sign it happened gets pressed three times. That sign
+// used to be the word "Copied" appearing further down the card, which said
+// exactly enough while there was one thing on the card to copy. There are two
+// now, and a word in a third place says that *something* was copied without
+// saying which. The glyph turning into a tick, in the button that was pressed,
+// says both — and it changes no widths, so nothing on the card moves under the
+// pointer that is still resting on it.
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    // Shown in place of `icon` for a moment after a press, or empty for a
+    // control whose effect is visible on its own. A copy has no visible effect
+    // — the clipboard is somewhere else — which is the whole reason this
+    // exists.
+    in property <string> confirm-icon;
+    // Required, and the reason this is not just an `Icon` in a `TouchArea`:
+    // the control carries no text, so this is the only thing a screen reader
+    // has to announce it with.
+    in property <string> label;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: R.sm;
+    background: touch.has-hover ? Theme.bg-hover : transparent;
+    animate background { duration: Motion.fast; enabled: Motion.enabled; }
+
+    property <bool> confirming: root.confirm-icon != "" && confirmed.running;
+
+    // Both the press paths and the keyboard one end here, so the confirmation
+    // cannot be attached to two of the three and forgotten on the third.
+    function press() {
+        root.clicked();
+        confirmed.running = root.confirm-icon != "";
+    }
+
+    Icon {
+        name: root.confirming ? root.confirm-icon : root.icon;
+        size: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tone: root.confirming ? Theme.accent : Theme.text-secondary;
+    }
+
+    confirmed := Timer {
+        interval: 1400ms;
+        running: false;
+        triggered => { self.running = false; }
+    }
+
+    // Declared before the touch area so that a pointer press still lands on
+    // the touch area: later siblings receive input first. The rule `Btn`
+    // states, followed here rather than restated.
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == "\n" || event.text == " ") {
+                root.press();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.press(); }
+    }
+
+    // Outside the control's own bounds, and only while the keyboard is
+    // driving. Drawn on the bounds it would sit on top of a 16px glyph in a
+    // 32px box and cover the picture that is the entire label.
+    if focus.has-focus && InputMode.keyboard: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: R.sm + 3px;
+        border-width: 2px;
+        border-color: Theme.accent-ring;
+    }
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.press(); }
+}
+
+// A transaction id, readable, with everything anybody wants to do to one.
 //
 // # Why this is a component
 //
@@ -692,140 +792,221 @@ export component ListRow inherits Rectangle {
 // stretched across the card, so a 64-character id broke after 63 and left a
 // single digit alone on the second line.
 //
-// The id is laid out in a monospace block at a width that fits **two even
-// halves of it**, which is how anybody actually reads a hash: in chunks, to
-// compare against another one. `Copy id` was already there and did work; it
-// simply did not look like the control it is.
+// The transaction sheet over Activity asked those two questions as well, in its
+// own hand-written third copy, and answered the second one differently: it
+// offered the link to copy and refused to open it, while these two offered to
+// open it and did not hand it over. That is issue #18, and the fix is not a
+// third arrangement — it is this component being the only one, used by all
+// three, so that "identical on both screens" is a fact about the tree rather
+// than a promise two files make separately.
+//
+// # The arrangement, and why this one
+//
+// Two boxes with the same shape, each holding a value somebody came here to
+// take away, each with the same copy icon at its right-hand end. Copying is
+// what the maintainer asked to be an icon and it is the right weight for it:
+// it is cheap, it is reversible, and it wants to be *beside its own value*
+// rather than in a row of buttons where the reader has to work out which one
+// acts on what. Two values, two icons, one convention.
+//
+// Opening is the one that gets words. It is not a second copy button and
+// should not look like one: it hands a transaction id to a third party this
+// wallet did not choose, over a network the person may not have wanted to use
+// for this, and a bare glyph would be an unlabelled control for the one action
+// on the card with a consequence outside the window. So it sits under the
+// link, in the accent colour, saying what it does.
+//
+// Which is also why the URL is on screen at all rather than hidden behind the
+// word "open". The sheet showed it and the send screens did not; keeping it is
+// the half of the sheet's old position that survives the decision to open as
+// well as copy. Somebody about to press "open" can see which host they are
+// about to tell, before they tell it, on every screen that offers it — and
+// issue #18 is right that this matters *more* on the send screens, where the
+// transaction is minutes old and its timing is the correlation worth avoiding.
+//
+// Nothing here is hover-revealed. Both icons and the link are drawn at rest.
+// A secondary action that appears under the pointer is a reasonable trade in a
+// dense list of rows and a bad one here: three controls on a card is not
+// density to protect, and hover-reveal would take from the keyboard and the
+// screen reader the discovery it buys the mouse.
+//
+// The Activity *rows* get nothing, for the same reason. The id came off those
+// rows deliberately — sixty-four hex characters elided to eight made every row
+// look like every other, and `activity.slint` records putting it in the sheet
+// instead — so hanging two icon buttons off each row would put the identity
+// chrome back on the list a previous change took it off, and give a row that
+// has one job three competing targets.
 export component TxId inherits VerticalLayout {
     in property <string> txid;
     // Where to look it up, or empty on a chain with no explorer this build
-    // knows about — in which case no button is offered rather than a dead one.
+    // knows about — in which case nothing about looking it up is offered
+    // rather than a dead box and a dead link.
     in property <string> explorer;
     callback open-link(string);
 
-    spacing: Sp.s3;
+    spacing: Sp.s5;
 
-    Eyebrow { text: @tr("TRANSACTION ID"); }
+    VerticalLayout {
+        spacing: Sp.s3;
+        Eyebrow { text: @tr("TRANSACTION ID"); }
 
-    Rectangle {
-        background: Theme.bg-inset;
-        border-radius: R.md;
-        border-width: 1px;
-        border-color: Theme.border-subtle;
-        // Its own content's height. See `Notice` for what happens without it.
-        height: idbody.preferred-height;
+        Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            // Its own content's height. See `Notice` for what happens without it.
+            height: idbody.preferred-height;
 
-        idbody := HorizontalLayout {
-            padding: Sp.s4;
-            spacing: Sp.s4;
+            idbody := HorizontalLayout {
+                padding: Sp.s4;
+                spacing: Sp.s4;
 
-            field := TextInput {
-                text: root.txid;
-                read-only: true;
-                horizontal-stretch: 1;
-                font-family: Typo.mono;
-                font-size: Typo.num-sm;
-                color: Theme.text-primary;
-                // By character, because a hash has no words in it and
-                // word-wrap leaves the whole thing on one overflowing line.
-                wrap: char-wrap;
-            }
-
-            // A button that looks like one. It was a `Btn` labelled "Copy id"
-            // below the card, which reads as an afterthought next to the id it
-            // acts on.
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                y: 0;
-                border-radius: R.sm;
-                background: copytouch.has-hover ? Theme.bg-hover : transparent;
-                animate background { duration: Motion.fast; enabled: Motion.enabled; }
-
-                Icon {
-                    name: "copy";
-                    size: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tone: copied.running ? Theme.accent : Theme.text-secondary;
+                field := TextInput {
+                    text: root.txid;
+                    read-only: true;
+                    horizontal-stretch: 1;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    color: Theme.text-primary;
+                    // By character, because a hash has no words in it and
+                    // word-wrap leaves the whole thing on one overflowing line.
+                    wrap: char-wrap;
+                    // A `TextInput` here only so the characters can be
+                    // selected; announcing it as a field to type in would be a
+                    // lie. Named because `tests/accessibility.rs` is right that
+                    // an unnamed one is announced as "text field" and nothing
+                    // else.
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: @tr("Transaction id");
+                    accessible-value: root.txid;
                 }
 
-                copytouch := TouchArea {
-                    mouse-cursor: pointer;
+                IconButton {
+                    y: 0;
+                    icon: "copy";
+                    confirm-icon: "check";
+                    label: @tr("Copy the transaction id");
                     clicked => {
                         field.select-all();
                         field.copy();
-                        // Said out loud, briefly. A copy that gives no sign it
-                        // happened gets pressed three times.
-                        copied.running = true;
                     }
-                }
-
-                accessible-role: button;
-                accessible-label: @tr("Copy the transaction id");
-                accessible-action-default => {
-                    field.select-all();
-                    field.copy();
-                    copied.running = true;
                 }
             }
         }
     }
 
-    copied := Timer {
-        interval: 1400ms;
-        running: false;
-        triggered => { self.running = false; }
-    }
+    if root.explorer != "": VerticalLayout {
+        spacing: Sp.s3;
+        Eyebrow { text: @tr("LOOK IT UP"); }
 
-    HorizontalLayout {
-        spacing: Sp.s4;
-        alignment: start;
+        Rectangle {
+            background: Theme.bg-inset;
+            border-radius: R.md;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            height: linkbody.preferred-height;
 
-        // Absent rather than disabled on a chain with no explorer: a control
-        // that cannot work is worse than one that is not offered.
-        //
+            linkbody := HorizontalLayout {
+                padding: Sp.s4;
+                spacing: Sp.s4;
+
+                link := TextInput {
+                    text: root.explorer;
+                    read-only: true;
+                    horizontal-stretch: 1;
+                    font-family: Typo.mono;
+                    font-size: Typo.num-sm;
+                    // Quieter than the id above it. The id is the fact; this
+                    // is one place that happens to know about it.
+                    color: Theme.text-secondary;
+                    wrap: char-wrap;
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: @tr("Link to this transaction in the block explorer");
+                    accessible-value: root.explorer;
+                }
+
+                IconButton {
+                    y: 0;
+                    icon: "copy";
+                    confirm-icon: "check";
+                    label: @tr("Copy the link to this transaction");
+                    clicked => {
+                        link.select-all();
+                        link.copy();
+                    }
+                }
+            }
+        }
+
         // Accent-coloured at rest, not on hover. It is a link, and a link that
         // only looks like one once the pointer is already on it has not helped
         // anybody find it.
-        if root.explorer != "": HorizontalLayout {
-            spacing: Sp.s2;
+        HorizontalLayout {
+            alignment: start;
 
-            Icon {
-                // Looking it up, not a market. `markets` is a trend arrow and
-                // reads as a price on a screen that has nothing to do with one.
-                name: "eye";
-                size: 13px;
-                y: (parent.height - self.height) / 2;
-                tone: Theme.accent;
+            // No hover fill behind it, unlike the copy buttons. A fill needs
+            // padding to look like anything, and padding is what pushed the eye
+            // four pixels right of the left edge every other thing in this
+            // component starts at — the eyebrow, both boxes, the id. A link
+            // that is already accent-coloured, already changes weight and
+            // already turns the cursor does not need a fifth signal badly
+            // enough to sit crooked for it.
+            Rectangle {
+                width: openrow.preferred-width;
+                height: openrow.preferred-height;
+
+                openrow := HorizontalLayout {
+                    spacing: Sp.s2;
+
+                    Icon {
+                        // Looking it up, not a market. `markets` is a trend
+                        // arrow and reads as a price on a screen that has
+                        // nothing to do with one.
+                        name: "eye";
+                        size: 13px;
+                        y: (parent.height - self.height) / 2;
+                        tone: Theme.accent;
+                    }
+
+                    Text {
+                        text: @tr("Open in the block explorer");
+                        font-size: Typo.caption;
+                        font-weight: opentouch.has-hover ? Typo.w-medium : Typo.w-regular;
+                        color: Theme.accent;
+                        vertical-alignment: center;
+                    }
+                }
+
+                openfocus := FocusScope {
+                    key-pressed(event) => {
+                        if (event.text == "\n" || event.text == " ") {
+                            root.open-link(root.explorer);
+                            return EventResult.accept;
+                        }
+                        return EventResult.reject;
+                    }
+                }
+
+                opentouch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-link(root.explorer); }
+                }
+
+                if openfocus.has-focus && InputMode.keyboard: Rectangle {
+                    x: -5px;
+                    y: -4px;
+                    width: parent.width + 10px;
+                    height: parent.height + 8px;
+                    border-radius: R.sm + 3px;
+                    border-width: 2px;
+                    border-color: Theme.accent-ring;
+                }
+
+                accessible-role: button;
+                accessible-label: @tr("Open this transaction in the block explorer");
+                accessible-action-default => { root.open-link(root.explorer); }
             }
-
-            Text {
-                text: @tr("Open in the block explorer");
-                font-size: Typo.caption;
-                font-weight: explorertouch.has-hover ? Typo.w-medium : Typo.w-regular;
-                color: Theme.accent;
-                vertical-alignment: center;
-            }
-
-            explorertouch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.open-link(root.explorer); }
-            }
-
-            accessible-role: button;
-            accessible-label: @tr("Open this transaction in the block explorer");
-            accessible-action-default => { root.open-link(root.explorer); }
-        }
-
-        // Beside the link, never instead of it. Swapping one for the other made
-        // the link vanish for a second and a half every time somebody pressed
-        // copy, which reads as the button having broken something.
-        if copied.running: Text {
-            text: @tr("Copied");
-            font-size: Typo.caption;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
         }
     }
 }

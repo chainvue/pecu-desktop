@@ -1813,6 +1813,15 @@ mod tests {
 /// this wallet opens is a fixed host and path with a hex transaction id in it,
 /// so the rule costs nothing and refuses the shapes that matter — a `cmd`
 /// metacharacter on Windows, a `file://` or `javascript:` scheme anywhere.
+///
+/// It carries more weight since #18 than it did when it was written. Opening a
+/// link used to be offered on the send and convert screens and refused on the
+/// transaction sheet, on the stated ground that a process spawn is one step
+/// from being a way to run something else; the sheet offers it now, so this is
+/// the whole of the answer to that ground rather than most of it. There is one
+/// place a URL leaves this application — [`open_in_browser`], reached only
+/// through the `open-link` callback — and it does not spawn anything this has
+/// not agreed to first.
 fn is_openable(url: &str) -> bool {
     url.starts_with("https://")
         && url.len() <= 512
