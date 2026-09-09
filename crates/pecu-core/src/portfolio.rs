@@ -435,8 +435,37 @@ fn merge(into: &mut BTreeMap<CurrencyId, Amount>, found: BTreeMap<CurrencyId, Am
 
 impl Reading {
     /// The dashboard's figures, formatted once, here.
-    pub fn portfolio(&self, native_ticker: &str) -> PortfolioVm {
+    ///
+    /// `shielded` is the shielded pool **as a completed scan found it**, and
+    /// `None` means no scan has produced one — a locked wallet, a key that can
+    /// have no shielded account, or an account nobody has looked in yet. It is
+    /// not a balance of zero, and this must not turn it into one.
+    ///
+    /// It is a parameter rather than a field on [`Reading`] because it is not
+    /// something a read of the chain brings back: [`read`] talks to a node
+    /// about transparent addresses, while the shielded figure comes from a
+    /// lightwalletd scan the actor already holds. Passing it in costs no
+    /// request — see `Wallet::scanned_shielded`, which reads what is in memory.
+    pub fn portfolio(&self, native_ticker: &str, shielded: Option<Amount>) -> PortfolioVm {
         let total = add(self.spendable, self.immature);
+
+        // What the ASSETS row claims, and it is deliberately not `total`.
+        //
+        // The headline says what a person can act on now, and #7 settled that
+        // the shielded pool stays out of it: it is read from a different server
+        // on a different schedule, and a figure that goes stale independently
+        // does not belong inside the one number the screen leads with.
+        //
+        // The list underneath answers a different question — "what do I hold,
+        // in this currency" — and there the fullest answer is the right one.
+        // Somebody reading their VRSCTEST row wants their VRSCTEST, not the
+        // part of it that happens to be public. The staleness argument is also
+        // weaker here: nobody reads a holdings list as a live figure.
+        //
+        // So the two numbers on one screen now legitimately differ, and the row
+        // carries a caption saying which of the two it is. Without the caption
+        // this would be a worse bug than the one it fixes.
+        let held = shielded.map_or(total, |pool| add(total, pool));
 
         let balance = BalanceVm {
             total_sats: sats(total),
@@ -460,9 +489,10 @@ impl Reading {
                 .native
                 .map_or_else(|| native_ticker.to_string(), i_address),
             name: native_ticker.to_string(),
-            amount_sats: sats(total),
-            amount_display: coins(total),
+            amount_sats: sats(held),
+            amount_display: coins(held),
             native: true,
+            counts_shielded: shielded.is_some(),
         }];
 
         // Tokens after the native currency, and only ones actually held. A row
@@ -485,6 +515,9 @@ impl Reading {
                 amount_sats: sats(*amount),
                 amount_display: coins(*amount),
                 native: false,
+                // There is one shielded pool and it holds the chain's own
+                // currency, so no token row can fold one in.
+                counts_shielded: false,
             });
         }
 

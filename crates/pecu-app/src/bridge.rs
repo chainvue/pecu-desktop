@@ -1271,6 +1271,12 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
             },
             currency_id: asset.currency_id.clone().into(),
             native: asset.native,
+            // Which of the two captions the row carries. Passed through rather
+            // than recomputed here from `shielded_funds`: the flag was decided
+            // beside the figure it describes, and a second opinion formed on
+            // this side of the boundary is how a caption ends up true about a
+            // number nobody is showing.
+            counts_shielded: asset.counts_shielded,
         })
         .collect();
     // Folded here rather than in the interface, for the same reason

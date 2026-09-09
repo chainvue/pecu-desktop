@@ -350,7 +350,39 @@ export component AssetsPanel inherits Card {
             glyph: asset.native ? "◆" : "◇";
             glyph-tone: asset.native ? Theme.accent : Theme.text-secondary;
             title: asset.name;
-            subtitle: asset.secondary;
+            // A token row puts its i-address here, because that is the part of
+            // it that cannot lie. The chain's own row has no such need — a
+            // chain does not want its id printed under its own name — and so
+            // that line sat empty on the one row whose figure is a total.
+            //
+            // # Why the row says what it counts
+            //
+            // This figure and the headline at the top of the same screen are
+            // no longer the same number: the headline is spendable and
+            // maturing, and this is those plus the shielded pool. Two totals
+            // on one screen that differ, with nothing saying why, is a worse
+            // bug than the omission that produced them — so the row states its
+            // own composition, the way the headline's columns each state
+            // theirs.
+            //
+            // Two wordings rather than a caption plus a footnote, because
+            // whether the pool is in there is a fact about *this* figure. An
+            // account nobody has scanned is not a zero, so the row does not
+            // add one and does not claim to have: `counts-shielded` is set
+            // from the same value the amount was built from, one line apart in
+            // `Reading::portfolio`, and the two cannot disagree.
+            //
+            // A formula rather than a sentence, and deliberately. This column
+            // is the narrowest of the three and shares a row with a monospace
+            // amount; "spendable, maturing and your shielded balance" wraps or
+            // elides, and an elided caption about what a number contains is
+            // worse than none. The words are the ones the headline's own
+            // columns already use.
+            subtitle: asset.native
+                ? (asset.counts-shielded
+                    ? @tr("spendable + maturing + shielded")
+                    : @tr("spendable + maturing"))
+                : asset.secondary;
             // A token row is the way to Convert; the chain's own row is not.
             // Converting coin is something Convert will happily do, but the
             // native row is here to say what is held, and a wallet whose every

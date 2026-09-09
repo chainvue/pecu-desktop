@@ -14,7 +14,13 @@
 //! after the figure. A rearrangement that left the two of them at opposite
 //! ends of the card would pass a test for presence, and fails this one.
 //!
-//! The second is the one state no reference image renders: money leaving. No
+//! The second is arithmetic. The ASSETS row for the chain's own currency is
+//! spendable, maturing and the shielded pool, which is deliberately not the
+//! figure the headline shows — and no PNG can say that the row's number is the
+//! headline's plus the private one printed between them. A row that quietly
+//! went back to copying the headline would re-record green.
+//!
+//! The third is the one state no reference image renders: money leaving. No
 //! fixture sets `pending`, and adding one would be an eleventh picture of a
 //! state nobody asked to see — so the column carrying the opposite sentence to
 //! its neighbours is checked here or nowhere.
@@ -41,6 +47,14 @@ const NOT_YET: &str = "not counted yet";
 
 /// Said of leaving money: the headline has already taken it off.
 const ALREADY_GONE: &str = "already deducted";
+
+/// What the ASSETS row for the chain's own currency counts, once a scan has
+/// found a shielded balance to fold in.
+const ROW_WITH_SHIELDED: &str = "spendable + maturing + shielded";
+
+/// …and what it counts when no scan has produced one. Not a claim that the
+/// pool is empty — a claim about this figure.
+const ROW_WITHOUT_SHIELDED: &str = "spendable + maturing";
 
 /// The shell, on screen rather than the unlock form.
 fn unlocked() -> AppWindow {
@@ -109,6 +123,84 @@ fn the_shielded_figure_is_never_shown_without_saying_it_is_outside_the_total() {
     assert!(
         said_beside(&ui, "2.5000 0000", OUTSIDE),
         "the shielded balance and the sentence putting it outside the total have come apart",
+    );
+    ui.hide().expect("hide");
+}
+
+/// The ASSETS row for the chain's own currency counts the shielded pool, and
+/// the two figures on this screen therefore differ.
+///
+/// # Why this is a test and not a screenshot
+///
+/// The pictures hold the wording and the layout, and re-recording them accepts
+/// whatever the window drew. What they cannot hold is the *arithmetic*: nothing
+/// in a PNG says that 12 484.92 is 12 482.42 plus the 2.50 printed above it, so
+/// a row that quietly went back to the headline's figure — or a caption that
+/// stayed while the figure moved — would re-record green.
+///
+/// So this asserts the relationship between three numbers on one screen and the
+/// adjacency of the sentence that explains it, which is the pairing
+/// `the_shielded_figure_is_never_shown_without_saying_it_is_outside_the_total`
+/// makes for the hero card, one card lower.
+#[test]
+fn the_native_asset_row_counts_the_shielded_pool_and_says_that_is_what_it_counts() {
+    let _turn = window_to_read();
+
+    let ui = dashboard(pecu_ui::fixtures::funded_with_shielded);
+
+    // The headline, unchanged by this: spendable plus maturing, with the
+    // shielded pool beside it rather than inside it.
+    assert!(
+        said(&ui, "12 482.4200 0000"),
+        "the headline total is not on screen, so this test is checking nothing",
+    );
+    assert!(
+        said(&ui, "2.5000 0000"),
+        "the shielded figure is not on screen, so there is nothing for the row to have added",
+    );
+    // And the row, which is those two plus the pool. Written as the sum it is
+    // rather than as a literal nobody can check: 12 482.42 + 2.50.
+    assert!(
+        said(&ui, "12 484.9200 0000"),
+        "the asset row is not showing spendable + maturing + shielded — it is either \
+         still a copy of the headline, or it is some fourth number",
+    );
+
+    // The caption is the last thing before the figure it describes. `ListRow`
+    // draws title, subtitle, then whatever was handed to it as a child, so a
+    // caption that had drifted onto another row — or onto the token row, whose
+    // subtitle is an i-address — does not land here.
+    assert!(
+        said_beside(&ui, ROW_WITH_SHIELDED, "12 484.9200 0000"),
+        "the asset row shows a figure the headline does not, with nothing beside it \
+         saying what it counts — two different totals on one screen and no explanation",
+    );
+    ui.hide().expect("hide");
+}
+
+/// …and a row with no scanned pool behind it does not claim to have counted one.
+///
+/// The other half, and the one that keeps the caption honest. An unscanned
+/// shielded account is not a balance of zero — `ShieldedFunds` exists to hold
+/// that distinction — so the row neither adds one nor says it did. The flag and
+/// the amount are set one line apart in `Reading::portfolio` for exactly this
+/// reason, and this is what would fail if they ever stopped being.
+#[test]
+fn a_row_with_no_scanned_pool_behind_it_does_not_say_it_counted_one() {
+    let _turn = window_to_read();
+
+    let ui = dashboard(pecu_ui::fixtures::funded);
+
+    // Nothing has been scanned here, so the row is the headline's own two
+    // figures and reads as the same number — which is correct, and is now a
+    // statement the row makes rather than a coincidence.
+    assert!(
+        said_beside(&ui, ROW_WITHOUT_SHIELDED, "12 482.4200 0000"),
+        "the asset row is not saying what it counts",
+    );
+    assert!(
+        !said(&ui, ROW_WITH_SHIELDED),
+        "the row is claiming to have counted a shielded pool nobody has looked in",
     );
     ui.hide().expect("hide");
 }

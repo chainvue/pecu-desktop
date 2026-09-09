@@ -1319,6 +1319,11 @@ pub fn funded(ui: &AppWindow) {
             secondary: SharedString::new(),
             currency_id: VRSCTEST.into(),
             native: true,
+            // No scan has happened in this wallet, so the row is the same two
+            // figures the headline is and says so. `funded_with_shielded`
+            // replaces the row rather than setting a flag on this one, because
+            // the flag and the amount are one statement.
+            counts_shielded: false,
         },
         AssetRow {
             name: "Bridge.vETH".into(),
@@ -1333,6 +1338,9 @@ pub fn funded(ui: &AppWindow) {
             currency_id: "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh".into(),
             amount: "48.5000 0000".into(),
             native: false,
+            // There is one shielded pool and it holds the chain's own currency,
+            // so no token row can ever have one folded in.
+            counts_shielded: false,
         },
     ]))));
 
@@ -1581,6 +1589,27 @@ pub fn funded_with_shielded(ui: &AppWindow) {
     // whether it found anything. A picture with only the first would show a
     // column the wallet does not draw.
     wallet.set_shielded_any(true);
+
+    // And the ASSETS row moves with it, which is the whole reason this picture
+    // is worth taking twice. The headline stays at 12 482.42 — spendable and
+    // maturing — while the row underneath reads 12 484.92, because a holdings
+    // list answers "what do I hold in this currency" and the private half of it
+    // is still held. The two figures differ on purpose and each says which it
+    // is: this is the image where a reviewer can check that they do.
+    //
+    // Edited in place rather than rebuilt, so the token row beside it stays
+    // exactly the one `funded` photographs.
+    wallet.get_assets().set_row_data(
+        0,
+        AssetRow {
+            name: "VRSCTEST".into(),
+            amount: "12 484.9200 0000".into(),
+            secondary: SharedString::new(),
+            currency_id: VRSCTEST.into(),
+            native: true,
+            counts_shielded: true,
+        },
+    );
 }
 
 pub fn shielding(ui: &AppWindow) {
