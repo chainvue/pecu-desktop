@@ -293,9 +293,63 @@ pub fn history(ui: &AppWindow) {
 
 /// The same list with one filter applied, which is the state the filters exist
 /// for and the one that shows what they do to a short list.
+///
+/// # The rows are filtered, not only the chip
+///
+/// This used to set `filter` and leave all six rows where they were, so the
+/// reference image showed "Payments" pressed above a login, a conversion and an
+/// identity update. **The wallet cannot reach that state.**
+/// `ActivityState.filter` is only the echo that keeps the pressed chip from
+/// waiting on a round trip — the list itself arrives already filtered, because
+/// `portfolio::rows_from` drops every row of another kind *before* the core
+/// sends it, and `ui/vm/state.slint` says why the filtering cannot live in
+/// `.slint` at all.
+///
+/// A picture of a screen the product cannot produce guards nothing: the test
+/// stays green through any change to the filter, because the image was never
+/// of the filter working. This is the same fault `markets_crowded` was fixed
+/// for — a fixture that left a selection in place and quietly stopped being the
+/// long-list case — and the reason the native menu bar was built, rendered and
+/// taken out again rather than photographed, `docs/LATER.md` §4d.
 pub fn history_filtered(ui: &AppWindow) {
     history(ui);
+    filter_history(ui, "payment");
     ui.global::<ActivityState>().set_filter("payment".into());
+}
+
+/// Keep only the history rows of one kind, which is what the core sends when a
+/// filter chip is pressed.
+///
+/// # The day headings are left alone
+///
+/// `rows_from` filters first and assigns headings second, to the first row of
+/// each day. Dropping the three non-payment rows empties exactly one day —
+/// yesterday, whose only row was the identity update — so its heading leaves
+/// with it, and every row that survives is one of today's, under the heading
+/// the first of them already carries. No surviving row gains or loses a day, so
+/// there is nothing to recompute here and recomputing it would mean teaching
+/// this crate a second copy of `calendar_day`.
+///
+/// Refusing loudly when nothing survives, on the same bargain [`when_note`]
+/// makes: this runs only while a reference image is being rendered, so a
+/// refusal is a failed render rather than anything a user can reach — and a
+/// filtered fixture that photographed an empty list would be a second picture
+/// of the empty state wearing the filter's name.
+fn filter_history(ui: &AppWindow, kind: &str) {
+    let wallet = ui.global::<WalletState>();
+    let rows = wallet.get_history();
+    let kept: Vec<ActivityRow> = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .filter(|row| row.kind == kind)
+        .collect();
+
+    assert!(
+        !kept.is_empty(),
+        "no history row is a {kind:?}, so filtering to it photographs the empty \
+         state rather than the filter",
+    );
+
+    wallet.set_history(ModelRc::from(Rc::new(VecModel::from(kept))));
 }
 
 /// The markets table, with nothing picked.
