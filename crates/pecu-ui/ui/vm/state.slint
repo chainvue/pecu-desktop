@@ -65,7 +65,13 @@ export global WalletState {
     // What to write next to an amount. From the node's own chain name, never
     // a default: a screen that labels testnet coins "VRSC" has stopped being
     // able to tell you which money you are looking at.
-    in property <string> ticker: "VRSC";
+    //
+    // Empty until the chain says otherwise, for the same reason `immature`
+    // below is empty rather than zero. A bare number is a wallet that has not
+    // been told which money this is; `"VRSC"` is a wallet asserting it, and
+    // before a node answers — cold start, no connection, a node that is down —
+    // that assertion is unfounded on four of the five chains this ships with.
+    in property <string> ticker: "";
     in property <string> total: "0.0000 0000";
     in property <string> spendable: "0.0000 0000";
     // Empty rather than a zero, because both readers of this treat "" as
@@ -689,7 +695,13 @@ export global ChartState {
     pure callback end-x-at(length, length) -> length;
     pure callback end-y-at(length, length) -> length;
     in property <bool> has-data: false;
-    in property <string> ticker: "VRSC";
+    // Empty, on the same rule as `WalletState.ticker`. Rust owns this — every
+    // path into it runs through `chart::refresh`, which copies the ticker the
+    // core sent with the readings — so the literal here is only what the
+    // hover label would say before any readings exist. `Chart::default()` on
+    // the Rust side is already the empty string; this now agrees with it
+    // rather than naming a chain nobody has asked about yet.
+    in property <string> ticker: "";
     // What moved across the window, and whether that is good news.
     in property <string> change: "";
     in property <string> change-tone: "neutral";

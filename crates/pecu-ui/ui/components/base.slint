@@ -411,7 +411,15 @@ export component Breadcrumb inherits HorizontalLayout {
 // not align in a column and the balance would visibly jitter as it counts up.
 export component Money inherits HorizontalLayout {
     in property <string> amount;
-    in property <string> currency: "VRSC";
+    // No default chain, for the reason `WalletState.ticker` gives at length.
+    // Thirteen of the eighteen call sites pass `WalletState.ticker`; the other
+    // five all set `show-currency: false`, so this literal was never drawn —
+    // but `accessible-label` below is not conditioned on `show-currency`, and
+    // it read those five amounts out as VRSC on every chain. That is the
+    // issue's own failure, heard rather than seen. The label now degrades to
+    // the bare amount, which is #15's subject on the Activity screen and is
+    // not fixed here.
+    in property <string> currency: "";
     // Announced as one thing. Two adjacent texts would otherwise be read as
     // two unrelated items, and an amount without its currency is not an
     // amount.
