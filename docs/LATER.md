@@ -58,7 +58,7 @@ called from one place — the Refresh button on the hidden screen — and
 empty by construction and the two things outside that screen which read it, the
 nav chip and Receive's "or by name" panel, draw nothing.
 
-That is 44 of the 150 reference images, over 22 screens and states, reachable
+That is 44 of the 154 reference images, over 22 screens and states, reachable
 from nowhere.
 
 **Why it is off, said properly rather than in five code comments.** It was
@@ -132,12 +132,12 @@ beforehand.
 **What the flip costs, so it is on the table before somebody starts.** It is
 not two booleans.
 
-- **134 of the 150 reference images move.** Every snapshot renders the whole
+- **138 of the 154 reference images move.** Every snapshot renders the whole
   window at 1240×800 with the rail expanded, and `visual.rs` compares pixels
   with a per-channel tolerance of 1 and a noise budget. Two new rail entries
   change the rail in every image that shows the shell, and only eight of the
-  seventy-five draw over it: the two onboarding states, the two locked states,
-  and the four backup steps, which take the whole window. So 67 names have to be
+  seventy-seven draw over it: the two onboarding states, the two locked states,
+  and the four backup steps, which take the whole window. So 69 names have to be
   re-recorded and re-reviewed. The 44 identity and currency images change twice
   over — they also gain a *selected* rail entry, which none of them has today
   (see `docs/shots/identities-light.png`: the Profile screen, with no Profile
@@ -153,19 +153,21 @@ not two booleans.
   define — and only the first goes back cheaply.
   - *Restoring the identities* is **three edits, a string and an assertion**:
     one loop in `palette_hits`, one arm in `wire_search`, the icon branch in
-    `overlay.slint` — which is binary today,
-    `hit.kind == "address" ? "send" : "currency"` — plus the placeholder, which
-    names the two kinds it searches, and
-    `the_palette_puts_addresses_above_currencies` in `lib.rs`, which pins the
-    kinds to exactly those two and goes red for anybody who did the other four.
-  - *Restoring the currencies you define* is that again and a **third kind**.
-    `"currency"` no longer means what it meant when the loop was deleted: it is
-    now a market hit, and `wire_search` routes it to the markets detail through
-    the i-address `OpenMarket` takes. A definition hit reusing that string would
-    open the wrong screen carrying the right label, and the row would look
-    correct in the list on the way there. So it needs a `kind` of its own, its
-    own icon branch, its own arm in `wire_search` — and the assertion becomes
-    three kinds rather than two.
+    `overlay.slint`, plus the palette's placeholder, which names the kinds it
+    searches, and `every_hit_names_a_screen_this_build_actually_offers` in
+    `lib.rs`, which pins the kinds to the ones this build can land on and goes
+    red for anybody who did the other four. `#11` added a `"transaction"` kind
+    by exactly that route, so the shape of the work is now in the history
+    rather than only described here — and the icon branch it describes as
+    binary is no longer binary.
+  - *Restoring the currencies you define* is that again and a **kind of its
+    own**. `"currency"` no longer means what it meant when the loop was
+    deleted: it is now a market hit, and `wire_search` routes it to the markets
+    detail through the i-address `OpenMarket` takes. A definition hit reusing
+    that string would open the wrong screen carrying the right label, and the
+    row would look correct in the list on the way there. So it needs a `kind`
+    of its own, its own icon branch, its own arm in `wire_search` — and the
+    assertion gains a fourth.
 - **The German catalogue is stale.** `crates/pecu-ui/translations/de/LC_MESSAGES/pecu-ui.po`
   has `Identities`; the rail label was renamed to `Profile`, which has no
   entry. A German window would show an English word the moment the rail shows

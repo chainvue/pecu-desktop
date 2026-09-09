@@ -5,7 +5,7 @@ import { Btn, EmptyState } from "base.slint";
 import { Icon } from "icons.slint";
 import { SearchState, ToastState } from "../vm/state.slint";
 import { Field } from "form.slint";
-import { NoticeBody, NoticeTitle } from "note.slint";
+import { NoteText, NoticeBody, NoticeTitle } from "note.slint";
 
 // The stack of things the wallet has said.
 //
@@ -17,31 +17,36 @@ import { NoticeBody, NoticeTitle } from "note.slint";
 //
 // # What it searches, and what it does not
 //
-// Addresses this wallet has paid or named, and currencies the markets read has
-// named — the two things it holds that have a name and an identifier, and whose
-// screens are both in the rail. It used to search identities as well; that
-// destination is hidden in this build, and a result nobody can get back from is
-// worse than no result. `Core::search` is where that is decided, and
-// `docs/LATER.md` §0b is the record of why.
+// Addresses this wallet has paid or named, currencies the markets read has
+// named, and the transactions already scanned into the wallet's own history —
+// three things it holds that have a name or an identifier, and whose screens
+// are all in the rail. It used to search identities as well; that destination
+// is hidden in this build, and a result nobody can get back from is worse than
+// no result. `Core::search` is where that is decided, and `docs/LATER.md` §0b
+// is the record of why.
 //
-// The icon below is binary — address or currency — so a third kind is an edit
-// here too, not only in the core. `Core::search` counts them.
+// The icon below branches on the kind, so a fourth kind is an edit here too,
+// not only in the core. `Core::search` counts them.
 //
 // **Not screens**: those are reachable with ⌘1–⌘6 and ⌘,, which this wallet
 // already has and the design's shortcut map also lists, and putting the
 // navigation into the core's search would mean the core knowing what the
 // interface is arranged into.
 //
-// Transaction ids are not searched. History is loaded per screen rather than
-// held, so answering for a txid means the core keeping an index it currently
-// has no reason to build.
-//
-// # There is no empty state
+// # There is no empty state, except the one the core supplies
 //
 // Because the interface cannot tell an empty result from an unanswered one, and
 // guessing wrong in either direction is worse than the silence: "nothing found"
 // under a query the core has not replied to yet is a lie that appears on every
 // keystroke.
+//
+// `SearchState.note` is the exception, and it is not a guess: the core sets it
+// only for a query it has answered, and only for the one query whose emptiness
+// is a fact rather than a stage of typing — a whole transaction id this wallet
+// does not hold. It is a `Note` rather than a string for the usual reason, and
+// there are two of them because a wallet that has read its history to the start
+// of the chain and a wallet still paging backwards are not in a position to say
+// the same thing.
 export component CommandPalette inherits Rectangle {
     callback dismissed();
 
@@ -75,7 +80,7 @@ export component CommandPalette inherits Rectangle {
 
             field := Field {
                 mono: true;
-                placeholder: @tr("Search · address, currency");
+                placeholder: @tr("Search · address, currency, transaction");
                 text <=> SearchState.query;
                 edited => { SearchState.search(SearchState.query); }
             }
@@ -94,7 +99,9 @@ export component CommandPalette inherits Rectangle {
                         spacing: Sp.s4;
 
                         Icon {
-                            name: hit.kind == "address" ? "send" : "currency";
+                            name: hit.kind == "address" ? "send"
+                                : hit.kind == "transaction" ? "history"
+                                : "currency";
                             size: 18px;
                             y: (parent.height - self.height) / 2;
                             tone: Theme.text-secondary;
@@ -134,6 +141,16 @@ export component CommandPalette inherits Rectangle {
                     accessible-label: @tr("{}, {}", hit.label, hit.kind);
                     accessible-action-default => { SearchState.pick(hit); root.dismissed(); }
                 }
+            }
+
+            // Under the field, where the rows would have been. Only ever the
+            // core's own sentence — see the note at the top of this component
+            // for why this is not an empty state.
+            if SearchState.note.code != "": NoteText {
+                note: SearchState.note;
+                wrap: word-wrap;
+                font-size: Typo.caption;
+                color: Theme.text-secondary;
             }
         }
     }

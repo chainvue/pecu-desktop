@@ -740,7 +740,11 @@ fn small(net: SignedAmount) -> bool {
 /// says this is an identifier at all — a bare `…2xhwfL` reads as the end of an
 /// address someone was paid at, which is what it looked like on a real screen.
 /// For a txid the head is what anybody actually recognises it by.
-fn short(id: &str) -> String {
+///
+/// `pub(crate)` because the command palette abbreviates a transaction id the
+/// same way the activity list does, and one rule for what an abbreviated
+/// identifier looks like is the whole reason this is a function.
+pub(crate) fn short(id: &str) -> String {
     let characters: Vec<char> = id.chars().collect();
     if characters.len() <= 12 {
         return id.to_string();

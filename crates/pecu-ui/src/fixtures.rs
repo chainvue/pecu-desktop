@@ -631,6 +631,46 @@ pub fn searching(ui: &AppWindow) {
     ]))));
 }
 
+/// The palette answering a transaction id.
+///
+/// The head of one, because that is the row worth photographing: it is the
+/// shape the panel gained — the abbreviated id over the whole one — and the
+/// only way to know that reads as a deliberate pair rather than a duplicated
+/// line is to look at it. The query is a prefix for the same reason the core
+/// accepts prefixes: sixty-four characters is what a clipboard holds, and the
+/// first eight is what a person can read off a receipt.
+pub fn searching_transaction(ui: &AppWindow) {
+    funded(ui);
+
+    let state = ui.global::<SearchState>();
+    state.set_open(true);
+    state.set_query(LANDED_TXID[..12].into());
+    state.set_hits(ModelRc::from(Rc::new(VecModel::from(vec![SearchHit {
+        kind: "transaction".into(),
+        label: "68320…8883".into(),
+        sub: LANDED_TXID.into(),
+        target: LANDED_TXID.into(),
+    }]))));
+}
+
+/// …and the palette refusing to pretend it did not understand the question.
+///
+/// A whole transaction id, no rows, and the sentence the core sends instead of
+/// silence. The longer of the two sentences on purpose — the one a wallet still
+/// paging its history backwards gets, which is most wallets — because it is the
+/// one that has to wrap inside the panel without pushing anything off it.
+pub fn searching_unknown_transaction(ui: &AppWindow) {
+    funded(ui);
+
+    let state = ui.global::<SearchState>();
+    state.set_open(true);
+    // Not `LANDED_TXID`: this is a well-formed id that this wallet has no row
+    // for, which is the entire subject of the picture.
+    state.set_query("9f2c41a0b7de5836419ca07d2b8e5f1043c96be27d4a08915fc3b6e2d7085a14".into());
+    state.set_hits(ModelRc::from(Rc::new(VecModel::from(Vec::<SearchHit>::new()))));
+    state.set_note(note("search-txid-unscanned", &[]));
+}
+
 /// A named reason, the way the core sends one.
 fn note(code: &str, args: &[&str]) -> Note {
     Note {

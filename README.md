@@ -72,7 +72,7 @@ formality:
 
 | Test | What it refuses to let happen |
 |---|---|
-| `pecu-ui/tests/visual.rs` | A layout change nobody looked at. Renders 75 screen states in both themes — 150 images — and compares them against checked-in references. |
+| `pecu-ui/tests/visual.rs` | A layout change nobody looked at. Renders 77 screen states in both themes — 154 images — and compares them against checked-in references. |
 | `pecu-ui/tests/accessibility.rs` | A control a screen reader announces as "button" and nothing else. |
 | `pecu-ui/tests/dependency_boundary.rs` | The interface crate gaining the ability to name a `PrivateKey`. |
 | `pecu-ui/tests/translation.rs` | "It is ready for translation" being false. |
