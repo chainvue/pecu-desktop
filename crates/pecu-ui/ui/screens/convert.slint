@@ -289,6 +289,19 @@ component ConvertForm inherits HorizontalLayout {
 export component ConvertScreen inherits VerticalLayout {
     spacing: Sp.s7;
 
+    // The node understood this conversion and said no.
+    //
+    // Named for the one code rather than for "there is a problem", and that is
+    // deliberate. Most of the dozen `convert-*` notes are refusals to *build*
+    // something — a bad recipient, a currency this wallet cannot identify, a
+    // price that moved below the floor — and they are reported before anything
+    // is signed, from a screen where offering the conversion again is the
+    // correct thing to do. This one is the network having rejected bytes that
+    // were already signed. Whether the others may go on re-offering the quote
+    // they were priced from is issue #19's wider question and is not answered
+    // here.
+    property <bool> refused-by-node: ConvertState.problem.code == "convert-refused-by-node";
+
     if ConvertState.step == "form": ConvertForm {}
 
     // ── Step 2: what was actually signed ────────────────────────────────
@@ -501,7 +514,8 @@ export component ConvertScreen inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
-                HorizontalLayout {
+                // The ordinary review: leave it, or send it.
+                if !root.refused-by-node: HorizontalLayout {
                     spacing: Sp.s4;
                     Btn {
                         text: @tr("Back");
@@ -514,6 +528,25 @@ export component ConvertScreen inherits VerticalLayout {
                         variant: "primary";
                         enabled: !ConvertState.busy;
                         clicked => { ConvertState.confirm(); }
+                    }
+                }
+
+                // After the node has refused it, the same row would put the
+                // refused broadcast back under the cursor as the brightest
+                // thing on the card. The figures above it were priced before
+                // the refusal, and a refusal usually means the reserves moved
+                // — so pressing it again is either a wasted round trip or a
+                // conversion at a price nobody on this screen has read.
+                //
+                // Back is the way to a fresh quote: it returns to the form
+                // with both currencies still in it, and the next quote is
+                // priced against the reserves as they are then.
+                if root.refused-by-node: HorizontalLayout {
+                    alignment: end;
+                    Btn {
+                        text: @tr("Back");
+                        variant: "primary";
+                        clicked => { ConvertState.cancel(); }
                     }
                 }
             }
