@@ -19,7 +19,10 @@
 #![cfg(feature = "mock")]
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use pecu_protocol::{Command, Event};
+use support::wait_for;
 
 /// The scripted chain's one identity a currency can be defined under.
 const LAUNCHABLE: &str = "maker.VRSCTEST@";
@@ -54,36 +57,24 @@ fn draft(name: &str) -> pecu_protocol::CurrencyDraft {
 /// A node has to have answered before anything can be built: a claim needs a
 /// spend permit, and a permit needs a node that has said which chain it is on.
 async fn wait_for_a_node(events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(Event::Network(vm)) if vm.effective.is_some() => break,
-                Some(_) => {}
-                None => panic!("the core stopped before a node answered"),
-            }
-        }
+    wait_for(events, "a node that says which chain it is on", |event| match event {
+        Event::Network(vm) if vm.effective.is_some() => Some(()),
+        _ => None,
     })
-    .await
-    .expect("a node answers within thirty seconds");
+    .await;
 }
 
 async fn wait_for_pending(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
     ready: impl Fn(Option<&pecu_protocol::LaunchPendingVm>) -> bool,
 ) -> pecu_protocol::LaunchPendingVm {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(Event::LaunchPending(pending)) if ready(pending.as_deref()) => {
-                    break pending.map(|boxed| *boxed).expect("a pending launch");
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before the launch was reported"),
-            }
+    wait_for(events, "a launch the caller recognises", |event| match event {
+        Event::LaunchPending(pending) if ready(pending.as_deref()) => {
+            Some(pending.map(|boxed| *boxed).expect("a pending launch"))
         }
+        _ => None,
     })
     .await
-    .expect("a pending launch is reported within thirty seconds")
 }
 
 /// The two facts a resumed launch needs before it can be built, neither of
@@ -122,20 +113,17 @@ async fn wait_for_the_identities_and_a_balance(
 ) {
     let mut listed = false;
     let mut funded = false;
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !listed || !funded {
-            match events.recv().await {
-                Some(Event::Identities { yours, .. }) => {
-                    listed = yours.iter().any(|row| row.name == LAUNCHABLE);
-                }
-                Some(Event::Portfolio(_)) => funded = true,
-                Some(_) => {}
-                None => panic!("the core stopped before the identities arrived"),
+    wait_for(events, "the identities and a balance", |event| {
+        match event {
+            Event::Identities { yours, .. } => {
+                listed = yours.iter().any(|row| row.name == LAUNCHABLE);
             }
+            Event::Portfolio(_) => funded = true,
+            _ => {}
         }
+        (listed && funded).then_some(())
     })
-    .await
-    .expect("the identities and the balance both arrive within thirty seconds");
+    .await;
 }
 
 /// The decision survives the process that made it.
@@ -269,24 +257,22 @@ async fn a_resumed_launch_is_signed_but_waits_for_a_press() {
     // launch is reported in the startup prologue, before any node has answered,
     // so a wait-for-the-node-first loop reads past it and then times out
     // waiting for something already sent.
-    let mut pending: Option<pecu_protocol::LaunchPendingVm> = None;
+    let mut found: Option<pecu_protocol::LaunchPendingVm> = None;
     let mut answered = false;
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while pending.is_none() || !answered {
-            match events.recv().await {
-                Some(Event::LaunchPending(Some(vm))) if vm.step == "ready" => {
-                    pending = Some(*vm);
-                }
-                Some(Event::Network(vm)) if vm.effective.is_some() => answered = true,
-                Some(_) => {}
-                None => panic!("the core stopped before it reported the launch"),
-            }
+    let pending = wait_for(&mut events, "the unfinished launch and a node", |event| {
+        match event {
+            Event::LaunchPending(Some(vm)) if vm.step == "ready" => found = Some(*vm),
+            Event::Network(vm) if vm.effective.is_some() => answered = true,
+            _ => {}
+        }
+        if answered {
+            found.take()
+        } else {
+            None
         }
     })
-    .await
-    .expect("the unfinished launch and a node both arrive within thirty seconds");
+    .await;
 
-    let pending = pending.expect("the loop only ends with one");
     assert!(
         pending.can_continue,
         "an identity that exists did not offer to have its currency defined",
@@ -296,6 +282,12 @@ async fn a_resumed_launch_is_signed_but_waits_for_a_press() {
     // Nothing has been signed yet. **This is the assertion that matters most in
     // this file**: opening an application is not consent to spend two hundred
     // coins, so the wallet waits here however long it takes.
+    //
+    // A clock, and one of the two #47 left as clocks. An assertion that
+    // something does *not* arrive has no state to wait on: there is no
+    // predicate that could end this early, and a slow machine can only make it
+    // weaker — never red. Two seconds is therefore a floor on how hard it
+    // looks, not a budget racing the work.
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
@@ -325,22 +317,16 @@ async fn a_resumed_launch_is_signed_but_waits_for_a_press() {
     // And now somebody presses it.
     dispatcher.send(Command::ResumeLaunch);
 
-    // Either outcome, so a refusal is reported as what it said rather than as
-    // thirty seconds of nothing.
-    let review = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(Event::LaunchPrepared(Some(review))) => break *review,
-                Some(Event::Notice(notice)) => {
-                    panic!("resuming was refused: {:?} — {}", notice.message, notice.detail)
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before the launch was built"),
-            }
+    // Either outcome, so a refusal is reported as what it said rather than as a
+    // wait that ended with nothing in it.
+    let review = wait_for(&mut events, "the resumed launch to be built", |event| match event {
+        Event::LaunchPrepared(Some(review)) => Some(*review),
+        Event::Notice(notice) => {
+            panic!("resuming was refused: {:?} — {}", notice.message, notice.detail)
         }
+        _ => None,
     })
-    .await
-    .expect("a resumed launch is built within thirty seconds");
+    .await;
 
     assert_eq!(review.name, "maker");
     assert!(
