@@ -215,12 +215,10 @@ pub enum Command {
     },
 
     // ── Network ─────────────────────────────────────────────────────────
+    //
+    // There is no `AddNode` and no `RemoveNode`. The list is what the build
+    // ships, one endpoint per chain, and `SelectNode` chooses among those.
     SelectNode(u32),
-    AddNode {
-        url: String,
-        label: String,
-    },
-    RemoveNode(u32),
     ProbeNodes,
     SetRequestedNetwork(String),
     /// Point the wallet at a lightwalletd for shielded notes, or clear it.

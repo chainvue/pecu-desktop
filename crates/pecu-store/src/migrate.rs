@@ -51,8 +51,28 @@ pub fn wallet(connection: &Connection, path: &Path) -> Result<(), StoreError> {
 
     if found < 2 {
         connection.execute_batch(
-            // Endpoints the user added. Durable, because nothing can work out
-            // again which node someone chose to trust.
+            // Endpoints the user added. **Nothing reads or writes this table
+            // any more** — user-added endpoints are not a feature of this build
+            // — and the step is still here because these migrations are
+            // append-only and this one shipped.
+            //
+            // Not dropped, and that is a decision rather than an oversight. A
+            // step 7 saying `DROP TABLE node` would delete URLs somebody
+            // deliberately configured, and it would raise `WALLET_VERSION`,
+            // which makes an older build refuse the file outright — so the
+            // deletion would also be the thing that stopped them going back to
+            // a build that could still see it. Rows already in here are simply
+            // never looked at: `Store` has no accessor for them, `Core::restore`
+            // no longer puts them in the running node list, and the
+            // `active_node_url` setting naming one of them fails to match a
+            // node and leaves the shipped endpoint active, which `restore`
+            // already handled and logs.
+            //
+            // The original reasoning for the shape follows, unchanged, because
+            // it is what the table on disk actually is:
+            //
+            // Durable, because nothing can work out again which node someone
+            // chose to trust.
             //
             // `AUTOINCREMENT` rather than a bare rowid: SQLite otherwise reuses
             // the highest id after a delete, and an id that comes back meaning
@@ -289,12 +309,17 @@ mod tests {
             .expect("the setting survived the migration");
         assert_eq!(kept, "15");
 
+        // Still created, still writable, and deliberately never read by this
+        // build — see the comment on step 2. The assertion is kept because the
+        // step is kept: an upgrader's rows have to survive arriving at the
+        // current version, or "we simply stop looking at it" would not be a
+        // true description of what happens to them.
         connection
             .execute(
                 "INSERT INTO node (label, url) VALUES ('n', 'https://a')",
                 [],
             )
-            .expect("the node table now exists");
+            .expect("the node table is still created, unread");
         connection
             .execute("INSERT INTO address_book (address) VALUES ('R…')", [])
             .expect("the address book now exists");

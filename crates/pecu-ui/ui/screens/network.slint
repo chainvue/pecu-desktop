@@ -233,25 +233,6 @@ export component NodesScreen inherits VerticalLayout {
                 }
               }
 
-              // What using a node of your own costs, said where the choice is.
-              //
-              // A wallet reading from an endpoint somebody added has its coins
-              // held against the shipped one before a payment is signed — which
-              // is the point of the guard, and it means the shipped endpoint is
-              // told the funding address on every send. The person paying for
-              // that is exactly the person who added their own node so as not
-              // to talk to it. This screen already says of the light server
-              // that nothing about which notes are yours is sent to it; the
-              // same standard requires saying this.
-              //
-              // Under the active row rather than as a banner, because it is
-              // only true while a node of your own is the one in use.
-              if !node.builtin && node.active: Text {
-                  text: @tr("While this node is in use, the endpoint that came with Pecu is asked whether the coins a payment spends exist. That means it is told which address is paying, once per payment. Payments are refused rather than sent unchecked if it cannot answer.");
-                  font-size: Typo.caption;
-                  color: Theme.text-tertiary;
-                  wrap: word-wrap;
-              }
             }
         }
     }
@@ -259,18 +240,19 @@ export component NodesScreen inherits VerticalLayout {
     // There was an "ADD A NODE" form here, and a Remove button on every row
     // somebody had added.
     //
-    // Both are gone while the shipped list is one endpoint per chain. A node is
-    // where this wallet reads balances and hands over signed transactions, so
-    // choosing one is a security decision — and the form asked for it in a text
-    // box, on a screen most people pass through once. What is offered now is
-    // what this build ships and has been checked against.
+    // Both were taken out of the way in by 908eac4, and the wallet behind them
+    // is now gone too: there is no `Command::AddNode`, no node table anybody
+    // reads, and no `NodeManager::add`. A node is where this wallet reads
+    // balances and hands over signed transactions, so choosing one is a
+    // security decision, and the form asked for it in a text box on a screen
+    // most people pass through once. What is offered is what this build ships
+    // and has been checked against.
     //
-    // The core still refuses to remove a built-in, and `Command::AddNode` still
-    // exists: nothing was taken out of the wallet, only out of the way in.
-    //
-    // If the form comes back, it owes the same sentence the active row above
-    // carries: adding a node means the shipped endpoint is asked about the
-    // funding address on every payment. That is the moment somebody is choosing
-    // it, and it is the moment to say what it costs.
+    // A sentence used to sit under the active row here saying what a node of
+    // your own costs — the shipped endpoint is told the funding address on
+    // every payment, because it is asked to corroborate the coins. It has gone
+    // with the state it described. Nothing corroborates anything now: see
+    // `pecu_chain::corroborate` and `docs/LATER.md` §14, which is the change
+    // that would bring both the check and a sentence like that one back.
     Rectangle { vertical-stretch: 1; }
 }

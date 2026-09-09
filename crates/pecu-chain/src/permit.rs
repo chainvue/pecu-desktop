@@ -90,12 +90,18 @@ pub enum SpendRefused {
     /// The primary offered coins whose absence from the second source is not
     /// explained by the two nodes being at different heights.
     ///
-    /// None of the five variants below is raised by [`evaluate`], and none can
+    /// None of the four variants below is raised by [`evaluate`], and none can
     /// be: answering these questions costs a network call, and the whole reason
     /// a [`SpendPermit`] is worth anything is that its only constructor does no
     /// I/O. So corroboration is a runtime check on the prepare/confirm path and
     /// these are carried here for their words, not because the permit covers
     /// them — see [`crate::corroborate`], which says the same at more length.
+    ///
+    /// **Nothing in the shipped application raises them today either.** They
+    /// are produced by `pecu_core::send::prepare` when it is handed a second
+    /// source, and since user-added endpoints were taken out there is no way
+    /// for the wallet to hand it one. The tests under `pecu-core/tests` are the
+    /// only callers left. `docs/LATER.md` §14 is what would change that.
     ///
     /// They are also **chain-independent**. Once corroboration has been
     /// required for a send, every way it can fail refuses on testnet exactly as
@@ -147,37 +153,16 @@ pub enum SpendRefused {
         tip: u32,
     },
 
-    /// Nothing exists that could hold the primary to anything.
-    ///
-    /// The narrow case: the active node is one the user added and the shipped
-    /// endpoint for this chain is itself answering about another chain, so
-    /// there is no configured endpoint whose answer would mean anything. The
-    /// remedy is the node list, and it is not "add a second node" — one is
-    /// already there.
-    #[error("nothing configured can corroborate what {primary} reports")]
-    NoSecondSource { primary: String },
-
     /// A second source exists and could not answer.
     ///
     /// A timeout, a dial failure, or a filtering proxy answering `-32601` to
-    /// `getaddressutxos`. Distinct from [`SpendRefused::NoSecondSource`]
-    /// because the sentences have opposite remedies: telling somebody to look
-    /// at their node list when the node list is fine sends them after the wrong
-    /// problem, which [`crate::corroborate`] argues at the site. It names the
-    /// **secondary**, not the primary, for the same reason.
+    /// `getaddressutxos`. It names the **secondary**, not the primary: a second
+    /// source that is configured and silent is a different problem from one
+    /// that is missing, and pointing somebody at their node list when the node
+    /// list is fine sends them after a problem they do not have.
     #[error("{secondary} could not be asked about these coins")]
     SecondSourceSilent { secondary: String },
 
-    /// The bytes on the review were built before the active node changed.
-    ///
-    /// Reached only at the broadcast gate: a failover, or somebody switching
-    /// endpoints, between pressing Review and pressing Send. The signed bytes
-    /// are not wrong, but nothing has held them against the node list as it is
-    /// now, and the only remedy is to build the payment again — which is why
-    /// this is the one refusal that discards the prepared transaction instead
-    /// of leaving it for a second press of the same button.
-    #[error("the active node changed after this payment was prepared")]
-    PreparedBeforeNodeChange,
 }
 
 /// Run every check and, if they all pass, mint a permit.

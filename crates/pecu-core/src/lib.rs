@@ -1756,8 +1756,6 @@ impl Core {
                     self.refresh();
                 }
             }
-            Command::AddNode { url, label } => self.add_node(&url, &label),
-            Command::RemoveNode(id) => self.remove_node(id),
             Command::Refresh(_) => {
                 self.refresh();
                 // Pressing Refresh on the markets screen has to re-read the
@@ -2274,17 +2272,17 @@ impl Core {
             })
             .collect();
 
-        // Endpoints the user configured, put back beside the built-ins. Their
-        // ids are offset so a shipped node and a saved one can never collide —
-        // see `user_node_id`.
-        for saved in store.nodes() {
-            self.nodes
-                .add(user_node_id(saved.id), &saved.label, &saved.url);
-        }
-
-        // And whichever of them was in use. Matched by URL, so a build that
-        // ships a new node ahead of the others cannot silently move someone
-        // onto a different chain.
+        // Whichever node was in use. Matched by URL, so a build that ships a
+        // new node ahead of the others cannot silently move someone onto a
+        // different chain.
+        //
+        // Endpoints the user configured used to be put back into the list here,
+        // ahead of this. They are not any more — the feature is gone, and the
+        // `node` table is left on disk unread. An upgrader whose saved URL
+        // names one of them therefore matches nothing, and the branch below
+        // says so and leaves the shipped endpoint active. That is the whole
+        // upgrade path, and it is deliberately the one that already existed for
+        // a node somebody had removed.
         if let Some(url) = store.setting("active_node_url") {
             if !url.is_empty() && !self.nodes.set_active_by_url(&url) {
                 // The endpoint it names is not configured any more. Whatever
@@ -2522,103 +2520,11 @@ impl Core {
         }
     }
 
-    // ── Endpoints the user configured ───────────────────────────────────────
-
-    /// Add an endpoint.
-    ///
-    /// Three refusals, in order, and each of them says something different:
-    /// a URL this wallet may not talk to, an endpoint that is already
-    /// configured, and a row that could not be written down. The last one
-    /// matters more than it looks — accepting a node the store refused would
-    /// leave the running list and the file disagreeing from that moment on,
-    /// and the disagreement would only surface after a restart.
-    fn add_node(&mut self, url: &str, label: &str) {
-        let url = url.trim();
-        let label = label.trim();
-
-        if url.is_empty() {
-            return;
-        }
-
-        // The SDK's own check: the scheme allowlist, and the refusal to send
-        // plaintext anywhere but loopback. No connection is opened, so this
-        // says the URL is one we may use — not that anything is listening.
-        if let Err(error) = pecu_chain::validate_url(url) {
-            self.notice("add_node", url_refusal_note(&error), &error);
-            return;
-        }
-
-        if self.nodes.has_url(url) {
-            self.notice_warning("add_node", NoteVm::plain("node-duplicate"), "");
-            return;
-        }
-
-        let Some(store) = &self.store else {
-            self.notice_warning("add_node", NoteVm::plain("node-store-unavailable"), "");
-            return;
-        };
-
-        // A node with no name of its own is named after its host, which is
-        // what someone would have typed anyway.
-        let label = if label.is_empty() {
-            host_of(url)
-        } else {
-            label.to_string()
-        };
-
-        let Some(row) = store.add_node(&label, url) else {
-            self.notice_warning("add_node", NoteVm::plain("node-not-saved"), "");
-            return;
-        };
-
-        self.nodes.add(user_node_id(row), &label, url);
-        tracing::info!(%label, %url, "a node was added");
-        self.emit_network();
-        // The one signal the form waits for. It does not clear itself on
-        // submit, so that a refused address is still there to be corrected.
-        self.notice_info("node_added", NoteVm::plain("node-added"));
-
-        // Ask it what it is straight away. An entry sitting at "unknown" until
-        // someone presses Probe reads as a node that did not work.
-        self.probe_one(user_node_id(row), url);
-    }
-
-    /// Remove an endpoint the user added.
-    ///
-    /// The running list decides whether this is allowed — it is the one that
-    /// knows which nodes are built in — so the file is only touched once the
-    /// removal has actually happened.
-    fn remove_node(&mut self, id: u32) {
-        let was_active = self.nodes.active().map(|node| node.id) == Some(id);
-
-        if !self.nodes.remove(id) {
-            return;
-        }
-
-        if let (Some(store), Some(row)) = (&self.store, stored_node_id(id)) {
-            store.remove_node(row);
-        }
-
-        if was_active {
-            // The client was built for the node that just went away.
-            self.chain = None;
-            self.remember_active_node();
-        }
-
-        tracing::info!(id, "a node was removed");
-        self.emit_network();
-
-        if was_active {
-            // Whatever inherited the active slot has never been asked anything.
-            self.refresh();
-        }
-    }
-
     /// Ask one node what it is.
     ///
     /// The same request as the tip poll, aimed at a specific node rather than
-    /// the active one — which is what a newly added endpoint needs, since it is
-    /// not active and the poller would never reach it.
+    /// the active one, which is what the Probe button on the node list needs:
+    /// a row that is not active is one the poller would never reach.
     fn probe_one(&mut self, id: u32, url: &str) {
         self.dispatch_probe(id, url, false);
     }
@@ -6748,24 +6654,12 @@ const SCAN_ATTEMPTS: u32 = 3;
             .cloned()
             .unwrap_or(pecu_chain::Network::Testnet);
 
-        // Which endpoint this send is held against, decided here on the actor
-        // because it is a question about the node list and nothing else. The
-        // client for it is built on the worker, where a network call belongs.
-        let second_url = match corroborating_source(&self.nodes, route) {
-            Ok(url) => url,
-            Err(refused) => {
-                self.refuse_send(refusal_note(&refused), &refused.to_string());
-                return;
-            }
-        };
-
         self.tickets += 1;
         let ticket = self.tickets;
         self.busy(TaskKind::PreparingSend, true);
 
         let job = SendJob {
             chain,
-            second_url,
             vault,
             label,
             draft,
@@ -6880,25 +6774,6 @@ const SCAN_ATTEMPTS: u32 = 3;
             .unwrap_or_default()
     }
 
-    /// Whether these bytes were built without a second node's word for the
-    /// coins they spend, on a node list where that is required.
-    ///
-    /// The same decision `prepare_send` made before dispatching, read again at
-    /// the moment of broadcast. It has to be the same decision or the two would
-    /// disagree the first time a node's status changed: a `Prepared` that was
-    /// correctly uncorroborated when it was built — the active node was a
-    /// built-in — must not be refused here.
-    ///
-    /// The two ways to reach a refusal have different remedies, so they are
-    /// different refusals. `Held` with nothing recorded can only mean the
-    /// active node changed under an open review, and building the payment again
-    /// fixes it. `Absent` means the shipped endpoint has since started
-    /// answering about another chain, and building again would refuse for the
-    /// same reason — so it gets the sentence that points at the node list.
-    fn uncorroborated(&self, prepared: &send::Prepared) -> Result<(), pecu_chain::SpendRefused> {
-        corroboration_missing(&self.nodes, prepared.route, &prepared.corroborated_by)
-    }
-
     /// Send. The one place in this application that writes to the chain.
     fn confirm_send(&mut self, ticket: u64) {
         let Some(prepared) = self.prepared.remove(&ticket) else {
@@ -6919,27 +6794,16 @@ const SCAN_ATTEMPTS: u32 = 3;
             }
         };
 
-        // Belt and braces. `send::prepare` already filtered the coins to the
-        // set a second node vouched for, so bytes that reach here are
-        // corroborated by construction — but this is the last line before the
-        // irreversible act, and the standard this codebase set for the permit
-        // is that the check lives where it cannot be skipped. What it catches
-        // is the gap between the two steps: a node coming online, or the user
-        // moving to an endpoint they added, between pressing Review and
-        // pressing Send. Rebuilding is the remedy, and refusing is what makes
-        // somebody rebuild.
-        if let Err(refused) = self.uncorroborated(&prepared) {
-            // Not put back, unlike every other refusal here. The others are
-            // states somebody can fix and press the same button again —
-            // spending switched off, a node still catching up — and rebuilding
-            // would pick different coins for no reason. This one is the
-            // opposite: the node list moved under these bytes, nothing has held
-            // them against it as it now stands, and the only remedy is to build
-            // the payment again. Leaving them on the review would leave a Send
-            // button that can only ever produce the same refusal.
-            self.notice("spend_refused", refusal_note(&refused), &refused);
-            return;
-        }
+        // There was a second corroboration check here, between the permit and
+        // the broadcast: bytes recorded as unchecked were refused if the node
+        // list had come to require a check since they were built. It has gone
+        // with the thing it re-read. No node list can require one any more —
+        // `send::prepare` is never handed a second source — so the check could
+        // only ever pass, and a gate that cannot refuse is a gate that stops
+        // being maintained while still reading as protection. `docs/LATER.md`
+        // §14 is where it comes back, and it has to come back at both ends: the
+        // decision before the build and this one before the broadcast, or the
+        // two drift.
 
         let Some(chain) = self.chain() else {
             self.prepared.insert(ticket, prepared);
@@ -7490,16 +7354,13 @@ fn convert_note(error: &convert::ConvertError) -> NoteVm {
 
 /// Everything the send worker is handed, in one piece.
 ///
-/// A struct rather than eleven parameters, and not only to keep clippy quiet:
+/// A struct rather than ten parameters, and not only to keep clippy quiet:
 /// this is exactly the set the dispatch closure was already capturing, and
 /// naming it once is what lets the build live outside `prepare_send` — where it
-/// can dial a second endpoint and route between four builders without that
-/// function turning into the whole send path.
+/// can route between four builders without that function turning into the whole
+/// send path.
 struct SendJob {
     chain: Arc<Chain>,
-    /// The endpoint this send is held against, decided on the actor by
-    /// [`corroborating_source`]. `None` when nothing needs holding.
-    second_url: Option<String>,
     vault: Arc<pecu_keystore::Vault>,
     label: String,
     draft: pecu_protocol::SendDraft,
@@ -7513,18 +7374,24 @@ struct SendJob {
 
 /// Build and sign, off the actor.
 ///
-/// The second endpoint is dialled here rather than on the actor, because that
-/// is a network call. Failing to dial one the node list already holds is a
-/// refusal and not a quiet fall back to spending unchecked: the actor only
-/// asked for a second source because it had decided one was required, and
-/// substituting silence for corroboration is exactly what makes a guard
-/// decorative.
+/// # Every send from here is built on one node's word
+///
+/// `send::prepare` and `send::prepare_shield` both take a second endpoint to
+/// hold the funding node's coins against, and this passes `None` to both,
+/// always. It is the only caller in the application, so that is the whole
+/// story: **nothing this wallet signs is corroborated.**
+///
+/// Not an oversight and not a regression in the builders. A second source was
+/// only ever available when the active node was one the user added, and adding
+/// one is not a thing this build can do. The comparison rule itself is intact
+/// and still exercised — see [`pecu_chain::corroborate`] and
+/// `pecu-core/tests/send_corroboration.rs`, which drive these same two
+/// functions with a second source — and `docs/LATER.md` §14 is the change that
+/// gives the application one to pass.
 fn build_on_worker(job: SendJob) -> Result<send::Prepared, send::SendError> {
-    let dialled = second_source(job.second_url.as_deref())?;
-    let second = dialled.as_ref().map(|chain| send::Corroborator {
-        chain,
-        url: job.second_url.as_deref().unwrap_or_default(),
-    });
+    // Spelled out rather than written `None` at each call site, so that the one
+    // fact worth noticing here is stated once and in one place.
+    let second: Option<send::Corroborator<'static>> = None;
 
     match (job.route, job.located, job.plan) {
         (pecu_protocol::Route::Transparent, _, _) => send::prepare(
@@ -7570,131 +7437,21 @@ fn build_on_worker(job: SendJob) -> Result<send::Prepared, send::SendError> {
     }
 }
 
-/// Dial the second source on the worker, if there is one.
-///
-/// A separate function because the client for the second endpoint has to be
-/// built off the actor and has to live exactly as long as the build does — see
-/// the note on `Core::chain`, which caches one client per active URL and
-/// invalidates it on a node change. A second cache would need a second
-/// invalidation; a client built per send needs none.
-///
-/// It gets `Chain::second_source` rather than `Chain::live`, which is the
-/// shorter of the two timeouts. The reason is the key rather than the wait: a
-/// send holds a decrypted key open, and how long somebody else's endpoint takes
-/// to answer is not something they get to decide.
-///
-/// A URL that reached the node list already passed `validate_url`, so failing
-/// to dial it means something odd — and the answer is still a refusal rather
-/// than a quiet fall back to spending uncorroborated. It names the endpoint
-/// that would not answer, because "add a second node" is the wrong instruction
-/// for a second node that is already there.
-fn second_source(url: Option<&str>) -> Result<Option<Chain>, send::SendError> {
-    let Some(url) = url else {
-        return Ok(None);
-    };
-    match Chain::second_source(url) {
-        Ok(chain) => Ok(Some(chain)),
-        Err(error) => {
-            tracing::warn!(%url, %error, "the second source could not be dialled");
-            Err(send::SendError::Refused(
-                pecu_chain::SpendRefused::SecondSourceSilent {
-                    secondary: url.to_string(),
-                },
-            ))
-        }
-    }
-}
-
-/// Which endpoint a send on `route` must be held against, or the refusal.
-///
-/// Free of `Core` on purpose: it is a decision about the node list and the
-/// route and nothing else, and it is the one function in this change that can
-/// stop a spend on a real-money chain. Keeping it out of the actor is what lets
-/// it be tested against a node list rather than against a running wallet.
-///
-/// # Which routes ask
-///
-/// The ones that spend **transparent coins**: a transparent payment and a `t→z`
-/// shield. Not the route's name — what the transaction spends. A shield has no
-/// input notes and no anchor; `shield::plan` funds it from `getaddressutxos` at
-/// the transparent address, which is the set this check exists to hold to
-/// account, so gating on `Route::Transparent` alone would have left the attack
-/// open behind one character in the recipient field. `z→z` and `z→t` really do
-/// have nothing to ask — their inputs are notes, witnesses and an anchor from
-/// one lightwalletd — and `pecu_chain::corroborate` says so out loud rather
-/// than letting the transparent guard read as covering them.
-fn corroborating_source(
-    nodes: &NodeManager,
-    route: pecu_protocol::Route,
-) -> Result<Option<String>, pecu_chain::SpendRefused> {
-    if !spends_transparent_coins(route) {
-        return Ok(None);
-    }
-
-    match nodes.second_source() {
-        pecu_chain::SecondSource::Held(node) => Ok(Some(node.url.clone())),
-        // The active node is one the user added and the shipped endpoint for
-        // this chain is itself answering about another chain, so nothing
-        // configured could hold the primary to anything.
-        //
-        // Refused on **every** chain, testnet included, and that is a
-        // deliberate departure from where `may_be_real_money` is drawn
-        // elsewhere in this wallet. That line is justified by VRSCTEST coins
-        // coming out of a faucet — which reasons from the very fact under
-        // attack. The endpoint asking to be trusted here is one serving
-        // *mainnet* outputs to a wallet that believes it is on testnet; the
-        // coins at risk are worth what mainnet says they are worth, and the
-        // chain the wallet was set to says nothing about them. Letting a
-        // testnet setting authorise an unchecked spend would be taking the
-        // attacker's own premise as the reason not to check.
-        pecu_chain::SecondSource::Absent => Err(pecu_chain::SpendRefused::NoSecondSource {
-            primary: nodes.active_url().unwrap_or_default().to_string(),
-        }),
-        // The active node is one this build shipped, so there is nothing
-        // independent to hold it to and refusing would brick a default install.
-        // `second_source` is where that is argued, along with what it costs: a
-        // compromised built-in is corroborated by nothing.
-        pecu_chain::SecondSource::Unheld => Ok(None),
-    }
-}
-
-/// Whether bytes recorded as checked by `corroborated_by` still satisfy the
-/// node list as it stands now.
-///
-/// The companion to [`corroborating_source`], and deliberately the same
-/// decision: the two would disagree the first time a node's status changed if
-/// either grew a rule the other did not have.
-fn corroboration_missing(
-    nodes: &NodeManager,
-    route: pecu_protocol::Route,
-    corroborated_by: &str,
-) -> Result<(), pecu_chain::SpendRefused> {
-    if !spends_transparent_coins(route) || !corroborated_by.is_empty() {
-        return Ok(());
-    }
-
-    match nodes.second_source() {
-        pecu_chain::SecondSource::Unheld => Ok(()),
-        pecu_chain::SecondSource::Held(_) => Err(pecu_chain::SpendRefused::PreparedBeforeNodeChange),
-        pecu_chain::SecondSource::Absent => Err(pecu_chain::SpendRefused::NoSecondSource {
-            primary: nodes.active_url().unwrap_or_default().to_string(),
-        }),
-    }
-}
-
-/// Whether a route funds itself from this wallet's transparent coins.
-///
-/// The question corroboration turns on, and it is not the route's name. A `t→z`
-/// shield has no input notes: it is funded from `getaddressutxos` at the
-/// transparent address, exactly like a transparent payment, so it is checked
-/// exactly like one. Only `z→z` and `z→t` spend notes, and those have no second
-/// source of any kind — see `pecu_chain::corroborate`.
-fn spends_transparent_coins(route: pecu_protocol::Route) -> bool {
-    match route {
-        pecu_protocol::Route::Transparent | pecu_protocol::Route::Shield => true,
-        pecu_protocol::Route::Private | pecu_protocol::Route::Unshield => false,
-    }
-}
+// There were four functions here, and together they were the whole of the
+// wallet's side of corroboration.
+//
+// `corroborating_source` decided, from the node list, which endpoint a send had
+// to be held against; `corroboration_missing` asked the same question again at
+// the broadcast gate; `second_source` dialled the answer on the worker; and
+// `spends_transparent_coins` said which routes had to ask. All four turned on
+// `NodeManager::second_source`, whose only interesting answer required the
+// active node to be one the user added.
+//
+// With user-added endpoints gone, the first two could only ever answer "nothing
+// to hold this to", the third was only ever called with `None`, and the fourth
+// had nobody left to ask it. So the send path now hands `send::prepare` no
+// second source, on every route, on every chain. `build_on_worker` says so at
+// the site, and `docs/LATER.md` §14 is the entry that would undo it.
 
 /// What the send screen says when the spending guard refuses.
 fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
@@ -7777,10 +7534,6 @@ fn refusal_note(refused: &pecu_chain::SpendRefused) -> NoteVm {
         SpendRefused::SecondSourceSilent { secondary } => {
             NoteVm::with("spend-second-source-silent", [secondary.clone()])
         }
-        SpendRefused::NoSecondSource { primary } => {
-            NoteVm::with("spend-no-second-source", [primary.clone()])
-        }
-        SpendRefused::PreparedBeforeNodeChange => NoteVm::plain("spend-node-changed"),
     }
 }
 
@@ -7834,17 +7587,20 @@ fn resolution_pending(ledger: &pending::Ledger) -> bool {
 /// chain as degraded rather than online. That is what makes switching
 /// automatically safe at all.
 ///
-/// # A built-in first, for the same reason `second_source` prefers one
+/// # A built-in first, and it no longer changes anything
 ///
-/// This used to take the first online node it found, which is a reasonable
-/// rule for "find something that answers" and a bad one now that the wallet
-/// also uses the node list to decide what checks what. Somebody who was talked
-/// into adding one endpoint can be talked into adding two, and failing over
-/// from a built-in onto the first of those would move a wallet from the
-/// arrangement that needs no corroboration to the one that does — silently,
-/// and while a review may be open. Preferring the shipped endpoint means an
-/// automatic move is either onto it or onto something already being held
-/// against it.
+/// This used to take the first online node it found, and was changed to prefer
+/// a built-in because the node list had come to decide what checked what: a
+/// failover from a built-in onto an endpoint somebody had been talked into
+/// adding would have moved a wallet between the corroborated and uncorroborated
+/// arrangements silently, possibly while a review was open.
+///
+/// Neither arrangement exists now, and every node in the list is a built-in, so
+/// the preference is a tautology. It is kept rather than simplified back to
+/// "first online": it costs nothing, it is the correct rule the moment
+/// `docs/LATER.md` §14 puts a second endpoint of a different provenance in the
+/// list, and "take the first thing that answers" is the rule that was wrong
+/// before and would be wrong again.
 fn failover_target(nodes: &NodeManager) -> Option<u32> {
     let active = nodes.active()?;
     if active.consecutive_failures < FAILURES_BEFORE_FAILOVER {
@@ -7862,54 +7618,6 @@ fn failover_target(nodes: &NodeManager) -> Option<u32> {
         .find(|node| node.builtin)
         .or_else(|| candidates().next())
         .map(|node| node.id)
-}
-
-/// Where the ids of user-added nodes start.
-///
-/// The built-ins are numbered from zero by their position in a compiled-in
-/// list; the saved ones are numbered by SQLite, also from one. Without a gap
-/// the two schemes would collide on the second node ever added, and the
-/// collision would look like the wrong endpoint being selected rather than like
-/// a numbering bug. A thousand is far more built-in nodes than this will ever
-/// ship, and the arithmetic is exact in both directions.
-const USER_NODE_ID_BASE: u32 = 1000;
-
-/// A stored row id as it is numbered in the running list.
-fn user_node_id(row: i64) -> u32 {
-    USER_NODE_ID_BASE.saturating_add(u32::try_from(row).unwrap_or(0))
-}
-
-/// The stored row a running id refers to, or `None` for a built-in.
-fn stored_node_id(id: u32) -> Option<i64> {
-    id.checked_sub(USER_NODE_ID_BASE).map(i64::from)
-}
-
-/// What the network screen says when a URL is refused before anything is sent.
-///
-/// The plaintext case gets its own sentence because it is the one that sounds
-/// like the wallet being difficult, and it is not: it is the one refusal that
-/// prevents every address in this wallet from being readable by whoever is on
-/// the path between here and that node.
-fn url_refusal_note(error: &verus_sdk::network::RpcError) -> NoteVm {
-    use verus_sdk::network::RpcError;
-
-    match error {
-        RpcError::InsecureUrl { .. } => NoteVm::plain("node-url-insecure"),
-        _ => NoteVm::plain("node-url-unusable"),
-    }
-}
-
-/// The host of a URL, for a node the user did not name.
-///
-/// Best-effort and deliberately so: this only produces a label. Anything it
-/// cannot parse falls back to the URL itself, which is at least true.
-fn host_of(url: &str) -> String {
-    url.split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .filter(|host| !host.is_empty())
-        .unwrap_or(url)
-        .to_string()
 }
 
 fn to_node_vm(node: &Node) -> NodeVm {
@@ -9585,224 +9293,19 @@ mod tests {
         );
     }
 
-    /// Wait for a network event the caller is interested in, ignoring the rest.
-    /// Bounded, so a test that will never see what it wants fails rather than
-    /// hanging the suite.
-    async fn network_until(
-        events: &mut mpsc::UnboundedReceiver<Event>,
-        want: impl Fn(&NetworkVm) -> bool,
-    ) -> NetworkVm {
-        for _ in 0..40 {
-            let vm = next_network(events).await;
-            if want(&vm) {
-                return vm;
-            }
-        }
-        panic!("the core never reported the network state this test was waiting for");
-    }
-
-    /// The whole point of writing a node down: it is still there next time.
-    #[tokio::test]
-    async fn a_user_added_node_is_remembered_across_a_restart() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let handle = tokio::runtime::Handle::current();
-
-        let config = || Config {
-            nodes: testnet_nodes(),
-            network: Network::Testnet,
-            mock: false,
-            home: dir.path().to_path_buf(),
-        };
-
-        {
-            let (dispatcher, mut events) = start(&handle, config());
-            let _ = next_network(&mut events).await;
-
-            dispatcher.send(Command::AddNode {
-                url: "https://my-node.invalid".to_string(),
-                label: "mine".to_string(),
-            });
-
-            let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
-            let added = vm
-                .nodes
-                .iter()
-                .find(|node| node.url == "https://my-node.invalid")
-                .expect("the added node");
-            assert_eq!(added.label, "mine");
-            assert!(!added.builtin, "a user-added node claimed to be built in");
-
-            // Selecting it is a choice, and choices are written down too.
-            dispatcher.send(Command::SelectNode(added.id));
-            let vm = network_until(&mut events, |vm| vm.active_node == Some(added.id)).await;
-            assert_eq!(vm.active_node, Some(added.id));
-
-            dispatcher.send(Command::Shutdown);
-        }
-
-        // A second run, with the same built-ins and the same directory.
-        let (_dispatcher, mut events) = start(&handle, config());
-        let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
-
-        let restored = vm
-            .nodes
-            .iter()
-            .find(|node| node.url == "https://my-node.invalid")
-            .expect("the node survived the restart");
-        assert_eq!(restored.label, "mine");
-        // The active node is remembered by URL, so it comes back even though
-        // its id is assigned afresh each run.
-        assert_eq!(vm.active_node, Some(restored.id));
-    }
-
-    /// The refusal that matters: plaintext to anything but loopback would put
-    /// every address this wallet asks about in front of whoever is on the path.
-    #[tokio::test]
-    async fn a_url_that_would_leak_in_transit_is_refused_and_not_saved() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let handle = tokio::runtime::Handle::current();
-
-        let (dispatcher, mut events) = start(
-            &handle,
-            Config {
-                nodes: testnet_nodes(),
-                network: Network::Testnet,
-                mock: false,
-                home: dir.path().to_path_buf(),
-            },
-        );
-        let _ = next_network(&mut events).await;
-
-        dispatcher.send(Command::AddNode {
-            url: "http://my-node.invalid".to_string(),
-            label: "mine".to_string(),
-        });
-
-        let notice = loop {
-            match events.recv().await {
-                Some(Event::Notice(notice)) => break notice,
-                Some(_) => {}
-                None => panic!("the core stopped before refusing"),
-            }
-        };
-        assert_eq!(notice.code, "add_node");
-        assert_eq!(
-            notice.message.code, "node-url-insecure",
-            "{:?}",
-            notice.message
-        );
-
-        // And nothing was written down, so a restart does not resurrect it.
-        let store = pecu_store::Store::open(&chain_dir(&dir)).expect("store");
-        assert!(store.nodes().is_empty(), "a refused node was saved anyway");
-    }
-
-    /// A duplicate would probe identically and could never disagree about
-    /// anything, which makes choosing between the two entries meaningless.
-    #[tokio::test]
-    async fn an_endpoint_that_is_already_configured_is_refused() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let handle = tokio::runtime::Handle::current();
-
-        let (dispatcher, mut events) = start(
-            &handle,
-            Config {
-                nodes: testnet_nodes(),
-                network: Network::Testnet,
-                mock: false,
-                home: dir.path().to_path_buf(),
-            },
-        );
-        let _ = next_network(&mut events).await;
-
-        // `testnet_nodes` ships exactly this endpoint.
-        dispatcher.send(Command::AddNode {
-            url: "https://example.invalid/".to_string(),
-            label: "again".to_string(),
-        });
-
-        let notice = loop {
-            match events.recv().await {
-                Some(Event::Notice(notice)) => break notice,
-                Some(_) => {}
-                None => panic!("the core stopped before refusing"),
-            }
-        };
-        assert_eq!(notice.code, "add_node");
-        assert_eq!(
-            notice.message.code, "node-duplicate",
-            "{:?}",
-            notice.message
-        );
-    }
-
-    /// Removing whichever node is in use must not leave the wallet pointed at
-    /// an endpoint that is no longer configured.
-    #[tokio::test]
-    async fn removing_the_active_node_falls_back_to_one_that_is_left() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let handle = tokio::runtime::Handle::current();
-
-        let (dispatcher, mut events) = start(
-            &handle,
-            Config {
-                nodes: testnet_nodes(),
-                network: Network::Testnet,
-                mock: false,
-                home: dir.path().to_path_buf(),
-            },
-        );
-        let _ = next_network(&mut events).await;
-
-        dispatcher.send(Command::AddNode {
-            url: "https://my-node.invalid".to_string(),
-            label: "mine".to_string(),
-        });
-        let vm = network_until(&mut events, |vm| vm.nodes.len() == 2).await;
-        let added = vm
-            .nodes
-            .iter()
-            .find(|node| !node.builtin)
-            .expect("the added node")
-            .id;
-
-        dispatcher.send(Command::SelectNode(added));
-        let _ = network_until(&mut events, |vm| vm.active_node == Some(added)).await;
-
-        dispatcher.send(Command::RemoveNode(added));
-        let vm = network_until(&mut events, |vm| vm.nodes.len() == 1).await;
-
-        assert_eq!(vm.active_node, Some(0), "the wallet was left with no node");
-
-        // Gone from the file too, so it does not come back at the next start.
-        let store = pecu_store::Store::open(&chain_dir(&dir)).expect("store");
-        assert!(store.nodes().is_empty());
-    }
-
-    /// A built-in comes from the build. "Removing" one would last until the
-    /// next start and then quietly undo itself.
-    #[tokio::test]
-    async fn a_builtin_node_cannot_be_removed() {
-        let handle = tokio::runtime::Handle::current();
-        let (dispatcher, mut events) = start(
-            &handle,
-            Config {
-                nodes: testnet_nodes(),
-                network: Network::Testnet,
-                mock: false,
-                home: std::path::PathBuf::from("/nonexistent"),
-            },
-        );
-        let _ = next_network(&mut events).await;
-
-        dispatcher.send(Command::RemoveNode(0));
-        // Nothing to wait for, so ask a question whose answer has to come after
-        // the removal was handled — commands are processed in order.
-        dispatcher.send(Command::SelectNode(0));
-
-        let vm = next_network(&mut events).await;
-        assert_eq!(vm.nodes.len(), 1, "a built-in node was removed");
-    }
+    // There were five tests here about adding and removing endpoints: that a
+    // node somebody added came back after a restart, that a plaintext URL was
+    // refused and not saved, that a duplicate was refused, that removing the
+    // active node fell back to one that was left, and that a built-in could not
+    // be removed at all.
+    //
+    // All five are retired with the feature. The last of them — a built-in
+    // cannot be removed — is the only one whose guarantee is still worth
+    // anything, and it is now structural rather than tested: `NodeManager` has
+    // no `remove`, and `Command` has no `RemoveNode`, so there is no call to
+    // make. The URL check they exercised, `pecu_chain::validate_url`, is still
+    // covered by `a_url_that_would_leak_in_transit_is_refused` in
+    // `pecu-chain/src/node.rs`, which is where it lives.
 
     /// Wait for the next `Event::Wallet`, ignoring anything else.
     async fn next_wallet(events: &mut mpsc::UnboundedReceiver<Event>) -> pecu_protocol::WalletVm {
@@ -9910,53 +9413,16 @@ mod tests {
         dispatcher.send(Command::Shutdown);
     }
 
-    /// A saved endpoint belongs to the chain it was saved on.
-    ///
-    /// Without the reset, the list accumulates: a node added for testnet stays
-    /// when the wallet moves to mainnet, offering an endpoint the read guard
-    /// will then refuse — which reads as a broken wallet rather than as a node
-    /// on the wrong chain.
-    #[tokio::test]
-    async fn saved_nodes_do_not_follow_the_wallet_to_another_chain() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let handle = tokio::runtime::Handle::current();
-        let (dispatcher, mut events) = start(
-            &handle,
-            Config {
-                nodes: testnet_nodes(),
-                network: Network::Testnet,
-                mock: false,
-                home: dir.path().to_path_buf(),
-            },
-        );
-        let _ = next_network(&mut events).await;
-
-        dispatcher.send(Command::AddNode {
-            url: "https://saved-for-testnet.invalid".to_string(),
-            label: "mine".to_string(),
-        });
-        loop {
-            if next_network(&mut events).await.nodes.len() == 2 {
-                break;
-            }
-        }
-
-        dispatcher.send(Command::SetRequestedNetwork("VRSC".to_string()));
-
-        let vm = loop {
-            let vm = next_network(&mut events).await;
-            if vm.requested == "Mainnet" {
-                break vm;
-            }
-        };
-        assert_eq!(vm.nodes.len(), 1, "a saved node followed the switch");
-        assert!(
-            !vm.nodes.iter().any(|n| n.url.contains("saved-for-testnet")),
-            "the endpoint saved for the other chain is still listed",
-        );
-
-        dispatcher.send(Command::Shutdown);
-    }
+    // `saved_nodes_do_not_follow_the_wallet_to_another_chain` was here.
+    //
+    // It added an endpoint on testnet, switched the wallet to VRSC, and
+    // asserted the saved row did not come along. Nothing can be saved any more,
+    // so the accumulation it guarded against cannot happen. The reset it was
+    // really testing — `set_requested_network` builds a fresh `NodeManager`
+    // from the shipped list for the new chain — is still there and still
+    // matters for the other thing it does, which is disarming spending;
+    // `changing_chains_disarms_spending` in `pecu-chain/src/node.rs` covers
+    // that half.
 
     /// The chain buttons offer names a node could report, and nothing else.
     ///
@@ -10230,168 +9696,15 @@ mod tests {
         assert_eq!(vm.active_node, Some(1));
     }
 
-    // ── What holds a spend to a second node ─────────────────────────────────
-
-    /// A node list with one shipped endpoint and one the user added, both
-    /// having answered about VRSCTEST.
-    ///
-    /// The status matters less than it used to — `second_source` no longer
-    /// filters on health — but they are recorded as answering so that a test
-    /// which changes one is visibly changing it.
-    fn two_nodes(requested: Network) -> NodeManager {
-        let mut nodes = vec![
-            Node::builtin(0, "shipped", "https://shipped.invalid"),
-            Node::user_added(1000, "mine", "https://mine.invalid"),
-        ];
-        // Answering about the chain the wallet is set to, so that the only
-        // reason a test sees a degraded node is a test having made one.
-        let info = verus_sdk::network::ChainInfo {
-            name: requested.chain_name().to_string(),
-            chain_id: requested.chain_id().unwrap_or("i-something").to_string(),
-            blocks: 1_000,
-            longest_chain: 1_000,
-            version: "test".to_string(),
-        };
-        for node in &mut nodes {
-            node.record_success(&info, std::time::Duration::from_millis(5), &requested);
-        }
-        NodeManager::new(nodes, requested)
-    }
-
-    /// The default install: the active node is the shipped one, so there is
-    /// nothing independent to hold it to and the send goes ahead unchecked.
-    #[test]
-    fn a_send_from_the_shipped_endpoint_asks_for_no_second_source() {
-        let nodes = two_nodes(Network::Mainnet);
-        assert_eq!(nodes.active().expect("a node is active").id, 0);
-
-        assert_eq!(
-            corroborating_source(&nodes, pecu_protocol::Route::Transparent),
-            Ok(None)
-        );
-    }
-
-    /// The case the whole change exists for, on both routes that spend
-    /// transparent coins.
-    #[test]
-    fn a_send_from_an_endpoint_the_user_added_is_held_against_the_shipped_one() {
-        let mut nodes = two_nodes(Network::Testnet);
-        assert!(nodes.set_active(1000));
-
-        for route in [pecu_protocol::Route::Transparent, pecu_protocol::Route::Shield] {
-            assert_eq!(
-                corroborating_source(&nodes, route),
-                Ok(Some("https://shipped.invalid".to_string())),
-                "{route:?} was not held against the shipped endpoint",
-            );
-        }
-    }
-
-    /// And the two routes whose inputs are notes are not, because there is no
-    /// second lightwalletd to ask.
-    #[test]
-    fn a_spend_of_shielded_notes_has_no_second_source_to_ask() {
-        let mut nodes = two_nodes(Network::Mainnet);
-        assert!(nodes.set_active(1000));
-
-        for route in [pecu_protocol::Route::Private, pecu_protocol::Route::Unshield] {
-            assert_eq!(corroborating_source(&nodes, route), Ok(None), "{route:?}");
-        }
-    }
-
-    /// Nothing left to ask means no spend, on **every** chain.
-    ///
-    /// Testnet included, and that is the point of the loop. Gating this on
-    /// `may_be_real_money` would reason from the fact under attack: the wallet
-    /// believes it is on testnet, and the coins the hostile endpoint is
-    /// offering are mainnet coins. What "VRSCTEST is play money" describes is
-    /// not what would be spent.
-    #[test]
-    fn an_unheld_endpoint_cannot_spend_on_any_chain_including_testnet() {
-        for requested in [Network::Testnet, Network::Mainnet] {
-            let mut nodes = two_nodes(requested.clone());
-            assert!(nodes.set_active(1000));
-            // The one state that leaves nothing to ask: the shipped endpoint is
-            // answering about another chain, so its UTXO set is a fact about
-            // somebody else's.
-            nodes.get_mut(0).expect("the built-in").status = pecu_chain::NodeStatus::WrongNetwork {
-                reported: Network::Mainnet,
-            };
-
-            assert_eq!(
-                corroborating_source(&nodes, pecu_protocol::Route::Transparent),
-                Err(pecu_chain::SpendRefused::NoSecondSource {
-                    primary: "https://mine.invalid".to_string(),
-                }),
-                "an unchecked spend was allowed on {requested}",
-            );
-        }
-    }
-
-    /// A built-in nobody has probed this session is still the check.
-    ///
-    /// `Unknown` is the state of every inactive row at launch — only the active
-    /// node is polled. Reading it as "nothing to check against" would make the
-    /// refusal above the *default* on every start, which is a false refusal
-    /// whose remedy ("open the node list and wait") appears nowhere.
-    #[test]
-    fn an_unprobed_shipped_endpoint_does_not_refuse_the_send() {
-        let mut nodes = two_nodes(Network::Mainnet);
-        assert!(nodes.set_active(1000));
-        nodes.get_mut(0).expect("the built-in").status = pecu_chain::NodeStatus::Unknown;
-
-        assert_eq!(
-            corroborating_source(&nodes, pecu_protocol::Route::Transparent),
-            Ok(Some("https://shipped.invalid".to_string())),
-        );
-    }
-
-    /// The broadcast gate agrees with the prepare gate when nothing moved.
-    #[test]
-    fn bytes_built_against_the_shipped_endpoint_still_broadcast() {
-        let nodes = two_nodes(Network::Mainnet);
-
-        assert_eq!(
-            corroboration_missing(&nodes, pecu_protocol::Route::Transparent, ""),
-            Ok(())
-        );
-    }
-
-    /// And refuses when it did, with the sentence that names the actual remedy.
-    ///
-    /// A failover, or somebody switching endpoints, between pressing Review and
-    /// pressing Send. The bytes are not wrong; nothing has held them against the
-    /// node list as it now stands, and only building again fixes that.
-    #[test]
-    fn bytes_prepared_before_the_active_node_changed_are_refused_at_the_broadcast_gate() {
-        let mut nodes = two_nodes(Network::Mainnet);
-        assert!(nodes.set_active(1000));
-
-        assert_eq!(
-            corroboration_missing(&nodes, pecu_protocol::Route::Transparent, ""),
-            Err(pecu_chain::SpendRefused::PreparedBeforeNodeChange),
-        );
-        // A shield is the same spend of the same coins, so it is refused the
-        // same way — this is the arm a route-name gate would have let through.
-        assert_eq!(
-            corroboration_missing(&nodes, pecu_protocol::Route::Shield, ""),
-            Err(pecu_chain::SpendRefused::PreparedBeforeNodeChange),
-        );
-    }
-
-    /// Bytes that were checked are not re-refused because the node list moved.
-    #[test]
-    fn bytes_a_second_node_already_vouched_for_are_not_refused_again() {
-        let mut nodes = two_nodes(Network::Mainnet);
-        assert!(nodes.set_active(1000));
-
-        assert_eq!(
-            corroboration_missing(
-                &nodes,
-                pecu_protocol::Route::Transparent,
-                "https://shipped.invalid",
-            ),
-            Ok(())
-        );
-    }
+    // There was a block of tests here about what holds a spend to a second
+    // node: which routes ask, which node is offered, and how the broadcast gate
+    // agrees with the prepare gate.
+    //
+    // Every one of them built a node list containing an endpoint the user had
+    // added, because that was the only shape in which the question had an
+    // answer. That shape is not constructible any more — there is no
+    // `Node::user_added` and no `NodeManager::add` — so the tests were not
+    // describing behaviour this build has. What survives of them is in
+    // `pecu-core/tests/send_corroboration.rs`, which drives the comparison
+    // through `send::prepare` directly and does not need a node list at all.
 }

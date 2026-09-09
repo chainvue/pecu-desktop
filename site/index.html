@@ -258,12 +258,12 @@ footer p{margin:14px 0 0; max-width:62ch}
           <li>Nothing to sync, nothing to catch up on</li>
           <li>One binary — no runtime, no daemon, no installer for a language</li>
           <li>Endpoints for Verus, vARRR, CHIPS and vDEX ship with it</li>
-          <li>Point it at your own node instead, if you have one</li>
+          <li>Nothing to choose, and nothing to get wrong</li>
         </ul>
       </div>
     </div>
 
-    <p class="intro" style="margin-bottom:0">If you <em>do</em> run <code>verusd</code>, nothing is wasted. Pecu will use your node as its endpoint, and for shielded transactions it looks for the Sapling proving parameters your node already downloaded before it considers fetching its own.</p>
+    <p class="intro" style="margin-bottom:0">If you <em>do</em> run <code>verusd</code>, not everything is wasted: for shielded transactions Pecu looks for the Sapling proving parameters your node already downloaded before it considers fetching its own. It will not read balances from it, though. The endpoints are the ones this build ships, one per chain, and they are not configurable — a node is where a wallet reads balances and hands over signed transactions, and a URL typed into a box is not the shape that decision should take.</p>
   </div>
 </section>
 
@@ -325,8 +325,8 @@ footer p{margin:14px 0 0; max-width:62ch}
       <div class="trust"><dt>Your keys</dt><dd>Not part of the trade. They are generated on your machine, encrypted there, and never sent anywhere. A remote node signs nothing.</dd></div>
       <div class="trust"><dt>Your balances</dt><dd>Come from the node. A wrong answer shows you a wrong number — which is why the wallet distinguishes a figure it measured from one it could not.</dd></div>
       <div class="trust"><dt>Your transactions</dt><dd>Built and signed locally, then handed over to be broadcast. The node cannot alter one: the signature commits to every output.</dd></div>
-      <div class="trust"><dt>Which chain you are on</dt><dd>The sharp edge, because addresses look identical across Verus chains. A node's word about its own identity is treated as a claim, not a fact — and where a second endpoint is available, the coins a payment is funded from are held against it before anything is signed.</dd></div>
-      <div class="trust"><dt>Your privacy</dt><dd>The node sees which addresses you ask about. Pointing Pecu at your own <code>verusd</code> removes that, and is one setting.</dd></div>
+      <div class="trust"><dt>Which chain you are on</dt><dd>The sharp edge, because addresses look identical across Verus chains. A node's word about its own identity is treated as a claim and not a fact: the name it reports has to agree with the chain id it reports, and a node that contradicts itself is not read from or spent through. What that does not reach is a node telling the truth about itself and lying about the coins. Checking that needs a second, independently operated endpoint, and Pecu ships one per chain — so today it is not checked.</dd></div>
+      <div class="trust"><dt>Your privacy</dt><dd>The node sees which addresses you ask about, and the endpoints are the ones this build ships — choosing your own is not something Pecu offers, because a node is where balances are read and signed transactions are handed over, and that is not a choice to ask for in a text box.</dd></div>
     </dl>
   </div>
 </section>

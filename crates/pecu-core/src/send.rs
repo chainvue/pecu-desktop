@@ -580,9 +580,19 @@ impl OutOfStep {
 /// # `second` is what stops this node inventing coins
 ///
 /// A second, independently configured endpoint and its URL, or `None` when the
-/// caller decided there is nothing to hold this one to — that decision is
-/// `NodeManager::second_source`'s and is argued there, not here. When it is
-/// present, the funding node's outputs are held against it **before** anything
+/// caller has nothing to hold this one to.
+///
+/// **Every caller in the application passes `None`.** `build_on_worker` is the
+/// only one, and it has nothing to pass: a second endpoint only ever existed
+/// when the active node was one the user added, and user-added endpoints were
+/// removed from this wallet. So the `Some` arm below is reached by
+/// `pecu-core/tests/send_corroboration.rs` and by nothing else, and it is kept
+/// because `docs/LATER.md` §14 is the plan to reattach it. The parameter stays
+/// rather than the branch being deleted for the same reason, and the honest
+/// summary of the shipped build is the one `pecu_chain::corroborate` opens with.
+///
+/// When it *is* present, the funding node's outputs are held against it
+/// **before** anything
 /// is selected, so the transaction that comes out is corroborated by
 /// construction: `Corroborated` is handed to the builder in place of the chain,
 /// and it is incapable of offering an outpoint the second node has never heard
@@ -926,13 +936,24 @@ pub fn review(
 
 /// What the review says about the second node, if there was one.
 ///
+/// **In this build there never was one**, so this returns `NoteVm::none()` for
+/// every payment on every route: `corroborated_by` is set from the second source
+/// `prepare` was handed, and `build_on_worker` — the application's only caller —
+/// hands it `None`. The three codes below are reachable from
+/// `pecu-core/tests/send_corroboration.rs` and from nowhere else, and the
+/// corresponding block in `ui/screens/send.slint` never renders. See
+/// [`pecu_chain::corroborate`] for why that is and `docs/LATER.md` §14 for what
+/// would change it.
+///
+/// The rest still describes what the three answers are for, because §14 needs
+/// them to be right when it arrives.
+///
 /// Three answers, and the empty one is a real answer rather than a missing one:
-/// on a default install, and on the two routes that spend notes, nothing
-/// corroborated these coins and the review must not imply otherwise. Where
-/// something did, the endpoint is named — a guard nobody can see is a guard
-/// nobody notices has stopped working — and where that endpoint had not reached
-/// every output's block, the count comes with it, because a send-all that moves
-/// less than the balance on screen owes an explanation.
+/// where nothing corroborated these coins the review must not imply otherwise.
+/// Where something did, the endpoint is named — a guard nobody can see is a
+/// guard nobody notices has stopped working — and where that endpoint had not
+/// reached every output's block, the count comes with it, because a send-all
+/// that moves less than the balance on screen owes an explanation.
 fn corroboration_note(prepared: &Prepared) -> NoteVm {
     if prepared.corroborated_by.is_empty() {
         NoteVm::none()

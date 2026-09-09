@@ -589,6 +589,19 @@ export component SendScreen inherits VerticalLayout {
 
                 // Who else was asked about these coins.
                 //
+                // **Nothing reaches this block in this build.** The core only
+                // fills `corroboration` in when a second endpoint held the
+                // funding node's coins to account, and nothing can supply one
+                // any more — see `pecu_chain::corroborate` and `docs/LATER.md`
+                // §14. So no payment shows this line today, and anybody reading
+                // it as a live part of the review is reading the wrong thing.
+                //
+                // It is kept for the same reason the check behind it is kept:
+                // §14 is a written plan to put a second shipped endpoint per
+                // chain back, and the three note codes this renders are the
+                // words it would need. The rest of this comment is the design
+                // argument, still correct for whenever that happens.
+                //
                 // Under the funding address rather than above the outputs,
                 // because it is about where the coins came from and not about
                 // where they are going. Shown only when there was a second

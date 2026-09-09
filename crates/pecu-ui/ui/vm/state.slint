@@ -656,14 +656,6 @@ export global NetworkState {
     // screen, because that is where the button they pressed is — a refusal that
     // appears somewhere else is indistinguishable from nothing happening.
     in-out property <Note> problem;
-    // What is in the add-a-node form.
-    //
-    // Held here rather than inside the form so that Rust can clear it when the
-    // node is actually accepted — and, more to the point, so that it is NOT
-    // cleared when the node is refused. A rejected address that vanishes from
-    // the field takes with it the only copy of what the person typed.
-    in-out property <string> draft-url: "";
-    in-out property <string> draft-label: "";
 }
 
 // The balance over time.
@@ -1160,10 +1152,6 @@ export global Actions {
     callback revoke-identity(string);
     callback recover-identity(string);
     callback select-node(int);
-    // Label then URL. The URL is checked in the core, by the SDK's own
-    // transport — which is what refuses plaintext to anything but loopback.
-    callback add-node(string, string);
-    callback remove-node(int);
     callback toggle-theme();
 }
 

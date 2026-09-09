@@ -47,57 +47,48 @@
 /// a proxy can forward `getinfo` to a real node and answer `getaddressutxos`
 /// from somewhere else.
 ///
-/// Five limits, stated here rather than left to be discovered:
+/// Four limits, stated here rather than left to be discovered. The first one
+/// swallows most of what the others used to say:
 ///
-/// * **A compromised built-in is corroborated by nothing.** The check runs when
-///   the *active* node is one the user added, because that is the only case
-///   where an independent endpoint exists to check it against — see
-///   [`crate::node::NodeManager::second_source`]. When the active node is the
-///   one this build shipped, the spend proceeds uncorroborated. That is not a
-///   judgement that a built-in is trustworthy; it is the consequence of the
-///   next point.
+/// * **Nothing in this build corroborates anything.** The check ran only when
+///   the *active* node was one the user added, because that was the only case
+///   in which a second, independently configured endpoint existed. User-added
+///   endpoints were then removed from the wallet, and with them the last way to
+///   reach it: there is no `NodeManager::second_source`, and
+///   `pecu_core::build_on_worker` hands the builders no second source on any
+///   route. So **every transparent payment and every shield is built on one
+///   node's word**, and a compromised endpoint — shipped or otherwise — is
+///   corroborated by nothing. [`crate::corroborate`] still holds the comparison
+///   rule and its tests; `docs/LATER.md` §14 is what would run it again.
 /// * **This build ships exactly one endpoint per chain.**
 ///   [`Network::builtin_nodes`] returns one for each of the five, and
-///   `every_shipped_chain_is_complete_and_distinct` asserts it. So a default
-///   install has no second source at all, and "refuse whenever uncorroborated"
-///   would refuse every spend on every chain. Shipping a second, independently
-///   operated endpoint per real-money chain is what would make that rule
-///   possible. Finding and paying for one is an operator decision; turning it
-///   into a check is not, because
-///   [`crate::node::NodeManager::second_source`] returns `Unheld` the moment
-///   the active node is a built-in, so a second shipped URL on its own would
-///   leave a default install exactly as uncorroborated as it is now. Both
-///   halves are recorded in `docs/LATER.md`.
-/// * **While the shipped endpoint is unreachable, a user on their own node
-///   cannot spend transparent funds or shield at all** — on any chain, and
-///   there is no way out from inside the wallet. Corroboration fails closed by
-///   design, and `SecondSourceSilent` is a refusal rather than a fallback for
-///   the reason [`crate::corroborate`] gives at length. What is worth stating
-///   is that the state is a trap and not merely a pause:
-///   `NodeManager::remove` refuses to remove a built-in, and selecting the
-///   built-in instead is no way out either — `permit::evaluate` will not issue
-///   a permit for a node that is not answering, so that switch is refused as
-///   `NetworkUnknown` or `NodeNotReady` for as long as the outage lasts. The
-///   remedy is to wait for somebody else's server, or to edit the stored node
-///   list by hand. There is deliberately no opt-out — a switch
-///   reading "spend without checking" is the switch an attacker's instructions
-///   would tell somebody to flick — and the cost of not having one belongs
-///   here, in the list of things this build does not pretend about.
+///   `every_shipped_chain_is_complete_and_distinct` asserts it. That is why
+///   "refuse whenever uncorroborated" is not available as a policy: it would
+///   refuse every spend on every chain. Shipping a second, independently
+///   operated endpoint per real-money chain is what would make the rule
+///   possible, and finding and paying for one is an operator decision. Turning
+///   it into a check is a second, separate change — the provenance test that
+///   replaces the old `builtin` flag — and `docs/LATER.md` §14 records both
+///   halves together precisely because shipping only the first changes nothing.
 /// * **Two endpoints agreeing is not proof.** They may share an operator, an
 ///   upstream or a bug. What this defeats is *one* endpoint being wrong.
-/// * **Every other spend this wallet signs is uncorroborated.** A conversion,
-///   an identity update, a name registration, a currency launch and a resend
-///   all fund from the primary's word alone; each of those sites carries a line
-///   saying so. `Chain::broadcaster` takes a [`crate::SpendPermit`] and nothing
-///   else, so nothing makes the compiler enumerate them — a second unforgeable
-///   token beside the permit is what would, and it is the larger change this
-///   one is deliberately smaller than.
+/// * **Nothing makes the compiler enumerate the spends that skip the check.** A
+///   conversion, an identity update, a name registration, a currency launch and
+///   a resend all fund from the primary's word alone, and each of those sites
+///   carries a line saying so. `Chain::broadcaster` takes a
+///   [`crate::SpendPermit`] and nothing else, so the list is maintained by hand:
+///   a second unforgeable token beside the permit is what would fix that, and it
+///   is the larger change this one is deliberately smaller than. It matters less
+///   than it did while two routes were checked and five were not — today none
+///   are — and it will matter again the moment §14 lands.
 ///
-/// The purely shielded routes — `z→z` and `z→t` — have no second source of any
-/// kind: their notes, witnesses and anchor come from a single lightwalletd,
-/// which is the same admission [`crate::light`] makes and is out of scope here.
-/// A `t→z` shield is **not** in that group: it has no input notes, it funds
-/// from `getaddressutxos` at a transparent address, and it is checked.
+/// The purely shielded routes — `z→z` and `z→t` — are out of scope here for a
+/// reason that survives all of the above: their notes, witnesses and anchor come
+/// from a single lightwalletd, so there is no second source to ask even in
+/// principle. That is the same admission [`crate::light`] makes. A `t→z` shield
+/// is **not** in that group — it has no input notes and funds from
+/// `getaddressutxos` at a transparent address — which is why it was checked
+/// exactly like a transparent payment, and why it stops being checked with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Network {
     Mainnet,
