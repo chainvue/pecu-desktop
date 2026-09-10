@@ -277,6 +277,78 @@ fn a_screen_reader_can_actually_press_a_button() {
     );
 }
 
+/// "Not connected" is a route to the node list, not only a diagnosis.
+///
+/// A wallet that has reached no node says so in the title bar and used to stop
+/// there: the remedy — Settings, Network, Probe nodes — had to be known in
+/// advance, by the person who has least reason to know it. So the pill carries
+/// the route, and this is what holds it.
+///
+/// # Why the element tree rather than a reference image
+///
+/// Because at rest there is deliberately nothing to photograph. The pill draws
+/// what it always drew; the affordance is the pointer, the hover surface and
+/// the focus ring, none of which a still frame of an idle window contains. What
+/// can be asserted is the part that matters anyway — that something a screen
+/// reader and a keyboard can both reach is there, that it has a name, and that
+/// pressing it arrives somewhere.
+#[test]
+fn the_connection_pill_is_a_way_to_the_node_list() {
+    i_slint_backend_testing::init_no_event_loop();
+
+    let ui = unlocked();
+    // The state the complaint is about, and the one `dashboard-light.png`
+    // photographs: a wallet open on the dashboard with no node answering.
+    pecu_ui::fixtures::unlocked(&ui);
+    ui.set_screen("dashboard".into());
+    ui.show().expect("show");
+
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    {
+        let asked = asked.clone();
+        ui.global::<pecu_ui::Actions>()
+            .on_navigate(move |screen| asked.borrow_mut().push(screen.to_string()));
+    }
+
+    let pill = ElementQuery::from_root(&ui)
+        .match_descendants()
+        .find_all()
+        .into_iter()
+        .find(|element| {
+            matches!(element.accessible_role(), Some(AccessibleRole::Button))
+                && element
+                    .accessible_label()
+                    .is_some_and(|label| label.contains("Not connected"))
+        })
+        .expect(
+            "nothing operable announces itself over 'Not connected' — the \
+             wallet tells somebody it has reached no node and offers them \
+             nothing to press",
+        );
+
+    pill.invoke_accessible_default_action();
+    ui.hide().expect("hide");
+
+    assert_eq!(
+        ui.get_screen(),
+        "settings",
+        "pressing the pill did not open Settings, which is where the node \
+         list is",
+    );
+    assert_eq!(
+        ui.get_settings_tab(),
+        4,
+        "pressing the pill opened Settings on a tab that is not Network, so \
+         the node list is one more click away than it was told to be",
+    );
+    assert_eq!(
+        asked.borrow().last().map(String::as_str),
+        Some("nodes"),
+        "the core was never told the node list is open, so it will not probe \
+         the endpoints the person has just been sent to look at",
+    );
+}
+
 #[test]
 fn every_control_a_screen_reader_can_reach_has_a_name() {
     let _turn = window_to_read();

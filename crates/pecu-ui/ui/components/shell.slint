@@ -204,12 +204,19 @@ export component TitleBar inherits Rectangle {
     // Open the command palette. The same thing ⌘K does, and it goes through
     // the same function — see `AppWindow::open-search`.
     callback search();
+    // Go to the node list. Wired to `AppWindow::go-network`, which is where the
+    // destination is decided — this bar only knows that the pill leads there.
+    callback show-nodes();
     in property <bool> busy: false;
     in property <bool> can-refresh: false;
     // Whether there is a wallet open to search. Hidden rather than disabled
     // while there is not: an empty search box on the onboarding screen is an
     // offer to look through a wallet that does not exist yet.
     in property <bool> can-search: false;
+
+    // The connection pill's own words, named once because the button around it
+    // says them again in its accessible name.
+    property <string> node-text: root.network == "" ? @tr("Not connected") : root.network;
 
     height: 52px;
     background: Theme.bg-base;
@@ -328,10 +335,107 @@ export component TitleBar inherits Rectangle {
             }
         }
 
-        StatusPill {
-            state: root.node-state;
-            text: root.network == "" ? @tr("Not connected") : root.network;
+        // The connection pill, which is a route to the node list and not only a
+        // readout of it.
+        //
+        // "Not connected" was the whole story: correct, permanent, and with the
+        // remedy — Settings, Network, Probe nodes — reachable only by somebody
+        // who already knew where it was. A wallet that has diagnosed the problem
+        // and then leaves the person to find the cure has done the easy half.
+        //
+        // # Always a control, in every state
+        //
+        // Not only while disconnected, and that is the decision rather than the
+        // lazy reading of it. A pill that is a button when the news is bad and
+        // inert when it is good cannot be learned: the pointer changes shape for
+        // a reason somebody has to infer, the hover surface comes and goes, and
+        // Tab reaches one more stop on a wallet that has just lost its node than
+        // on the same wallet a second earlier — so the one state where a person
+        // is least sure what is happening is the state where the furniture moves
+        // under them. The destination earns the click in every state anyway: it
+        // is where the chain is chosen and where the endpoint, its tip and its
+        // latency are listed, which is what somebody reading a connection
+        // indicator wanted to know. The rule is therefore the simple one — the
+        // thing that reports the connection is the way to the connection.
+        //
+        // # Why the box around it is the box that was already there
+        //
+        // `StatusPill` is a layout, and a layout inside a layout takes a share
+        // of the slack: the bare pill's box was about 249px wide here, with the
+        // dot and the word start-aligned in it and the remaining 147px empty
+        // title bar. That is invisible until something is drawn on it — and
+        // pinning the box to the pill's own width instead, which is the obvious
+        // thing to do, moves the pill 147px to the right in 134 of the 150
+        // reference images. The shell frames every screen in this wallet, so
+        // that is most of the set moved to say nothing new.
+        //
+        // So the box stays as it was and the control is drawn inside it, at the
+        // pill's own width. At rest this renders pixel for pixel what it
+        // rendered before; the affordance is the pointer, the hover surface and
+        // the focus ring, and none of those is in a picture of an idle window.
+        Rectangle {
+            height: 26px;
             y: (parent.height - self.height) / 2;
+
+            // Behind the pill, so the words are never drawn under a moving
+            // surface — and inset outwards, so it can breathe without the
+            // layout knowing about it. `nodepill.preferred-width` rather than
+            // `parent.width` throughout: the hit target, the hover and the ring
+            // all belong to the pill, not to the empty bar beside it.
+            if nodetouch.has-hover: Rectangle {
+                x: -Sp.s3;
+                width: nodepill.preferred-width + Sp.s3 * 2;
+                height: parent.height;
+                border-radius: R.full;
+                background: Theme.bg-hover;
+                animate background { duration: Motion.fast; enabled: Motion.enabled; }
+            }
+
+            nodepill := StatusPill {
+                width: 100%;
+                height: 100%;
+                state: root.node-state;
+                text: root.node-text;
+            }
+
+            nodefocus := FocusScope {
+                width: nodepill.preferred-width;
+                height: parent.height;
+                key-pressed(event) => {
+                    if (event.text == "\n" || event.text == " ") {
+                        root.show-nodes();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
+            nodetouch := TouchArea {
+                width: nodepill.preferred-width;
+                height: parent.height;
+                mouse-cursor: pointer;
+                clicked => { root.show-nodes(); }
+            }
+            // Outside the shape and only while the keyboard is driving, which is
+            // the rule the three controls to the right of this one follow.
+            if nodefocus.has-focus && InputMode.keyboard: Rectangle {
+                x: -Sp.s3;
+                y: -3px;
+                width: nodepill.preferred-width + Sp.s3 * 2;
+                height: parent.height + 6px;
+                border-radius: R.full;
+                border-width: 2px;
+                border-color: Theme.accent-ring;
+            }
+            accessible-role: button;
+            // The state is in the name as well as in the colour, for the reason
+            // `StatusPill` puts it there: somebody who cannot see the dot still
+            // hears which way this has gone. Said here rather than left to the
+            // pill, because the name of a button is what a screen reader reads
+            // when focus lands on one — the same arrangement the three controls
+            // to the right have, where a `Text` saying "Refresh" sits inside a
+            // button named "Refresh balances".
+            accessible-label: @tr("{}, {} — open network settings", root.node-text, root.node-state);
+            accessible-action-default => { root.show-nodes(); }
         }
 
         if root.can-refresh: Rectangle {
