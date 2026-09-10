@@ -412,6 +412,40 @@ pub struct AssetVm {
     /// it legitimately differ, and two totals on one screen with nothing
     /// saying why is worse than the omission it fixes.
     pub counts_shielded: bool,
+    /// What the holding above is worth in the quote currency, as satoshis of
+    /// **that** currency, decimal.
+    ///
+    /// `None` is "the book cannot price this", which is emphatically not zero:
+    /// a currency no started pool holds has no price, and a row claiming a
+    /// holding is worth nothing is a statement about somebody's money that
+    /// nothing supports. [`Self::value_display`] carries the em dash for it.
+    ///
+    /// Satoshis as well as the display string, for the same reason
+    /// [`Self::amount_sats`] exists beside [`Self::amount_display`]: the
+    /// display figure is rounded to something a narrow column can hold, and a
+    /// rounded string is not something anything downstream can do arithmetic
+    /// with. What does arithmetic with it today is
+    /// `pecu-core/tests/one_price_book.rs`, which divides this by the amount
+    /// and checks the result against the price the markets table prints —
+    /// which is the comparison a person makes between the two screens.
+    ///
+    /// # Why neither field is cached
+    ///
+    /// Both are `skip`ped, so a dashboard snapshot keeps the amounts and not
+    /// what they were worth. A value is only meaningful with the block its
+    /// price came from, and the block a previous run quoted is gone — the
+    /// pools have notarized since, and nothing in the cache could say by how
+    /// much. So a restored dashboard shows `—` here until a markets read
+    /// lands, which is the one answer that is true whatever happened
+    /// overnight. Being a property of the type rather than a line somebody has
+    /// to remember is the point: see `Core::emit_portfolio`, which prices
+    /// every copy it sends from the book in hand.
+    #[serde(skip)]
+    pub value_sats: Option<String>,
+    /// Pre-formatted for display, rounded the way a derived quantity is, or the
+    /// em dash when there is no price. Never empty on anything the core sends.
+    #[serde(skip)]
+    pub value_display: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

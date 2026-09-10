@@ -103,6 +103,11 @@ fn with_a_second_token(ui: &AppWindow) {
         // A token row never folds in the shielded pool: there is one pool and
         // it holds the chain's own currency.
         counts_shielded: false,
+        // And nothing prices it. An impostor currency nobody pools is exactly
+        // the row that has no value, so this is the honest figure for it — and
+        // it keeps a second unpriced row in front of the assertions below,
+        // where `tests/asset_values.rs` owns what the em dash means.
+        value: "—".into(),
     });
     wallet.set_assets(ModelRc::new(VecModel::from(assets)));
 }

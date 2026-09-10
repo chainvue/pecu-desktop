@@ -1277,6 +1277,15 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
             // this side of the boundary is how a caption ends up true about a
             // number nobody is showing.
             counts_shielded: asset.counts_shielded,
+            // What it is worth, or the em dash. Taken as the core formatted it
+            // and not reconstructed here from `value_sats`: the rounding is a
+            // decision about a column three characters wide, and a second
+            // formatter on this side would be a second answer to it. An unknown
+            // value arrives as `—` already, so there is nothing to decide about
+            // the absence either — which is the point, because the obvious
+            // alternative is an empty string, and an empty cell in a money
+            // column reads as a zero nobody wrote.
+            value: asset.value_display.clone().into(),
         })
         .collect();
     // Folded here rather than in the interface, for the same reason

@@ -422,13 +422,52 @@ export component AssetsPanel inherits Card {
             // Right-aligned, so a column of amounts lines up on the decimal
             // point rather than floating in the middle of the row. With the
             // monospace family that is what makes two balances comparable.
-            HorizontalLayout {
-                alignment: end;
-                Money {
-                    amount: asset.amount;
-                    show-currency: false;
-                    size: Typo.num;
-                    y: (parent.height - self.height) / 2;
+            //
+            // # Two lines rather than two columns
+            //
+            // The value goes under the amount, not beside it. Beside it was
+            // tried and is not affordable: this card is the narrowest of the
+            // three, a second figure on the row costs more than the 27px
+            // convert gutter that was removed for eliding `iBoaN7sw…stcfgGMh`,
+            // and the i-address is the part of a token row that cannot lie.
+            // Stacked, the pair is as wide as the wider of the two — which is
+            // the amount, every time, because it carries eight decimal places
+            // and the value carries two.
+            //
+            // It costs no height either. `ListRow` is 64px whatever is in it,
+            // and the left column already runs to two lines, so the second
+            // figure lands beside the caption that explains the first.
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                HorizontalLayout {
+                    alignment: end;
+                    Money {
+                        amount: asset.amount;
+                        show-currency: false;
+                        size: Typo.num;
+                    }
+                }
+                // What it is worth. Through `Money` rather than a bare `Text`,
+                // for the accessible label: the figure is drawn without its
+                // unit, which works on screen because the column heading names
+                // it once, and does not work at all read aloud — "six thousand
+                // seven hundred and five" is not an answer to "what is this
+                // worth" without a currency after it.
+                //
+                // `muted` is the tone for a figure that is on screen to be
+                // *compared* rather than acted on, which is what this is: it is
+                // derived from reserve state, rounded to something a narrow
+                // column can hold, and nothing sends it.
+                HorizontalLayout {
+                    alignment: end;
+                    Money {
+                        amount: asset.value;
+                        currency: MarketState.quote;
+                        show-currency: false;
+                        size: Typo.num-sm;
+                        tone: "muted";
+                    }
                 }
             }
         }
@@ -961,7 +1000,20 @@ export component DashboardScreen inherits VerticalLayout {
             spacing: Sp.s4;
             alignment: start;
             horizontal-stretch: 1;
-            Eyebrow { text: @tr("ASSETS"); }
+            // The unit for the second figure on every row, named once here.
+            //
+            // Once rather than per row, for the width argued at the row itself;
+            // and here rather than inside the card because this is the same
+            // sentence the markets screen's own heading makes — "ALL CURRENCIES
+            // · PRICED IN DAI.vETH" — about the same book. Silent until there is
+            // a book: before the first markets read every value is `—`, and a
+            // heading promising a currency nothing is priced in would be the
+            // card announcing a column it is not drawing.
+            Eyebrow {
+                text: MarketState.quote == ""
+                    ? @tr("ASSETS")
+                    : @tr("ASSETS · WORTH IN {}", MarketState.quote);
+            }
             AssetsPanel {
                 // The Convert screen's own picker writes these two properties
                 // and then fires `edited()`; arriving from here does the same
@@ -1014,10 +1066,55 @@ export component DashboardScreen inherits VerticalLayout {
             spacing: Sp.s4;
             alignment: start;
             horizontal-stretch: 1;
-            Eyebrow {
-                text: MarketState.quote == ""
-                    ? @tr("MARKETS")
-                    : @tr("MARKETS · {}", MarketState.quote);
+            // The heading, and on the end of it the one column head this panel
+            // needs.
+            //
+            // # Why the percentages are labelled at all
+            //
+            // The markets screen heads the same column `30d`, and the comment
+            // there says why that is load-bearing: the series is sampled once a
+            // day, so the same figures under a `24h` head would look precise
+            // and not be. This panel showed them from the same
+            // `Book::change_over_window` with the label dropped — leaving a
+            // bare percentage, which is read as a day's move, that being what a
+            // bare percentage means on every other market screen anybody has
+            // seen.
+            //
+            // # Why it is up here and not over the rows
+            //
+            // Because a heading row inside the card costs 24px, and this card
+            // has none: four rows was already chosen as the most that fit above
+            // the footer at the size every reference image is taken at, and a
+            // head over them pushed the fourth off the bottom of the window.
+            // Out here it costs nothing — the eyebrow line is drawn either way
+            // — and it is where the markets screen puts its own column heads,
+            // outside the card, for its own reason.
+            //
+            // Only the change column is headed. The other figure on the row is
+            // the price, which needs no window and whose unit is named to the
+            // left of this, and a `Name` head over the first column would be
+            // one word explaining a list of currency names.
+            HorizontalLayout {
+                spacing: Sp.s4;
+                // Over the figures rather than over the card's edge: the rows
+                // carry the list's own padding inside the card's, and this line
+                // sits outside both.
+                padding-right: Sp.s3 + Sp.s5;
+                Eyebrow {
+                    text: MarketState.quote == ""
+                        ? @tr("MARKETS")
+                        : @tr("MARKETS · {}", MarketState.quote);
+                    horizontal-stretch: 1;
+                }
+                // Gone with the rows it heads, rather than standing over an
+                // empty card: the panel's own empty state says what is going
+                // on, and a column head is not part of that sentence.
+                if MarketState.rows.length > 0: Text {
+                    text: @tr("30d");
+                    font-size: Typo.micro;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: right;
+                }
             }
             MarketsPanel {}
         }

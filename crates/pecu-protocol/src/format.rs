@@ -155,6 +155,50 @@ pub fn approx(value: f64) -> String {
     format!("{sign}{}{rest}", group(whole))
 }
 
+/// The same rounding as [`approx`], from satoshis.
+///
+/// # Why both exist
+///
+/// Because [`approx`] is for the figures the chain publishes as floats — a
+/// depth, a supply, a reserve ratio — and none of those is anybody's money. A
+/// **valuation** is: it is a holding multiplied by a price, and the holding is
+/// an exact count of satoshis. An `f64` carries fifteen significant digits and
+/// a `u64` of satoshis needs twenty, so routing a valuation through `approx`
+/// would drop the bottom of a large balance on the way to the screen and the
+/// figure would still look right. Nothing here becomes a float; the rounding
+/// is done on integers.
+///
+/// The *rule* is shared rather than reimplemented, which is the thing that
+/// matters: this rounds to whole units above a thousand and to two places
+/// below it, exactly as `approx` does, because a column of valuations and a
+/// column of depths are the same kind of figure and two roundings would not
+/// line up. `a_value_rounds_exactly_as_a_quantity_does` holds the two together.
+///
+/// The sign is dropped for the same reason [`coins`] drops it — direction is
+/// the caller's to say — and a valuation has no direction anyway.
+pub fn approx_sats(sats: i64) -> String {
+    let magnitude = u128::from(sats.unsigned_abs());
+    let per_coin = u128::from(SATS_PER_COIN.unsigned_abs());
+
+    // Whole units above a thousand: the fraction of a large figure is noise.
+    // Rounded rather than truncated — `approx` rounds, and half a coin lost off
+    // a thousand of them is invisible, while a column that rounds one way here
+    // and the other way there is a column nobody can add up.
+    if magnitude >= 1000 * per_coin {
+        return group(&((magnitude + per_coin / 2) / per_coin).to_string());
+    }
+
+    // Two places below it, where the fraction is most of the figure. In
+    // hundredths of a coin throughout, so there is no division that has to come
+    // out as a fraction.
+    let hundredths = (magnitude + per_coin / 200) / (per_coin / 100);
+    format!(
+        "{}.{:02}",
+        group(&(hundredths / 100).to_string()),
+        hundredths % 100,
+    )
+}
+
 /// Drop trailing zeros, keeping at least `floor` decimal places.
 fn trim(shown: &str, floor: usize) -> String {
     let Some((whole, decimals)) = shown.split_once('.') else {
@@ -264,6 +308,58 @@ mod tests {
         assert_eq!(approx(1248.93), "1 249");
         assert_eq!(approx(94095.41), "94 095");
         assert_eq!(approx(40_399_999.56), "40 400 000");
+    }
+
+    /// The two roundings are one rounding, and this is what says so.
+    ///
+    /// Every figure from the test above it, in satoshis. A valuation and a
+    /// depth land in the same columns of the same screens, so the day these
+    /// disagree is the day two figures of the same kind start looking like
+    /// figures of different kinds.
+    // The cast is the test's, not the formatter's: these cases are written in
+    // coins because that is how the test above them is written, and comparing
+    // the two rules needs the same figure in both denominations.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[test]
+    fn a_value_rounds_exactly_as_a_quantity_does() {
+        for coins in [0.37_f64, 13.38, 1248.93, 94_095.41, 40_399_999.56] {
+            let sats = (coins * 100_000_000.0).round() as i64;
+            assert_eq!(
+                approx_sats(sats),
+                approx(coins),
+                "{coins} rounds differently from its satoshi count",
+            );
+        }
+    }
+
+    /// Where the float path would have lost the bottom of the figure.
+    ///
+    /// Twenty digits of satoshis, which is four more than an `f64` carries.
+    /// The whole coins have to come out exactly — this is the case the integer
+    /// path exists for, and `approx` cannot be asked for it.
+    #[test]
+    fn a_value_too_large_for_a_float_keeps_every_digit() {
+        assert_eq!(approx_sats(i64::MAX), "92 233 720 369");
+        assert_eq!(approx_sats(1_248_242_000_001), "12 482");
+        // Rounding at the boundary between the two rules, from both sides.
+        assert_eq!(approx_sats(99_999_000_000), "999.99");
+        assert_eq!(approx_sats(99_999_900_000), "1 000.00");
+        assert_eq!(approx_sats(100_000_000_000), "1 000");
+    }
+
+    /// A holding worth a little is not a holding worth nothing.
+    ///
+    /// Two places is as far as this column goes, so a value under half a
+    /// hundredth does round to `0.00` — and that is a figure about money the
+    /// wallet *can* price. The one it must never give is a zero standing in for
+    /// an unknown, which is why `AssetVm::value_sats` is an `Option` and the em
+    /// dash comes from `market::UNKNOWN` rather than from here.
+    #[test]
+    fn zero_here_means_zero_and_not_unknown() {
+        assert_eq!(approx_sats(0), "0.00");
+        assert_eq!(approx_sats(1), "0.00");
+        assert_eq!(approx_sats(500_000), "0.01");
+        assert_eq!(approx_sats(-37_000_000), "0.37");
     }
 
     #[test]

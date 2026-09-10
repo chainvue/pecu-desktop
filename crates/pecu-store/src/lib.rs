@@ -627,6 +627,10 @@ mod tests {
         portfolio.balance.total_display = "12 345.0000 0000".to_string();
         portfolio.assets.push(pecu_protocol::AssetVm {
             name: "mambo".to_string(),
+            // Set here so the assertion below is about this cache dropping it
+            // rather than about a field nobody filled.
+            value_sats: Some("28352000000".to_string()),
+            value_display: "283.52".to_string(),
             ..pecu_protocol::AssetVm::default()
         });
 
@@ -641,6 +645,16 @@ mod tests {
         let restored = store(&dir).snapshot().expect("a snapshot");
         assert_eq!(restored.portfolio.balance.total_display, "12 345.0000 0000");
         assert_eq!(restored.portfolio.assets.len(), 1);
+        // What a holding was worth does NOT come back, by design, and this is
+        // the only place that can say so. A value means nothing without the
+        // block whose reserve state produced it, and that block is gone by the
+        // next run — so the field is `serde(skip)` and a restored row says it
+        // does not know rather than quoting an overnight price as current. See
+        // `AssetVm::value_sats` and `Core::emit_portfolio`.
+        let row = &restored.portfolio.assets[0];
+        assert_eq!(row.name, "mambo", "the wrong row is being checked");
+        assert_eq!(row.value_sats, None, "a cached price came back");
+        assert!(row.value_display.is_empty(), "a cached value came back");
         assert_eq!(restored.history.len(), 1);
         assert_eq!(restored.history[0].height, 42);
         assert_eq!(restored.saved_at, 1_700_000_000);

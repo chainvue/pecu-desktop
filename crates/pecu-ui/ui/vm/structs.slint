@@ -417,6 +417,17 @@ export struct AssetRow {
     // when a scan has produced one — so the caption and the number it describes
     // are decided together and cannot come apart.
     counts-shielded: bool,
+    // What the holding is worth, in the currency the dashboard's MARKETS column
+    // is priced in, already rounded and grouped — or `—` where the wallet has no
+    // price for it. Never a zero standing in for an unknown: a currency no pool
+    // holds has no price, and a row saying a holding is worth nothing is a claim
+    // about somebody's money.
+    //
+    // The unit is not in the string. It is named once, in the column's heading,
+    // because ASSETS is the narrowest of the three dashboard columns and
+    // "DAI.vETH" repeated on every row is the same nine characters three times
+    // over in the place an i-address is already being elided.
+    value: string,
 }
 
 export struct ActivityRow {

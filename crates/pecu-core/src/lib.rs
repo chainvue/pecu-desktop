@@ -179,6 +179,7 @@ pub fn start(
         convert_ready: None,
         convert_floor: None,
         holdings: std::collections::BTreeMap::new(),
+        portfolio: None,
         markets: Markets::Unasked,
         pending_currency_search: None,
         launches: std::collections::HashMap::new(),
@@ -342,11 +343,30 @@ struct Core {
     convert_floor: Option<(u64, verus_sdk::money::Amount)>,
     /// What the wallet holds, by currency i-address, including the chain's own.
     ///
-    /// Kept because converting needs it and a balance read does not retain it —
-    /// the dashboard's assets go straight out as a `PortfolioVm` and are gone.
-    /// Absent means zero here, and only here: a currency with no entry is one
-    /// no output paid us in.
+    /// Kept because converting needs it. Absent means zero here, and only here:
+    /// a currency with no entry is one no output paid us in.
+    ///
+    /// Not the same thing as [`Self::portfolio`] and not replaceable by it: this
+    /// is what a key can *spend*, which for the chain's own currency is the
+    /// transparent balance alone, while the dashboard's native row adds the
+    /// shielded pool and is a statement about what is held.
     holdings: std::collections::BTreeMap<String, verus_sdk::money::Amount>,
+    /// The dashboard as the last balance read left it, with no prices on it.
+    ///
+    /// Kept for one reason: a markets read has to be able to republish it. The
+    /// values on the ASSETS column and the prices on the markets table come out
+    /// of one book, and a book that changed while only one of the two screens
+    /// was listening would leave them disagreeing — see [`Self::emit_markets`].
+    ///
+    /// Unpriced, so that the one priced copy in existence is the one on screen
+    /// and there is no second opinion here to go stale. `None` until a read has
+    /// produced figures, and again on a chain switch: a holdings list is about
+    /// one chain's money.
+    ///
+    /// Nothing secret. Balances already live on this struct — `spendable`,
+    /// `key_funds`, `native_balance` — and the store writes this very view model
+    /// to its cache, so a lock leaves it where it leaves those.
+    portfolio: Option<pecu_protocol::PortfolioVm>,
     /// Whether the markets have been read yet, and whether one is in flight.
     markets: Markets,
     /// A search that arrived while the catalog was still being fetched, to be
@@ -1801,7 +1821,8 @@ impl Core {
             .map_or("VRSC", pecu_chain::Network::ticker);
 
         let portfolio = reading.portfolio(ticker, self.scanned_shielded());
-        let _ = self.events.send(Event::Portfolio(portfolio.clone()));
+        self.portfolio = Some(portfolio.clone());
+        self.emit_portfolio();
 
         // The per-key figures moved with this read, and they travel on the
         // wallet rather than on the portfolio — see `WalletVm::key_funds`. So
@@ -2461,7 +2482,14 @@ impl Core {
         // Nothing has been scanned this run, so "Load older" stays offered
         // rather than claiming the cached page is the whole history.
         let _ = self.events.send(Event::HistoryExhausted(false));
-        let _ = self.events.send(Event::Portfolio(portfolio));
+        // Through the same door as a fresh read, so that a cached dashboard is
+        // priced by the same rule: from the book in hand, which on a cold start
+        // is empty, so every row says `—` until a markets read lands. The values
+        // themselves were never cached — `AssetVm::value_sats` is not
+        // serialised, because a price is only a fact with the block it came out
+        // of, and the block a previous run quoted is gone.
+        self.portfolio = Some(portfolio);
+        self.emit_portfolio();
         let _ = self.events.send(Event::History {
             key: String::new(),
             delta: pecu_protocol::ListDelta::Replace(history),
@@ -2792,6 +2820,7 @@ impl Core {
         self.currencies.clear();
         self.eligible.clear();
         self.currency_catalog = Catalog::Unasked;
+        self.forget_prices();
         // The other chain's address book has its own identities in it, and an
         // i-address means a different name — or nothing at all — over there.
         self.named_addresses = false;
@@ -2810,6 +2839,10 @@ impl Core {
         // Blank the dashboard before restoring, because `restore` says nothing
         // at all when the new chain has no saved snapshot — which is precisely
         // the case where the previous chain's figures would stay on screen.
+        //
+        // The retained copy goes with it, or the next markets read would
+        // republish the other chain's holdings through `emit_markets`.
+        self.portfolio = None;
         let _ = self
             .events
             .send(Event::Portfolio(pecu_protocol::PortfolioVm::default()));
@@ -5264,12 +5297,76 @@ const SCAN_ATTEMPTS: u32 = 3;
         self.emit_market_detail();
     }
 
+    /// Drop the price book, because it was about another chain.
+    ///
+    /// Every i-address in it belongs to the chain being left — VRSC's baskets
+    /// are not VRSCTEST's — and the book was being carried across a switch, so
+    /// the markets table showed the previous chain's prices until somebody
+    /// opened the screen and triggered a re-read.
+    ///
+    /// On its own that was a wrong table on one screen. It stops being only
+    /// that once the holdings list is priced from this book: a balance read on
+    /// the new chain would be valued against the old one's pools, and a value
+    /// is a sentence about somebody's money.
+    ///
+    /// `Markets::Unasked` rather than a clear alone, so the next refresh asks
+    /// for this chain's book rather than waiting for somebody to visit Markets
+    /// — see [`Self::refresh`].
+    fn forget_prices(&mut self) {
+        self.market = market::Book::default();
+        self.market_names.clear();
+        self.market_open.clear();
+        self.markets = Markets::Unasked;
+    }
+
+    /// Everything the book says, to every screen that says it.
+    ///
+    /// # Why the dashboard is republished here
+    ///
+    /// Because the holdings list now quotes a price, and a price on two screens
+    /// has to be one price. The markets table and the ASSETS column are
+    /// different views of this one book, and somebody comparing them divides:
+    /// the value of a row by the amount on it is the figure the markets table
+    /// prints beside the same currency. If the dashboard kept values from the
+    /// book before last, that division would come out wrong and nothing on
+    /// either screen would say which of the two was stale.
+    ///
+    /// So the book has exactly one place where it is replaced —
+    /// [`Self::finish_markets`] — and that place publishes both views in one
+    /// call. There is no ordering of events in which the two screens hold
+    /// figures from different notarizations, and no second copy of the book for
+    /// one of them to be holding.
+    ///
+    /// The other direction needs nothing: [`Self::emit_portfolio`] prices what
+    /// it sends from `self.market` at the moment it sends it, so a balance read
+    /// landing between two markets reads is priced by the book already on
+    /// screen. `one_price_book.rs` drives both orderings through the actor.
     fn emit_markets(&mut self) {
         let _ = self.events.send(Event::Markets {
             rows: market::rows(&self.market, &self.market_names, now()),
             quote: Self::QUOTE.to_string(),
         });
         self.emit_market_detail();
+        self.emit_portfolio();
+    }
+
+    /// The dashboard, priced from the book in hand.
+    ///
+    /// The only sender of [`Event::Portfolio`] that has figures to send, and
+    /// therefore the only place a value is put on a holding. `self.portfolio`
+    /// keeps the balances a read produced, unpriced; what goes out is a copy
+    /// with the current book's prices on it.
+    ///
+    /// Silent when there is nothing to say. A wallet that has not read a
+    /// balance yet has no holdings list to price, and publishing an empty one
+    /// here would blank a dashboard that a cache had just filled.
+    fn emit_portfolio(&self) {
+        let Some(portfolio) = self.portfolio.as_ref() else {
+            return;
+        };
+        let mut priced = portfolio.clone();
+        self.market.value_holdings(&mut priced.assets);
+        let _ = self.events.send(Event::Portfolio(priced));
     }
 
     fn emit_market_detail(&mut self) {
