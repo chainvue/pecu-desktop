@@ -223,6 +223,23 @@ export component AppWindow inherits Window {
         Actions.navigate(screen);
     }
 
+    // The route out of a bad connection, for the title bar's pill to take.
+    //
+    // A function rather than `go("nodes")`, because the node list is no longer a
+    // screen of its own: it is the fifth tab of Settings — see the hidden
+    // `nodes` entry in `nav` — so arriving there is a screen *and* a tab. The
+    // core is then told `nodes` rather than `settings`, because the node list is
+    // the one panel whose being open justifies asking every configured endpoint
+    // a question; `SettingsScreen` makes the same correction when the tab is
+    // clicked. `go` names the page first and this names the panel, which is two
+    // calls rather than one and the harmless order: the probe follows the
+    // arrival.
+    public function go-network() {
+        root.settings-tab = 4;
+        root.go("settings");
+        Actions.navigate("nodes");
+    }
+
     // Open the command palette, empty.
     //
     // A function rather than three statements written twice: ⌘K and the field
@@ -543,6 +560,7 @@ export component AppWindow inherits Window {
                     lock => { Actions.lock(); }
                     refresh => { Actions.refresh(); }
                     search => { root.open-search(); }
+                    show-nodes => { root.go-network(); }
                 }
 
                 Rectangle {
