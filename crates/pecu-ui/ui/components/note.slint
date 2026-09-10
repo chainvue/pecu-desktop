@@ -569,13 +569,7 @@ export component NoticeTitle inherits Text {
         // ── Nodes and chains ────────────────────────────────────────────
         : root.note.code == "node-unreachable" ? @tr("Could not reach that node")
         : root.note.code == "mock-chain-failed" ? @tr("The scripted chain could not be built")
-        : root.note.code == "node-duplicate" ? @tr("That endpoint is already in the list")
-        : root.note.code == "node-store-unavailable" ? @tr("Pecu cannot save a node right now")
-        : root.note.code == "node-not-saved" ? @tr("That node could not be saved")
-        : root.note.code == "node-added" ? @tr("Node added")
         : root.note.code == "node-failover" ? @tr("Switched to another node")
-        : root.note.code == "node-url-insecure" ? @tr("That address is not encrypted")
-        : root.note.code == "node-url-unusable" ? @tr("That is not an address Pecu can use")
         : root.note.code == "read-wrong-chain"
             ? @tr("This node is on {0}, not {1}", root.note.args[0], root.note.args[1])
         : root.note.code == "read-unidentified"
@@ -648,15 +642,6 @@ export component NoticeTitle inherits Text {
         : root.note.code == "spend-second-source-silent"
             ? @tr("{0} could not be asked whether these coins exist, so nothing was spent. Try again in a moment — while it stays quiet, nothing can check the node you are using.",
                   root.note.args[0])
-        // Not "add a second node": one is configured and cannot be removed.
-        // This state means the shipped endpoint is answering about a different
-        // chain, so it is the node list that has something wrong with it and
-        // not the number of entries in it.
-        : root.note.code == "spend-no-second-source"
-            ? @tr("Nothing configured can check what {0} reports — the endpoint that came with Pecu is not answering about this chain. Open Settings, Network.",
-                  root.note.args[0])
-        : root.note.code == "spend-node-changed"
-            ? @tr("The node changed while this payment was waiting, so nothing has checked it against the one in use now. Prepare the payment again.")
         : root.note.code == "send-not-enough-spendable" ? @tr("Not enough spendable coins")
         : root.note.code == "send-build-failed" ? @tr("Could not build this payment")
         : root.note.code == "broadcast-rejected" ? @tr("The network rejected this transaction")
@@ -766,12 +751,6 @@ export component NoticeBody inherits Text {
             ? @tr("If it is not a recovery phrase, choose Free text.")
         : root.note.code == "key-name-rules"
             ? @tr("A key name can use lowercase letters, digits, - and _, and has to start with a letter or a digit.")
-        : root.note.code == "node-duplicate"
-            ? @tr("Two entries for one node would probe identically and could never disagree about anything worth knowing.")
-        : root.note.code == "node-store-unavailable"
-            ? @tr("The wallet database could not be opened, so a node added now would be gone at the next start.")
-        : root.note.code == "node-not-saved"
-            ? @tr("It has not been added, because a node the wallet cannot write down would disappear at the next start.")
         : root.note.code == "node-failover"
             ? @tr("The node Pecu was using stopped answering, so it moved to one that is. Nothing about your wallet changed.")
         : root.note.code == "read-wrong-chain"

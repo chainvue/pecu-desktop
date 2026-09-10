@@ -32,9 +32,7 @@ pub use corroborate::{Corroborated, Corroboration, Outpoint};
 pub use grpc::GrpcTransport;
 pub use light::{validate_light_url, Dialect, LightRefused, LightServer, Transport};
 pub use network::Network;
-pub use node::{
-    backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus, SecondSource,
-};
+pub use node::{backoff, connect, probe, validate_url, Client, Node, NodeManager, NodeStatus};
 pub use permit::{SpendPermit, SpendRefused};
 
 use verus_sdk::money::Amount;
@@ -60,20 +58,14 @@ impl Chain {
         Ok(Self::Live(connect(url, node::REQUEST_TIMEOUT)?))
     }
 
-    /// The same, on the tighter budget a corroborating endpoint gets.
-    ///
-    /// A separate constructor rather than a parameter on [`Chain::live`],
-    /// because the timeout is a policy about *what this client is for* and not
-    /// a knob: a second source is advisory infrastructure held open while a
-    /// send is in flight, and it does not get to decide how long the wallet
-    /// holds a decrypted key. See [`node::SECOND_SOURCE_TIMEOUT`].
-    ///
-    /// # Errors
-    ///
-    /// If the URL is not one this wallet may talk to.
-    pub fn second_source(url: &str) -> Result<Self, RpcError> {
-        Ok(Self::Live(connect(url, node::SECOND_SOURCE_TIMEOUT)?))
-    }
+    // There was a `Chain::second_source` here, dialling a corroborating
+    // endpoint on a tighter timeout than [`Chain::live`].
+    //
+    // Nothing can ask for one any more: the send path only ever had a second
+    // endpoint to dial when the active node was one the user added, and this
+    // build has no way to add one. The timeout constant went with it. Both come
+    // back with `docs/LATER.md` §14, whose whole subject is a second endpoint
+    // that ships.
 
     /// The scripted chain, answering for the addresses this wallet holds.
     ///

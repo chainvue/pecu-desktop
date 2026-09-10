@@ -14,7 +14,24 @@
 //! A source cannot corroborate itself. The only thing that reaches this is
 //! asking a second node about the same address, which is what
 //! `pecu_chain::corroborate` does and what this file drives through
-//! `send::prepare` — the function the Send screen actually calls.
+//! `send::prepare`.
+//!
+//! # The wallet can no longer get here, and these tests are the only callers
+//!
+//! `send::prepare` still accepts a second source; **nothing in the application
+//! passes it one.** A second endpoint only ever existed when the active node
+//! was one the user added, and adding one was removed along with the rest of
+//! that feature — `pecu_core::build_on_worker` now passes `None` on every route
+//! and says so at the site. So every assertion below is a statement about this
+//! function's contract rather than about a path a user can take today: nothing
+//! this wallet signs is corroborated.
+//!
+//! They are kept rather than retired because the contract is what
+//! `docs/LATER.md` §14 re-attaches — a second *shipped* endpoint per chain, and
+//! a `second_source` that tests provenance rather than the `builtin` flag — and
+//! because a check whose tests went away would come back unchecked. Reading
+//! them as live coverage of the shipped wallet would be the one mistake they
+//! can cause, which is why this says so here.
 //!
 //! # Why two `MockChain`s and not two `ScriptedReader`s
 //!
@@ -360,13 +377,19 @@ fn a_refused_send_reaches_no_broadcaster() {
     assert_eq!(honest.broadcast_attempts(), 0);
 }
 
-/// The default install, which has to keep working.
+/// Every install, which has to keep working.
 ///
-/// This build ships exactly one endpoint per chain, so on a fresh wallet the
-/// active node is a built-in and there is nothing independent to hold it to.
-/// `NodeManager::second_source` answers `Unheld` there, the send is built with
-/// no second source, and the review says so by saying nothing — see
-/// `pecu_chain::network` for why that admission is worth as much as the code.
+/// This build ships exactly one endpoint per chain and offers no way to
+/// configure another, so **every** node a wallet can be on is a built-in and
+/// there is nothing independent to hold any of them to. This is the shape
+/// `build_on_worker` produces for every send on every route: `None` for the
+/// second source, nothing recorded as having checked, and a review that says so
+/// by saying nothing.
+///
+/// It used to be the *default install's* shape, with a user-added node reaching
+/// the other one. It is now the only shape the application has, which is why
+/// this test asserts the node list is entirely shipped rather than asserting
+/// what `second_source` answered — there is no `second_source` left to ask.
 #[test]
 fn a_send_from_a_built_in_endpoint_still_works_when_no_second_source_exists() {
     let wallet = wallet();
@@ -377,11 +400,8 @@ fn a_send_from_a_built_in_endpoint_still_works_when_no_second_source_exists() {
         "a fresh wallet does not start on a built-in",
     );
     assert!(
-        matches!(
-            manager.second_source(),
-            pecu_chain::SecondSource::Unheld
-        ),
-        "a default install found a second source it does not ship",
+        manager.nodes().iter().all(|node| node.builtin),
+        "a node list held something this build cannot configure",
     );
 
     let chain = Chain::Mock(node(&wallet, 0xcc, &[5 * COIN]));
@@ -732,6 +752,80 @@ fn a_coin_the_shipped_endpoint_has_already_seen_spent_is_not_an_accusation_again
         ),
         "the review told somebody to wait for a node that is already ahead",
     );
+}
+
+/// …and when the only coin there was is the spent one, the refusal says which
+/// node is behind.
+///
+/// `SpendRefused::SecondSourceAhead` was wired by #43 and never reached by a
+/// test. It is the one refusal in the set that comes from an *honest* pair in
+/// the direction nobody expects: the shipped endpoint has watched this wallet's
+/// own earlier payment confirm, the node in use has not caught up and is still
+/// offering the coin that payment consumed, and once that coin is set aside
+/// there is nothing left to pay with.
+///
+/// Worth a test of its own rather than folded into the one above, because the
+/// two differ only in whether a second coin survived — and that is exactly the
+/// branch, `shortfall`, that turns "not enough spendable coins" into a sentence
+/// naming the node that is behind. Without it the sibling test covers the
+/// filtered-payment half and nothing covers the refusal half.
+///
+/// Kept even though nothing in the application can now supply a second source:
+/// it is a statement about `send::prepare`, the function `docs/LATER.md` §14
+/// re-attaches, and the gap it fills was pointed out on #45.
+#[test]
+fn a_spent_coin_with_nothing_behind_it_names_the_node_that_is_behind() {
+    let wallet = wallet();
+    let only = AddressUtxo {
+        utxo: Utxo {
+            txid: txid(0xab, 0),
+            vout: 0,
+            satoshis: Amount::from_sat(5 * COIN),
+            script_pubkey: wallet.script.clone(),
+        },
+        address: wallet.address.clone(),
+        height: TESTNET_TIP - 500,
+        is_spendable: true,
+    };
+
+    // One coin on the node in use. The shipped endpoint is two hundred blocks
+    // further on and does not have it, so it has seen it spent.
+    let primary = with_utxos_at(&wallet, vec![only], TESTNET_TIP);
+    let secondary = with_utxos_at(&wallet, Vec::new(), TESTNET_TIP + 200);
+
+    let outcome = send::prepare(
+        &Chain::Mock(primary),
+        Some(&Corroborator {
+            chain: &Chain::Mock(secondary),
+            url: SHIPPED_URL,
+        }),
+        &wallet.vault,
+        LABEL,
+        &draft(false),
+        "",
+    );
+
+    match outcome {
+        Err(send::SendError::Refused(SpendRefused::SecondSourceAhead {
+            count,
+            secondary,
+            tip,
+        })) => {
+            assert_eq!(count, 1);
+            assert_eq!(secondary, SHIPPED_URL);
+            assert_eq!(
+                tip,
+                TESTNET_TIP + 200,
+                "the refusal carried the wrong node's tip",
+            );
+        }
+        // `SecondSourceBehind` would tell somebody to wait for an endpoint that
+        // is already ahead — advice that never comes true. `Uncorroborated`
+        // would accuse a pair that is simply out of step over this wallet's own
+        // last payment.
+        Err(other) => panic!("a second source that is ahead produced: {other:?}"),
+        Ok(_) => panic!("a coin the shipped endpoint has seen spent was spent again"),
+    }
 }
 
 /// The route the guard would have missed if it had been written around the

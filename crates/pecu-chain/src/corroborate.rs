@@ -1,5 +1,31 @@
 //! Holding one node's coins against another's.
 //!
+//! # Nothing in this wallet runs any of it
+//!
+//! Read this first, because everything below describes a check that is real,
+//! tested, and **unreachable from the application**.
+//!
+//! The rule here only ever ran when the active node was one the user added, and
+//! user-added endpoints are not a feature of this build: there is no
+//! `Command::AddNode`, no `NodeManager::add`, no node table anybody reads, and
+//! no `NodeManager::second_source` to ask. `pecu_core::build_on_worker` hands
+//! `pecu_core::send::prepare` `None` for its second source on every route, on
+//! every chain, always. So **every transparent spend and every shield this
+//! wallet signs is built on one node's word**, which is the state a default
+//! install was always in and is now the state of every install.
+//!
+//! This module is kept rather than deleted because it is the expensive half of
+//! `docs/LATER.md` §14 — a second endpoint per chain that ships, and a
+//! `second_source` written around provenance instead of the `builtin` flag —
+//! and because the rule is subtle enough that re-deriving it later would be
+//! worse than keeping it under test. Its callers are the scripted tests at the
+//! foot of this file and `pecu-core/tests/send_corroboration.rs`. Nothing else.
+//!
+//! One consequence worth stating rather than leaving to be found: the defect
+//! issue #45 describes is in rule 3 below, and it is unreachable for the same
+//! reason the rest of this is. No user can be shown its wrong sentence. The
+//! code is still wrong, and whoever re-attaches a trigger inherits it.
+//!
 //! # What this is for
 //!
 //! [`crate::network::Network`] says why a node's own account of which chain it

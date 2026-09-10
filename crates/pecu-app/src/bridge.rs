@@ -431,21 +431,12 @@ fn apply_notice(ui: &AppWindow, error: &pecu_protocol::UiError) {
     let network = ui.global::<NetworkState>();
 
     match error.code {
-        // The node was accepted. The only signal the add form waits for — it
-        // deliberately does not clear itself on submit, so that a refused
-        // address survives to be corrected rather than retyped.
-        "node_added" => {
-            network.set_problem(pecu_ui::Note::default());
-            network.set_draft_url(SharedString::new());
-            network.set_draft_label(SharedString::new());
-        }
-
         // ── Inline, next to the control that caused it ──────────────────
         //
-        // These four have a form on screen with a field to correct, and a
-        // message beside that field beats one in the corner. Everything else
-        // falls through to a toast.
-        "add_node" | "node_connect" => {
+        // These have a form on screen with a field to correct, and a message
+        // beside that field beats one in the corner. Everything else falls
+        // through to a toast.
+        "node_connect" => {
             tracing::warn!(code = error.code, reason = %error.message.code, "notice");
             network.set_problem(note(&error.message));
         }

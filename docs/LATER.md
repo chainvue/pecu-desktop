@@ -283,13 +283,13 @@ is the chain's own name. The gap this entry is about is narrower and harder: a
 wallet on one of these three has nothing to hold a node's *chain identity*
 against.
 
-The coins are a separate question and are partly covered now. When the active
-node is one the user added, `pecu_chain::corroborate` holds the outputs a
-transparent payment or a shield would spend against the shipped endpoint for
-that chain before anything is signed — on all five chains, this one included.
-That does not close this entry: it says nothing about which chain either
-endpoint is on, and it does nothing at all when the active node is the built-in,
-which is the default. Chain identity still rests on the node's word.
+The coins are a separate question, and since #44 they are not covered either.
+`pecu_chain::corroborate` held the outputs a transparent payment or a shield
+would spend against the shipped endpoint before anything was signed, but only
+when the active node was one the user added — and that is no longer a thing a
+wallet can be. Nothing runs it now; §14 is the entry that would. It would not
+have closed this one regardless: it says nothing about which chain either
+endpoint is on. Chain identity rests on the node's word.
 
 **Why they cannot simply be derived.** A root chain's currency id *is* the id of
 its own name — `hash160(sha256d(lowercase(name)))`, which
@@ -1279,16 +1279,34 @@ left in the key, deliberately.
 
 ## 14. A second shipped endpoint per chain — and the code that has to ship with it
 
-**Status:** the check is built, and on a default install nothing runs it.
+**Status:** the check is built, and **nothing runs it at all.**
+
+This used to read "on a default install nothing runs it". #44 closed the gap the
+other way. `pecu_chain::corroborate` fired only when the *active* node was one
+the user added, and user-added endpoints are no longer a feature: `Command::AddNode`,
+the `add-node` callback, `NodeManager::add`, `NodeManager::second_source` and
+every reader of the store's `node` table are gone. `pecu_core::build_on_worker`
+hands `send::prepare` `None` for its second source on every route, on every
+chain, always.
+
+So the honest one-line summary of this wallet today is that **every transparent
+payment and every shield it signs is built on one node's word**, exactly as a
+default install always was — the asymmetry #44 describes is resolved by making
+everybody the uncorroborated case rather than by making anybody the checked one.
 
 `pecu_chain::corroborate` holds the outputs a transparent payment or a `t→z`
-shield would spend against a second node before anything is signed. It is real,
-it is tested, and it fires only when the *active* node is one the user added.
+shield would spend against a second node before anything is signed. It is real
+and it is tested — by the scripted readers at the foot of that module and by
+`pecu-core/tests/send_corroboration.rs`, which drives `send::prepare` with a
+second source that no caller in the application can now supply. Those tests are
+the only thing keeping it from rotting, and they are why it was kept rather than
+deleted: this entry is the plan to re-attach it, and re-deriving the comparison
+rule later would be worse than maintaining it unused.
+
 `Network::builtin_nodes` returns exactly one endpoint for each of the five
 shipped chains — `every_shipped_chain_is_complete_and_distinct` asserts it — so
-on a fresh install the active node is that one built-in, there is no independent
-endpoint to hold it to, and the spend goes through uncorroborated. Requiring
-corroboration unconditionally today would refuse every spend on every chain.
+there is no independent endpoint to hold anything to. Requiring corroboration
+unconditionally today would refuse every spend on every chain.
 
 **What this entry is really about is that it takes two changes, not one.**
 Finding a second, independently operated endpoint per real-money chain and
@@ -1303,12 +1321,37 @@ if active.builtin {
 }
 ```
 
-That early return is the default install's whole exemption. Add a second
-built-in and it still fires — the active node is a built-in, so nothing is held
-against anything, and the second URL sits in the list being a failover target.
-The two have to land together: a second endpoint, and a `second_source` that
-looks for *another* endpoint of independent provenance rather than asking
-whether the active one was shipped.
+That early return was the default install's whole exemption, and since #44 there
+is no `second_source` left for it to live in — which does not make the trap go
+away, it moves it. Whoever writes the function again has to write it around
+*provenance* rather than around the active node's `builtin` flag, or a second
+shipped endpoint will land and change nothing: the active node will be a
+built-in, nothing will be held against anything, and the second URL will sit in
+the list being a failover target. The two still have to land together.
+
+Three other things have to come back with it, and they are easy to miss now that
+none of them exist:
+
+- **A decision before the build.** `corroborating_source` decided, from the node
+  list, which endpoint a send had to be held against, and which routes had to
+  ask — transparent payments and `t→z` shields, on what a transaction *spends*
+  and not on the route's name.
+- **The same decision before the broadcast.** `corroboration_missing` re-read it
+  at the confirm gate, so bytes prepared under one node list could not be sent
+  under another. The two have to be the same decision or they drift the first
+  time a node's status changes.
+- **Two refusals and their sentences.** `SpendRefused::NoSecondSource` and
+  `SpendRefused::PreparedBeforeNodeChange` were removed with the code that
+  raised them, along with their `node-*` and `spend-*` lines in
+  `ui/components/note.slint`. The four that remain — `Uncorroborated`,
+  `SecondSourceBehind`, `SecondSourceAhead`, `SecondSourceSilent` — are still
+  produced by `send::prepare` and still have words.
+
+And **#45** is the defect to fix *before* re-attaching any of it, not after: rule
+3 in `corroborate::against` excuses any missing coin whenever the secondary is
+ahead, with no bound, so the mirror of #29 renders as "nothing is wrong". It
+reaches no user today because nothing reaches the rule. It will reach the first
+user of whatever runs it next.
 
 **What it costs, so the trade is on the table before somebody starts.** Every
 transparent send and every shield gains a round trip to a server the user did

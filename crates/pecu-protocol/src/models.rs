@@ -260,7 +260,13 @@ pub struct NodeVm {
     pub latency_ms: Option<u32>,
     /// Why it is degraded, in words, when it is.
     pub note: NoteVm,
-    /// Built-in nodes cannot be deleted.
+    /// Whether this endpoint came with the build.
+    ///
+    /// True for every row this build can produce: the shipped list is the whole
+    /// list, and there is nothing that deletes from it or adds to it. Carried
+    /// anyway, because it is a fact about the node rather than a derived one,
+    /// and because a second shipped endpoint per chain — `docs/LATER.md` §14 —
+    /// is the change that makes provenance a question again.
     pub builtin: bool,
 }
 
