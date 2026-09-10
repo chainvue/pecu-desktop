@@ -470,6 +470,18 @@ export component NoteText inherits Text {
             ? @tr("{1} agrees about the coins being spent. It is further ahead than this node and has already seen {0} more of this node's outputs spent, so those are not in this payment.",
                   root.note.args[0], root.note.args[1])
 
+        // ── A transaction id the palette could not find ─────────────────
+        //
+        // Two sentences and not one, because the wallet is in two different
+        // positions and only one of them permits the shorter claim. Neither
+        // is "no such transaction": this wallet reads its own addresses, so a
+        // payment between two strangers and a transaction that was never made
+        // look exactly the same from here.
+        : root.note.code == "search-txid-absent"
+            ? @tr("That is a transaction id, and it is not in this wallet's history.")
+        : root.note.code == "search-txid-unscanned"
+            ? @tr("That is a transaction id, and it is not in the history read so far. Older transactions have not been loaded yet.")
+
         // A code nobody wrote a sentence for. Visible on purpose.
         : root.note.code;
 

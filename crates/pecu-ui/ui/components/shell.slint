@@ -270,11 +270,18 @@ export component TitleBar inherits Rectangle {
                 }
 
                 Text {
-                    // The same two things `Core::search` actually answers for.
-                    // The design's placeholder names three and one of them is a
-                    // transaction id, which nothing searches — a placeholder
-                    // that promises more than the box does is a bug with a
-                    // friendly face.
+                    // Two of the three things `Core::search` answers for. It
+                    // named two because a transaction id was searched by
+                    // nothing, and that stopped being true — the palette's own
+                    // placeholder, in `overlay.slint`, names all three.
+                    //
+                    // This one still names two, and the reason is the cost
+                    // rather than the wording: this hint sits in the header of
+                    // every screen, so a word added here moves 136 of the
+                    // reference images. Understating what the box does is a
+                    // smaller fault than a change nobody can review, and the
+                    // sentence is not wrong — it is short. Whoever is next to
+                    // re-record the set for another reason should add it then.
                     text: @tr("Search · address, currency");
                     font-size: Typo.caption;
                     color: Theme.text-tertiary;

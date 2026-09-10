@@ -1651,25 +1651,30 @@ pub struct MarketDetailVm {
 /// have rendered would answer for the screen rather than for the wallet.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchHitVm {
-    /// "address" · "currency". Chooses the icon and tells the interface which
-    /// screen to open, without it having to parse `target`.
+    /// "address" · "currency" · "transaction". Chooses the icon and tells the
+    /// interface which screen to open, without it having to parse `target`.
     ///
-    /// Both destinations are screens that are in the rail, which is the whole
-    /// of the rule: a hit whose only home is a hidden screen strands whoever
-    /// picks it. `Core::search` says what that cost.
+    /// All three destinations are screens that are in the rail, which is the
+    /// whole of the rule: a hit whose only home is a hidden screen strands
+    /// whoever picks it. `Core::search` says what that cost. Activity is in the
+    /// rail and the transaction sheet opens over it, so a transaction hit is
+    /// somewhere a person can come back from; identities were removed from this
+    /// list because they are not.
     pub kind: String,
-    /// What to show: a saved address's label, or a currency's name as the chain
-    /// spells it. An address nobody has named repeats its address here rather
-    /// than leaving the line empty.
+    /// What to show: a saved address's label, a currency's name as the chain
+    /// spells it, or a transaction id abbreviated the way the activity list
+    /// abbreviates it. An address nobody has named repeats its address here
+    /// rather than leaving the line empty.
     pub label: String,
-    /// The address, under the name. A person searching for a name recognises
-    /// it; a person searching for an address needs to see it echoed back or
-    /// they cannot tell which of two similar rows they matched.
+    /// The identifier, under the name — an address, or a transaction id in
+    /// full. A person searching for a name recognises the name; a person who
+    /// arrived with something pasted needs to see it echoed back or they cannot
+    /// tell which of two similar rows they matched.
     pub sub: String,
-    /// The address again, as the thing to act on. Separate from `sub` because
-    /// what is *shown* and what is *opened* are allowed to diverge later, and
-    /// discovering that they had been the same field is how a display change
-    /// breaks navigation.
+    /// The identifier again, as the thing to act on. Separate from `sub`
+    /// because what is *shown* and what is *opened* are allowed to diverge
+    /// later, and discovering that they had been the same field is how a
+    /// display change breaks navigation.
     pub target: String,
 }
 

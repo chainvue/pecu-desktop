@@ -1377,7 +1377,7 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
         // opening a sheet over the palette: a detour that lands somewhere
         // recognisable is one a person can find their way back from.
         //
-        // Both arms land on a screen that is in the rail. That is the whole
+        // Every arm lands on a screen that is in the rail. That is the whole
         // reason the core stopped answering with identities — a result whose
         // only destination is hidden strands whoever picked it. Why that
         // destination is hidden, and what it would take to unhide it, is in
@@ -1414,6 +1414,21 @@ fn wire_search(ui: &AppWindow, dispatcher: Dispatcher) {
                     send.get_send_all(),
                 );
                 ui.invoke_go("send".into());
+                return;
+            }
+
+            if hit.kind == "transaction" {
+                // Activity first, then the sheet. The sheet draws over
+                // everything and would open just as well from the dashboard,
+                // but shutting it would then leave somebody on a screen with no
+                // trace of what they just looked at. Behind it is the list the
+                // row belongs to, which is where they were trying to get.
+                //
+                // The core looks the id up in the same history the palette
+                // matched it against, so this cannot land on a sheet that never
+                // opens.
+                ui.invoke_go("activity".into());
+                ui.global::<Actions>().invoke_open_tx(hit.target.clone());
                 return;
             }
 

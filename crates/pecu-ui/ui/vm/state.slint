@@ -974,6 +974,12 @@ export global SearchState {
     // from outside the field.
     in-out property <string> query: "";
     in property <[SearchHit]> hits: [];
+    // What the wallet has to say when it found nothing, on the one query whose
+    // emptiness is itself an answer: a whole transaction id that is not in this
+    // wallet's history. Empty otherwise — the palette has no general empty
+    // state, because the interface cannot tell an empty answer from one that
+    // has not arrived yet.
+    in property <Note> note;
     callback search(string);
     // Open whatever the row points at.
     callback pick(SearchHit);

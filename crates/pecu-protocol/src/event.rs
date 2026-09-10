@@ -178,6 +178,17 @@ pub enum Event {
     SearchHits {
         query: String,
         hits: Vec<SearchHitVm>,
+        /// What the wallet can say about an empty list, when it can say
+        /// anything. `NoteVm::none()` the rest of the time — which is most of
+        /// the time, because a query that matched nothing is usually a query
+        /// somebody is still typing.
+        ///
+        /// The palette otherwise has no empty state on purpose: the interface
+        /// cannot tell an empty answer from an unanswered one, so it says
+        /// nothing rather than guessing. This is the core saying it instead,
+        /// about the one query whose emptiness is itself a fact — a complete
+        /// transaction id that is not in this wallet's history.
+        note: NoteVm,
     },
     /// What core makes of the draft being configured, including the numbers the
     /// bars and the preview are drawn from.

@@ -209,6 +209,16 @@ pub const CASES: &[Case] = &[
     ("dashboard", "unconfirmed", crate::fixtures::unconfirmed),
     ("dashboard", "toasts", crate::fixtures::complaining),
     ("dashboard", "search", crate::fixtures::searching),
+    (
+        "dashboard",
+        "search-transaction",
+        crate::fixtures::searching_transaction,
+    ),
+    (
+        "dashboard",
+        "search-txid-unknown",
+        crate::fixtures::searching_unknown_transaction,
+    ),
     ("markets", "markets", crate::fixtures::markets),
     ("markets", "market-detail", crate::fixtures::market_detail),
     ("markets", "market-moving", crate::fixtures::market_moving),

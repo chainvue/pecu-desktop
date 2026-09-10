@@ -1080,6 +1080,113 @@ fn search_matches(needle: &str, name: &str, address: &str) -> bool {
     name.to_lowercase().contains(needle) || address.to_lowercase().contains(needle)
 }
 
+/// Whether what was typed is a transaction id in full.
+///
+/// Sixty-four hex characters and nothing else. The needle arrives already
+/// trimmed and lower-cased, which is why this does not do it again.
+///
+/// "In full" is the whole of the point. A shorter run of hex is not a
+/// well-formed anything — it could be a prefix somebody is still pasting, or a
+/// name — and only the complete id lets the wallet say something about not
+/// finding it. See [`txid_note`].
+fn is_txid(needle: &str) -> bool {
+    needle.len() == 64 && needle.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The shortest run of hex the palette will look for a transaction by.
+///
+/// Prefixes **are** matched — the identifier nobody can hold in their head is
+/// exactly the one worth searching by its head, and an explorer, a receipt and
+/// this wallet's own activity list all print an abbreviation rather than the
+/// sixty-four characters.
+///
+/// Eight, and the number is doing work. Hex is dense: a two-character prefix
+/// matches about one stored transaction in 256 by coincidence, so a short
+/// query typed as a *name* — `ab`, `dead`, `face` — would sprout transaction
+/// rows that mean nothing and push the rows somebody was actually looking for
+/// past the cap. Eight characters is thirty-two bits, which cannot collide by
+/// accident with anything a single wallet's history holds, and it is shorter
+/// than any abbreviation an explorer prints.
+const TXID_PREFIX: usize = 8;
+
+/// Everything the command palette shows for one query: the rows, and the one
+/// thing the wallet can say when there are no rows.
+struct Palette {
+    hits: Vec<pecu_protocol::SearchHitVm>,
+    /// `NoteVm::none()` unless the query was a complete transaction id that
+    /// this wallet does not have. See [`txid_note`].
+    note: NoteVm,
+}
+
+/// What to say about a transaction id that matched nothing.
+///
+/// Nothing at all, unless the query was a *complete* id. A prefix that matched
+/// nothing is not a statement about anything: it is as likely to be a half
+/// pasted id or an ordinary word as a transaction this wallet has never seen.
+///
+/// # Two sentences, because the wallet is in two different positions
+///
+/// A wallet that has read its history back to the start of the chain can say
+/// the id is not in it. A wallet that has not — which is the ordinary case,
+/// because history is paged backwards and "Load older transactions" is a
+/// button precisely because the scan stops — can only say it is not in what
+/// has been read so far. Collapsing those into one sentence would put the
+/// wrong one on screen for most wallets most of the time, and "not in this
+/// wallet's history" said about a scan that covered the last few hundred
+/// blocks is simply false.
+///
+/// Neither of them is "no such transaction". This wallet reads address deltas
+/// for its own keys; a transaction it has never heard of and a transaction
+/// that does not exist look identical from here, and only one of those is
+/// something it may claim.
+fn txid_note(needle: &str, found_none: bool, history_complete: bool) -> NoteVm {
+    if !found_none || !is_txid(needle) {
+        return NoteVm::none();
+    }
+    if history_complete {
+        NoteVm::plain("search-txid-absent")
+    } else {
+        NoteVm::plain("search-txid-unscanned")
+    }
+}
+
+/// The stored transactions whose id starts with what was typed.
+///
+/// Newest first, which is the opposite of the order the entries are held in —
+/// they come off the SDK oldest first because a day heading is a statement
+/// about the row above it. A prefix that matches two transactions is a
+/// coincidence at [`TXID_PREFIX`] characters, but when it happens the recent
+/// one is the one somebody is asking about.
+///
+/// The row shows the abbreviated id above the full one. That is the same shape
+/// as an address row — the recognisable form on top, the identifier under it —
+/// and the full id is what tells somebody the wallet matched the transaction
+/// they pasted rather than one that merely starts the same way.
+fn transaction_hits(
+    needle: &str,
+    history: &[verus_sdk::network::HistoryEntry],
+    most: usize,
+) -> Vec<pecu_protocol::SearchHitVm> {
+    if needle.len() < TXID_PREFIX || !needle.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Vec::new();
+    }
+
+    history
+        .iter()
+        .rev()
+        .filter_map(|entry| {
+            let txid = entry.txid.to_string();
+            txid.starts_with(needle).then(|| pecu_protocol::SearchHitVm {
+                kind: "transaction".to_string(),
+                label: portfolio::short(&txid),
+                sub: txid.clone(),
+                target: txid,
+            })
+        })
+        .take(most)
+        .collect()
+}
+
 /// Everything the command palette shows for one query.
 ///
 /// Free rather than a method so it can be tested: `Core` owns channels, a node
@@ -1088,11 +1195,18 @@ fn search_matches(needle: &str, name: &str, address: &str) -> bool {
 ///
 /// `known` comes back from the store most-recently-paid first, and the order is
 /// load-bearing — see `MOST`.
+///
+/// `history` is what the wallet has read of its own transactions, and
+/// `history_complete` whether that is all of them. Both, rather than the
+/// entries alone: what the wallet may say about *not* finding an id depends
+/// entirely on how far it has looked.
 fn palette_hits(
     query: &str,
     known: &[pecu_store::KnownAddress],
     currencies: &std::collections::BTreeMap<String, String>,
-) -> Vec<pecu_protocol::SearchHitVm> {
+    history: &[verus_sdk::network::HistoryEntry],
+    history_complete: bool,
+) -> Palette {
     /// How many results the panel will show.
     ///
     /// It has no scroll and sizes itself to its content, so an uncapped list
@@ -1108,7 +1222,10 @@ fn palette_hits(
 
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
-        return Vec::new();
+        return Palette {
+            hits: Vec::new(),
+            note: NoteVm::none(),
+        };
     }
 
     let mut hits: Vec<pecu_protocol::SearchHitVm> = Vec::new();
@@ -1172,7 +1289,23 @@ fn palette_hits(
         });
     }
 
-    hits
+    // Then transactions, last of the three and matched only on the identifier.
+    //
+    // Last because the other two lists answer "who" and "what", which is what
+    // a search box is mostly opened for, and a transaction id is arrived at
+    // with rather than typed. Nothing is lost to the cap by putting it here:
+    // a complete id is sixty-four characters and cannot be a substring of a
+    // thirty-four character address or of a currency's name, so the query that
+    // most needs this row is a query the two lists above cannot answer at all.
+    //
+    // Matched before the cap is applied rather than after, because the note
+    // below is a claim about the wallet's history and not about how much of
+    // the panel was still free.
+    let found = transaction_hits(&needle, history, MOST);
+    let note = txid_note(&needle, found.is_empty(), history_complete);
+    hits.extend(found.into_iter().take(MOST.saturating_sub(hits.len())));
+
+    Palette { hits, note }
 }
 
 impl Core {
@@ -5619,9 +5752,16 @@ const SCAN_ATTEMPTS: u32 = 3;
     /// Answer the command palette.
     ///
     /// Over what is already in hand — the addresses this wallet has paid or
-    /// named, and the currencies the markets read has named — rather than over
-    /// the chain. A palette that made a request per keystroke would stutter,
-    /// and neither list changes between two letters being typed.
+    /// named, the currencies the markets read has named, and the transactions
+    /// already scanned into `history` — rather than over the chain. A palette
+    /// that made a request per keystroke would stutter, and none of the three
+    /// lists changes between two letters being typed.
+    ///
+    /// The history is the wallet's own, which is what makes the third kind
+    /// cheap and also what bounds it: `Command::LoadTxDetail` looks a
+    /// transaction up in exactly this list, so a hit from here is a sheet that
+    /// is certain to open, and an id from somebody else's wallet is not in it
+    /// to be found.
     ///
     /// An empty query clears rather than listing everything: a palette that
     /// opens showing the whole wallet has answered a question nobody asked.
@@ -5644,24 +5784,33 @@ const SCAN_ATTEMPTS: u32 = 3;
     ///
     /// `kind` is the whole of the contract: it picks the icon and the screen.
     /// Adding identities back is one loop in [`palette_hits`], one arm in
-    /// `wire_search`, the icon branch in `overlay.slint` — which is binary
-    /// today — the palette's placeholder, which names the kinds it searches,
-    /// and the assertion below that pins them to exactly two.
+    /// `wire_search`, the icon branch in `overlay.slint`, the palette's
+    /// placeholder, which names the kinds it searches, and the assertion below
+    /// that pins them to the ones this build can actually land on. Transactions
+    /// were added exactly that way and are the shape of the work.
     ///
     /// Adding the currencies these keys define back is that again plus a
-    /// **third** kind, and it is worth knowing before somebody reuses the
+    /// **fourth** kind, and it is worth knowing before somebody reuses the
     /// string: `"currency"` no longer means what it meant when the loop was
     /// deleted. It is a market hit, and `wire_search` sends it to the markets
     /// detail. A definition hit borrowing it would carry the right label to the
     /// wrong screen.
     fn search(&mut self, query: &str) {
-        let hits = match &self.store {
-            Some(store) => palette_hits(query, &store.known_addresses(), &self.market_names),
-            None => palette_hits(query, &[], &self.market_names),
+        let known = match &self.store {
+            Some(store) => store.known_addresses(),
+            None => Vec::new(),
         };
+        let palette = palette_hits(
+            query,
+            &known,
+            &self.market_names,
+            &self.history.entries,
+            self.history.complete,
+        );
         let _ = self.events.send(Event::SearchHits {
             query: query.to_string(),
-            hits,
+            hits: palette.hits,
+            note: palette.note,
         });
     }
 
@@ -8033,7 +8182,10 @@ mod tests {
             "ve",
             &[known("Vera", "RQxJPwq")],
             &currencies(&[("iBoaN7s", "Bridge.vETH")]),
-        );
+            &[],
+            false,
+        )
+        .hits;
 
         let kinds: Vec<&str> = hits.iter().map(|hit| hit.kind.as_str()).collect();
         assert_eq!(kinds, ["address", "currency"]);
@@ -8045,7 +8197,7 @@ mod tests {
     /// top line reads as a broken row rather than an unnamed one.
     #[test]
     fn an_unnamed_address_falls_back_to_its_address_rather_than_showing_nothing() {
-        let hits = palette_hits("rqx", &[known("", "RQxJPwq")], &currencies(&[]));
+        let hits = palette_hits("rqx", &[known("", "RQxJPwq")], &currencies(&[]), &[], false).hits;
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].label, "RQxJPwq");
@@ -8060,13 +8212,21 @@ mod tests {
     fn a_saved_identity_is_found_by_the_name_it_was_paid_under() {
         let saved = known_identity("dude.VRSCTEST@", "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP");
 
-        let hits = palette_hits("dude", std::slice::from_ref(&saved), &currencies(&[]));
+        let hits =
+            palette_hits("dude", std::slice::from_ref(&saved), &currencies(&[]), &[], false).hits;
         assert_eq!(hits.len(), 1, "searching by name found nothing");
         assert_eq!(hits[0].label, "dude.VRSCTEST@");
         assert_eq!(hits[0].target, "i4YzoP8ZHnh1gNywV9PAT6Yz3AkfXxJmtP");
 
         // And still by its address, which is what somebody arrives with pasted.
-        let hits = palette_hits("i4YzoP8Z", std::slice::from_ref(&saved), &currencies(&[]));
+        let hits = palette_hits(
+            "i4YzoP8Z",
+            std::slice::from_ref(&saved),
+            &currencies(&[]),
+            &[],
+            false,
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].label, "dude.VRSCTEST@");
     }
@@ -8078,13 +8238,16 @@ mod tests {
     /// the way in.
     #[test]
     fn an_empty_query_clears_rather_than_listing_the_wallet() {
-        let hits = palette_hits(
+        let answer = palette_hits(
             "   ",
             &[known("Vera", "RQxJPwq")],
             &currencies(&[("iBoaN7s", "Bridge.vETH")]),
+            &[],
+            false,
         );
 
-        assert!(hits.is_empty());
+        assert!(answer.hits.is_empty());
+        assert_eq!(answer.note, NoteVm::none(), "and says nothing about it");
     }
 
     /// The panel has no scroll and sizes itself to its content, so the list is
@@ -8099,7 +8262,7 @@ mod tests {
             .collect();
         let catalog: std::collections::BTreeMap<String, String> = names.into_iter().collect();
 
-        let hits = palette_hits("saved", &addresses, &catalog);
+        let hits = palette_hits("saved", &addresses, &catalog, &[], false).hits;
 
         assert_eq!(hits.len(), 8, "the panel would run off the bottom");
         assert!(
@@ -8109,24 +8272,141 @@ mod tests {
     }
 
     /// Nothing the palette hands back may point at a screen that is not in the
-    /// rail. `wire_search` routes on `kind` alone, and the two it knows are the
-    /// two screens this build shows.
+    /// rail. `wire_search` routes on `kind` alone, and the three it knows are
+    /// three screens this build shows.
     #[test]
     fn every_hit_names_a_screen_this_build_actually_offers() {
-        let hits = palette_hits(
+        let history = [landed(LANDED)];
+        let mut hits = palette_hits(
             "e",
             &[known("Vera", "RQxJPwq")],
             &currencies(&[("iBoaN7s", "Bridge.vETH")]),
-        );
+            &history,
+            true,
+        )
+        .hits;
+        // Two queries, because no one string can match all three lists: an
+        // identifier long enough to be looked for as a transaction is longer
+        // than any address it could be a substring of.
+        hits.extend(palette_hits(&LANDED[..12], &[], &currencies(&[]), &history, true).hits);
 
-        assert!(!hits.is_empty(), "the fixture has to match something");
+        assert_eq!(hits.len(), 3, "the fixture has to match all three");
         for hit in &hits {
             assert!(
-                hit.kind == "address" || hit.kind == "currency",
+                matches!(hit.kind.as_str(), "address" | "currency" | "transaction"),
                 "{} has nowhere to go",
                 hit.kind
             );
         }
+    }
+
+    // ── Transactions ────────────────────────────────────────────────────────
+
+    /// The first payment this wallet made on a real chain, and the same id the
+    /// interface fixtures photograph.
+    const LANDED: &str = "68320bb5eb723ca3ab3f92d26133b4309d03c59e9ce3e93dba85d68379e98883";
+
+    /// A stored transaction, reduced to the one field the palette reads.
+    fn landed(txid: &str) -> verus_sdk::network::HistoryEntry {
+        verus_sdk::network::HistoryEntry {
+            txid: txid.parse().expect("a transaction id"),
+            height: 1_197_422,
+            block_index: 0,
+            block_time: 1_700_000_000,
+            net_native: verus_sdk::network::SignedAmount::ZERO,
+            net_currencies: std::collections::BTreeMap::new(),
+            spent_something: false,
+        }
+    }
+
+    /// A whole transaction id, pasted, finds the transaction.
+    ///
+    /// The case the palette existed without: sixty-four characters from an
+    /// exchange or a counterparty, and no hit type they could produce.
+    #[test]
+    fn a_pasted_transaction_id_finds_the_transaction() {
+        let answer = palette_hits(LANDED, &[], &currencies(&[]), &[landed(LANDED)], true);
+
+        assert_eq!(answer.hits.len(), 1, "a whole txid found nothing");
+        assert_eq!(answer.hits[0].kind, "transaction");
+        // What `Command::LoadTxDetail` looks the entry up by, so the sheet is
+        // certain to open.
+        assert_eq!(answer.hits[0].target, LANDED);
+        // The abbreviation on top and the whole id under it, so somebody can
+        // see that this is the transaction they pasted.
+        assert_eq!(answer.hits[0].label, portfolio::short(LANDED));
+        assert_eq!(answer.hits[0].sub, LANDED);
+        assert_eq!(answer.note, NoteVm::none(), "it was found");
+    }
+
+    /// And the head of one does too, which is the form anybody can read off a
+    /// screen or a receipt.
+    #[test]
+    fn the_head_of_a_transaction_id_finds_it_too() {
+        let history = [landed(LANDED)];
+
+        for length in [TXID_PREFIX, 12, 32] {
+            let answer = palette_hits(&LANDED[..length], &[], &currencies(&[]), &history, true);
+            assert_eq!(answer.hits.len(), 1, "{length} characters found nothing");
+            assert_eq!(answer.hits[0].target, LANDED);
+        }
+
+        // Upper case is the same identifier. Somebody's clipboard decides this,
+        // not them.
+        let shouted = LANDED[..12].to_uppercase();
+        assert_eq!(
+            palette_hits(&shouted, &[], &currencies(&[]), &history, true)
+                .hits
+                .len(),
+            1,
+        );
+    }
+
+    /// A prefix shorter than the floor is not looked for at all.
+    ///
+    /// Hex is dense enough that `ab` matches about one stored transaction in
+    /// 256 by coincidence, and a palette that answered "de" with transaction
+    /// rows would be pushing the rows somebody wanted past the cap.
+    #[test]
+    fn a_prefix_too_short_to_mean_anything_matches_no_transaction() {
+        let history = [landed(LANDED)];
+
+        let answer = palette_hits(&LANDED[..TXID_PREFIX - 1], &[], &currencies(&[]), &history, true);
+        assert!(answer.hits.is_empty(), "{:?}", answer.hits);
+        assert_eq!(answer.note, NoteVm::none(), "nor does it say anything");
+    }
+
+    /// A whole transaction id this wallet does not have gets an answer, not
+    /// silence — and the answer says how far the wallet has actually looked.
+    #[test]
+    fn a_transaction_id_this_wallet_does_not_have_is_told_so() {
+        let stranger = "1".repeat(64);
+        let history = [landed(LANDED)];
+
+        // Read back to the start of the chain: the wallet can say it is not in
+        // its history.
+        let scanned = palette_hits(&stranger, &[], &currencies(&[]), &history, true);
+        assert!(scanned.hits.is_empty());
+        assert_eq!(scanned.note, NoteVm::plain("search-txid-absent"));
+
+        // Still paging backwards, which is the ordinary state: all it may say
+        // is that the id is not in what has been read so far. Claiming the
+        // stronger sentence here would be false for most wallets most of the
+        // time.
+        let paging = palette_hits(&stranger, &[], &currencies(&[]), &history, false);
+        assert!(paging.hits.is_empty());
+        assert_eq!(paging.note, NoteVm::plain("search-txid-unscanned"));
+    }
+
+    /// …and a run of hex that is not a whole id says nothing, because it is
+    /// not a statement anybody could act on: it is as likely to be a half
+    /// pasted id, or a word.
+    #[test]
+    fn an_incomplete_id_that_matched_nothing_stays_quiet() {
+        let answer = palette_hits("deadbeef", &[], &currencies(&[]), &[landed(LANDED)], true);
+
+        assert!(answer.hits.is_empty());
+        assert_eq!(answer.note, NoteVm::none());
     }
 
     /// The one line the send form gets about a VerusID, in priority order.

@@ -224,7 +224,7 @@ fn apply(ui: &AppWindow, event: Event) {
         Event::ConvertPrepared(vm) => apply_convert_review(ui, &vm),
         Event::ConvertResult(outcome) => apply_convert_outcome(ui, outcome),
 
-        Event::SearchHits { query, hits } => {
+        Event::SearchHits { query, hits, note } => {
             let state = ui.global::<pecu_ui::SearchState>();
             // Drop a reply to a query nobody is running any more. Two
             // keystrokes in flight arrive in order, but the older answer
@@ -243,6 +243,9 @@ fn apply(ui: &AppWindow, event: Event) {
                 })
                 .collect();
             state.set_hits(slint::ModelRc::new(slint::VecModel::from(rows)));
+            // Set from the same reply as the rows, so the panel cannot show a
+            // sentence about one query beside the results of another.
+            state.set_note(self::note(&note));
         }
 
         Event::CurrencyDraftChecked(vm) => apply_currency_draft(ui, &vm),
