@@ -350,6 +350,19 @@ export component NoteText inherits Text {
         : root.note.code == "node-refused-method" ? @tr("refused {0}", root.note.args[0])
         : root.note.code == "node-offline" ? root.note.args[0]
 
+        // ── What the holdings list could not count ──────────────────────
+        //
+        // A list with no token in it has two causes and they are opposites:
+        // this wallet holds none, or a read did not finish and nobody counted.
+        // Both drew the same nothing until this sentence existed.
+        //
+        // It says what is not known rather than what went wrong, because the
+        // "why" is already on screen — the figures above carry NOT UP TO DATE
+        // from the same failure — and a second account of the same refusal
+        // under a list is a paragraph where a caption belongs.
+        : root.note.code == "assets-tokens-unknown"
+            ? @tr("The token balances could not be read, so this list is not saying there are none — only that this wallet could not count them.")
+
         // ── The figures over a history ──────────────────────────────────
         : root.note.code == "stat-transactions-30d" ? @tr("Transactions · 30d")
         : root.note.code == "stat-sent-30d" ? @tr("Sent · 30d")

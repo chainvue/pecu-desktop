@@ -92,6 +92,21 @@ export global WalletState {
     // only because the native row happens to be pushed first.
     in property <bool> holds-tokens: false;
 
+    // The token balances are UNKNOWN, which is not the same as zero.
+    //
+    // A read that could not reach one of this wallet's addresses has not said
+    // that address holds no tokens — so the list below is missing whatever it
+    // holds, and `holds-tokens` being false then means "nobody could count"
+    // rather than "there are none". Without this the two states are one
+    // silence, which is the whole of issue #34.
+    //
+    // Its own fact rather than read off `stale`. The two are decided by the
+    // same failure today and answer different questions: `stale` is about the
+    // figures that ARE on screen being from an earlier read, and this is about
+    // a row that is not on screen at all. A sentence about the second drawn
+    // from the first would be true by coincidence.
+    in property <bool> tokens-unknown: false;
+
     in property <[AssetRow]> assets: [];
     // The dashboard's short list, and the whole thing for the Activity screen.
     // Two models rather than one sliced, because Slint's `for` has no window.

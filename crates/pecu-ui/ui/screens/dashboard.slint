@@ -2,6 +2,7 @@
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Skeleton, StatusPill } from "../components/base.slint";
+import { NoteText } from "../components/note.slint";
 import { Actions, ChartState, ConvertState, HaltState, MarketState, SeedState, SendState, WalletState } from "../vm/state.slint";
 
 // The screen shown whenever there is no unlocked wallet.
@@ -542,6 +543,55 @@ export component AssetsPanel inherits Card {
                 font-size: Typo.micro;
                 color: Theme.text-tertiary;
                 wrap: word-wrap;
+            }
+        }
+
+        // …and what the list's silence means when there is no token in it.
+        //
+        // Two wallets reach this card with the same rows: one holding only the
+        // chain's own coin, and one whose read could not reach an address and
+        // therefore counted no tokens anywhere. The first is complete and needs
+        // no sentence — a wallet holding coin is not missing anything, and
+        // "you hold no tokens" under a list that shows none is the card reading
+        // itself out. The second is an absence of a list rather than a list of
+        // nothing, and it said so nowhere: `tokens-unknown` was computed in the
+        // core, crossed nothing, and reached no screen.
+        //
+        // So the sentence appears in exactly one of the two, and the silence in
+        // the other now means something because its opposite speaks.
+        //
+        // # Why it is not drawn over a list that does have tokens
+        //
+        // The same failure can leave some rows standing — a second address
+        // answered — and those rows are true. What is missing there is unknown
+        // in the same way, and the caption above it already occupies this slot
+        // with a different subject; two stacked captions under three rows is a
+        // paragraph. The figures at the top of the screen carry NOT UP TO DATE
+        // from the same read, which is the part that is about them.
+        //
+        // `Rectangle` with its height written out, and the inset, for the
+        // reasons argued at length above the caption it sits under.
+        if !WalletState.holds-tokens && WalletState.tokens-unknown: Rectangle {
+            height: uncounted.height + Sp.s3 * 2;
+
+            // Through the note table rather than as a literal here, unlike its
+            // neighbour. That caption picks between three wordings on interface
+            // state and interpolates the ticker, so it belongs to the screen;
+            // this is one fixed sentence for one state the core named, which is
+            // what that file holds. Nothing else renders this code, so the
+            // note is built here — `app.slint` does the same for the sentences
+            // under the action bar.
+            uncounted := NoteText {
+                x: Sp.s5;
+                y: Sp.s3;
+                width: parent.width - Sp.s5 * 2;
+
+                note: { code: "assets-tokens-unknown" };
+                // Matching the caption beside it rather than `NoteText`'s own
+                // default: this is the same kind of line in the same column,
+                // and a second size would read as a second kind of remark.
+                font-size: Typo.micro;
+                color: Theme.text-tertiary;
             }
         }
     }

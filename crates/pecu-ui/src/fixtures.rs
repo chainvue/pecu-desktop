@@ -1630,6 +1630,37 @@ pub fn funded_with_shielded(ui: &AppWindow) {
     );
 }
 
+/// A dashboard whose token balances could not be counted.
+///
+/// The state issue #34 is about, and the reason it needs a picture of its own:
+/// the rows here are pixel for pixel the rows of a wallet holding only the
+/// chain's coin, and the only difference between the two screens is the
+/// sentence under them. A reviewer comparing this against `dashboard-funded`
+/// sees what a failed count looks like; without the image, the one thing this
+/// change adds is the one thing no picture shows.
+///
+/// `stale` too, because the flag this photographs comes from a read that did
+/// not finish and that read sets both — the figures above carry NOT UP TO DATE
+/// in the same breath. A picture with the sentence and a calm headline would be
+/// a state the bridge cannot produce.
+pub fn tokens_uncounted(ui: &AppWindow) {
+    funded(ui);
+
+    let wallet = ui.global::<WalletState>();
+    // The chain's own row, exactly as `funded` built it. Taken off the model
+    // rather than written out again: this fixture is `funded` with the token it
+    // could not count removed, and a second copy of that row here would be a
+    // row to keep in step with the one every other dashboard image shows.
+    let native: Vec<AssetRow> = wallet.get_assets().iter().take(1).collect();
+    wallet.set_assets(ModelRc::from(Rc::new(VecModel::from(native))));
+    // False for the reason the sentence exists: nothing was counted, so nothing
+    // is known to be held. The bridge sets it from the rows it built and would
+    // arrive at the same answer.
+    wallet.set_holds_tokens(false);
+    wallet.set_tokens_unknown(true);
+    wallet.set_stale(true);
+}
+
 pub fn shielding(ui: &AppWindow) {
     sending(ui);
 
