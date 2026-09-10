@@ -103,6 +103,15 @@ const SCREENS: &[Screen] = &[
     // reaching it, and the row it does reach proves nothing about this one.
     ("convert", pecu_ui::fixtures::converting_rejected),
     ("activity", pecu_ui::fixtures::history),
+    // The three screens that end with a transaction id, added with #18 — which
+    // gave each of them a second control beside the first and is therefore
+    // exactly the change this test exists to catch. None of the three had ever
+    // been walked here, so the copy button on a sent payment had gone unchecked
+    // since it was written, and the sheet's read-only fields announced
+    // themselves as "text field" and nothing else.
+    ("send", pecu_ui::fixtures::sent),
+    ("convert", pecu_ui::fixtures::converting_sent),
+    ("activity", pecu_ui::fixtures::tx_detail),
     ("send", pecu_ui::fixtures::sending),
     ("send", pecu_ui::fixtures::sending_too_much),
     // Listed for completeness, not for coverage: every control on this state is

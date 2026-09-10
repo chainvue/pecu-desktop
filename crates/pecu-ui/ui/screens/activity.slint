@@ -2,7 +2,7 @@
 
 import { ListView } from "std-widgets.slint";
 import { R, Sp, Theme, Typo } from "../theme/theme.slint";
-import { Btn, Card, EmptyState, Eyebrow, ListRow, Money, Segmented } from "../components/base.slint";
+import { Btn, Card, EmptyState, ListRow, Money, Segmented, TxId } from "../components/base.slint";
 import { ActivityRow } from "../vm/structs.slint";
 import { Actions, ActivityState, TxState, WalletState } from "../vm/state.slint";
 import { NoteText } from "../components/note.slint";
@@ -316,37 +316,6 @@ export component ActivityScreen inherits VerticalLayout {
     if WalletState.history.length == 0: Rectangle { vertical-stretch: 1; }
 }
 
-// Where to look a transaction up.
-//
-// Shown, not opened. Launching a browser is a capability a wallet does not
-// otherwise have, and it is one process spawn away from being a way to run
-// something else.
-export component ExplorerLink inherits VerticalLayout {
-    spacing: Sp.s3;
-    Eyebrow { text: @tr("LOOK IT UP"); }
-
-    HorizontalLayout {
-        spacing: Sp.s4;
-        link := TextInput {
-            horizontal-stretch: 1;
-            text: TxState.explorer;
-            read-only: true;
-            font-family: Typo.mono;
-            font-size: Typo.num-sm;
-            color: Theme.text-secondary;
-            wrap: char-wrap;
-        }
-        Btn {
-            text: @tr("Copy link");
-            y: 0;
-            clicked => {
-                link.select-all();
-                link.copy();
-            }
-        }
-    }
-}
-
 export component TxSheet inherits Rectangle {
     // Dims what is behind without hiding it, so the list is still the context.
     background: Theme.dark ? #0B0C0EC0 : #FBFBFCC0;
@@ -473,41 +442,31 @@ export component TxSheet inherits Rectangle {
                     }
                 }
 
-                // The button that copies the id, beside the id.
+                // The same component the send and convert screens end with,
+                // rather than a third arrangement of the same two facts.
                 //
-                // It used to be in the footer, two sections below — after the
-                // explorer link, which has its own Copy sitting right next to
-                // the thing it copies. So the sheet taught one arrangement and
-                // then used the other for the field above it.
-                VerticalLayout {
-                    spacing: Sp.s3;
-                    Eyebrow { text: @tr("TRANSACTION ID"); }
-                    HorizontalLayout {
-                        spacing: Sp.s4;
-                        txid := TextInput {
-                            horizontal-stretch: 1;
-                            text: TxState.txid;
-                            read-only: true;
-                            font-family: Typo.mono;
-                            font-size: Typo.num-sm;
-                            color: Theme.text-primary;
-                            wrap: char-wrap;
-                        }
-                        Btn {
-                            text: @tr("Copy id");
-                            y: 0;
-                            clicked => {
-                                txid.select-all();
-                                txid.copy();
-                            }
-                        }
-                    }
+                // This sheet used to hold its own copy of both — an id with a
+                // `Copy id` button, and a link it would copy and would not
+                // open, under a comment arguing that opening a browser is one
+                // process spawn away from running something else. Issue #18 is
+                // that the two screens disagreed; the answer is one component
+                // offering both actions, not one of the two conventions
+                // winning.
+                //
+                // The security concern that comment recorded was not dropped.
+                // Opening goes through `Actions.open-link`, which is
+                // `pecu-app`'s `open_in_browser`, which refuses anything
+                // `is_openable` does not recognise — `https://` and an
+                // unreserved URL alphabet, so no `file://`, no `javascript:`,
+                // and no `cmd` metacharacter for the one platform that parses
+                // the argument. Extending opening to this screen makes that
+                // check more load-bearing rather than less, which is why it is
+                // named here as well as at its definition.
+                TxId {
+                    txid: TxState.txid;
+                    explorer: TxState.explorer;
+                    open-link(url) => { Actions.open-link(url); }
                 }
-
-                // Its own component, so the field and the button that copies
-                // it live in the same scope — an element declared inside an
-                // `if` cannot be reached from outside it.
-                if TxState.explorer != "": ExplorerLink {}
 
                 HorizontalLayout {
                     alignment: start;
