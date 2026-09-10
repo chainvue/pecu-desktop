@@ -1205,7 +1205,17 @@ fn wire_identity_writes(ui: &AppWindow, dispatcher: &Dispatcher) {
 /// the side holding the list can answer. See `Command::SetHistoryFilter`.
 fn wire_history(ui: &AppWindow, dispatcher: Dispatcher) {
     let activity = ui.global::<pecu_ui::ActivityState>();
+    let weak = ui.as_weak();
     activity.on_filter_changed(move |kind| {
+        // Whether the tab just pressed is one the core can put rows in, so the
+        // empty state can say why it is empty rather than showing a void. Set
+        // here because this is where the chosen kind is known, and read out of
+        // `pecu_protocol` because the answer is a fact about what the core
+        // emits — see `HISTORY_KINDS_PRODUCED`.
+        if let Some(ui) = weak.upgrade() {
+            ui.global::<pecu_ui::ActivityState>()
+                .set_filter_can_fill(pecu_protocol::history_filter_can_fill(&kind));
+        }
         dispatcher.send(Command::SetHistoryFilter {
             kind: kind.to_string(),
         });

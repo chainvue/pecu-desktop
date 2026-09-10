@@ -272,6 +272,16 @@ pub const CASES: &[Case] = &[
         crate::fixtures::history_filtered,
     ),
     ("activity", "activity", crate::fixtures::funded),
+    // The two empty states, which differ by one sentence and are the whole of
+    // #12. Both, rather than only the interesting one: a picture of a tab that
+    // cannot fill says nothing on its own — what it has to be read against is
+    // the ordinary empty list, and neither of them had a reference image.
+    ("activity", "history-empty", crate::fixtures::history_empty),
+    (
+        "activity",
+        "history-cannot-fill",
+        crate::fixtures::history_cannot_fill,
+    ),
     ("activity", "tx-detail", crate::fixtures::tx_detail),
     ("send", "send-form", crate::fixtures::sending),
     ("send", "send-shielding", crate::fixtures::shielding),

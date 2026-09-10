@@ -219,6 +219,12 @@ export component ActivityScreen inherits VerticalLayout {
     // is deliberate rather than sloppy: the rail makes the same promise about
     // screens that are coming, and a filter list that grew as features landed
     // would move under somebody's hand every release.
+    //
+    // What was sloppy was leaving the promise unanswered. A tab that opens on
+    // an unexplained void reads as broken however good the reason for its
+    // being there, so the empty state below says which of the two it is —
+    // nothing yet, or nothing possible yet — rather than the tabs being
+    // withdrawn. See it for the wording and for what keeps it honest.
     HorizontalLayout {
         alignment: start;
         Segmented {
@@ -242,13 +248,69 @@ export component ActivityScreen inherits VerticalLayout {
         }
     }
 
+    // What a tab with nothing in it is, said in the words of the tab.
+    //
+    // One empty state, told which of two things it is looking at, rather than
+    // a second mechanism beside it — because there is only one hole on this
+    // screen and it is this one. The filters above are deliberately wider than
+    // what this build produces, and until #12 the consequence was that three
+    // of the five answered with "No transactions yet · Everything this wallet
+    // has ever sent or received appears here", which is a sentence about the
+    // whole list under a tab showing a slice of it, and is false besides: the
+    // wallet has never looked for a login.
+    //
+    // # Two sentences, because they are two facts
+    //
+    // A Payments tab with nothing in it is a wallet nobody has paid. A Logins
+    // tab with nothing in it is a wallet that does not read logins, and
+    // answering that with "no sign-ins yet" would be counting something never
+    // counted — the distinction this wallet keeps everywhere else, down to
+    // "not scanned yet" against "zero".
+    //
+    // `ActivityState.filter-can-fill` is which of the two, and it is the
+    // core's answer rather than this file's: see
+    // `pecu_protocol::HISTORY_KINDS_PRODUCED`. Nothing here names the tabs
+    // that are switched off, so nothing here has to be revisited when they are
+    // not.
+    //
+    // # Written to survive #9 landing
+    //
+    // Every body below leads with what the tab will hold, in the present or
+    // the future tense, and never with a feature not existing. That clause is
+    // true today and true afterwards. The half that will stop being true — the
+    // sentence after it, explaining why nothing reaches the list — exists only
+    // on the branch `filter-can-fill` switches off, so the day `login` and
+    // `identity` join the list in the core, it stops being said without a word
+    // of it being edited.
     if WalletState.history.length == 0 && !WalletState.loading: Card {
         VerticalLayout {
             padding: Sp.s11;
             EmptyState {
                 glyph: "○";
-                title: @tr("No transactions yet");
-                body: @tr("Everything this wallet has ever sent or received appears here.");
+                // Never a count for a tab that has never counted. "No sign-ins
+                // yet" is a claim about the world; this build can only make a
+                // claim about its own list.
+                title: !ActivityState.filter-can-fill ? @tr("Nothing listed here yet")
+                    : ActivityState.filter == "payment" ? @tr("No payments yet")
+                    : ActivityState.filter == "convert" ? @tr("No conversions yet")
+                    : ActivityState.filter == "login" ? @tr("No sign-ins yet")
+                    : ActivityState.filter == "identity" ? @tr("No identity changes yet")
+                    : @tr("No transactions yet");
+                // Whole sentences per branch rather than a shared clause with
+                // the reason glued on: two fragments joined by a space is a
+                // sentence no translator can reorder, and the reason differs
+                // per kind anyway.
+                body: ActivityState.filter-can-fill
+                        ? (ActivityState.filter == "payment" ? @tr("Payments this wallet has sent or received appear here.")
+                            : ActivityState.filter == "convert" ? @tr("Conversions made from this wallet appear here.")
+                            : ActivityState.filter == "login" ? @tr("Signing in somewhere with a VerusID from this wallet appears here.")
+                            : ActivityState.filter == "identity" ? @tr("Changes to the VerusIDs this wallet controls appear here.")
+                            : @tr("Everything this wallet has ever sent or received appears here."))
+                    : ActivityState.filter == "convert"
+                        ? @tr("Conversions will be listed here. Pecu cannot yet tell one from an ordinary payment, so a conversion made from this wallet is under Payments for now.")
+                    : ActivityState.filter == "login"
+                        ? @tr("Sign-ins will be listed here. A sign-in is a signature over a challenge and never reaches a block, so there is nothing on the chain to read them out of until Pecu keeps its own record.")
+                    : @tr("Changes to the VerusIDs this wallet controls will be listed here. Pecu does not read identity history yet, so a change made from this wallet is under Payments for now.");
             }
         }
     }

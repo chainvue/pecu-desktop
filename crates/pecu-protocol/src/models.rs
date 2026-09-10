@@ -1088,6 +1088,9 @@ pub struct HistoryRowVm {
     /// design's history has, and they arrive when the features behind them do
     /// — a login needs VDXF consent, a convert needs the conversion flow, and
     /// an identity action needs `getidentityhistory` folded into this list.
+    /// [`HISTORY_KINDS_PRODUCED`] says which of the four that is in a form the
+    /// interface can read, so the Activity screen's empty state can tell a tab
+    /// with nothing in it from a tab that cannot have anything in it.
     ///
     /// `serde(default)` because this list is **cached on disk**, and a snapshot
     /// written before this field existed has no key for it.
@@ -1105,6 +1108,42 @@ pub struct HistoryRowVm {
     /// queried, not an omission here.
     #[serde(default)]
     pub note: String,
+}
+
+/// The values of [`HistoryRowVm::kind`] this build can actually produce.
+///
+/// One, today. `portfolio::row` is the only thing that builds a row and it
+/// reads address deltas, so everything it produces is money moving. The other
+/// three kinds are the shapes the design's history has and nothing fills them
+/// yet — which is the whole of issue #12: the Activity screen offers a filter
+/// for each of the four, and three of them answer with a list that cannot have
+/// contents.
+///
+/// **This list is the switch.** The Activity screen's empty state reads it
+/// through [`history_filter_can_fill`] and says a different sentence on either
+/// side of it: a tab that can fill says nothing is in it *yet*, and a tab that
+/// cannot says what will be in it and why nothing is. Adding `"login"` and
+/// `"identity"` here the day the identity history in #9 lands is what stops
+/// the second sentence being said — there is no wording in the interface to
+/// revisit, which is the reason the fact lives in one place rather than being
+/// restated as a condition over tab names.
+///
+/// It is in this crate rather than in the core because the interface is what
+/// has to ask. `pecu-ui` may not depend on `pecu-core` — see
+/// `pecu-ui/tests/dependency_boundary.rs` — and a copy of the answer on the
+/// far side of that boundary is a copy that goes stale silently.
+/// `portfolio`'s own
+/// `the_kinds_this_list_is_built_from_are_the_kinds_the_interface_is_promised`
+/// holds it against what the core emits.
+pub const HISTORY_KINDS_PRODUCED: &[&str] = &["payment"];
+
+/// Whether the Activity filter `kind` can have rows in this build at all.
+///
+/// `"all"` always can: it is the absence of a filter rather than a kind, so an
+/// empty list under it is a wallet with no history and never a gap in what the
+/// core reads.
+pub fn history_filter_can_fill(kind: &str) -> bool {
+    kind == "all" || HISTORY_KINDS_PRODUCED.contains(&kind)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
