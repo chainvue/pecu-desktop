@@ -4849,6 +4849,19 @@ const SCAN_ATTEMPTS: u32 = 3;
     /// a wallet with eight keys polling in the background would be asking a
     /// public node eight questions a minute for nobody.
     fn refresh_identities(&mut self) {
+        // The same refusal `refresh` makes, because this is the same node.
+        //
+        // `Command::RefreshIdentities` does not go through `refresh`, so until
+        // this was here the Identities screen read from exactly the endpoint the
+        // dashboard had just declined to read from — and an identity list is a
+        // claim about what somebody controls, which is the same kind of claim as
+        // a balance. Gated inside rather than at the seven call sites that reach
+        // it, so an eighth cannot arrive ungated. See `reading_refused`.
+        if let Some((code, refusal)) = reading_refused(&self.nodes) {
+            self.notice_warning(code, refusal, "");
+            return;
+        }
+
         self.ensure_vdxf();
         let addresses = self.wallet_addresses();
         if addresses.is_empty() {
@@ -4954,6 +4967,17 @@ const SCAN_ATTEMPTS: u32 = 3;
     /// carries the reserves, the weights and the supply, so the price of all
     /// forty-odd currencies falls out of two replies.
     fn refresh_markets(&mut self) {
+        // Before the coalescing check and before anything is asked, for the
+        // reason `refresh` gives at length: a price is a claim, and a price from
+        // a node that was never asked about this chain is a claim about a market
+        // that does not exist here. It is arguably the worse of the two,
+        // because a price reads as public information rather than as somebody's
+        // own money and so invites less suspicion. See `reading_refused`.
+        if let Some((code, refusal)) = reading_refused(&self.nodes) {
+            self.notice_warning(code, refusal, "");
+            return;
+        }
+
         if self.markets == Markets::Fetching {
             return;
         }
