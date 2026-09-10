@@ -98,6 +98,10 @@ const SCREENS: &[Screen] = &[
     ("markets", pecu_ui::fixtures::markets_empty),
     ("convert", pecu_ui::fixtures::converting),
     ("convert", pecu_ui::fixtures::converting_refused),
+    // The refused review, which has its own button row rather than the one
+    // every other state of this card shares — so the walk above was not
+    // reaching it, and the row it does reach proves nothing about this one.
+    ("convert", pecu_ui::fixtures::converting_rejected),
     ("activity", pecu_ui::fixtures::history),
     ("send", pecu_ui::fixtures::sending),
     ("send", pecu_ui::fixtures::sending_too_much),
