@@ -280,9 +280,16 @@ pub enum Corroboration {
 /// "the primary's own tip" and manufacture the accusation this rule exists to
 /// make possible.
 ///
-/// One request to the secondary in the ordinary case. A second —
-/// `getblockcount` again, to it this time — only when the two answers differ,
-/// because that is the only time its tip decides anything.
+/// Two requests to the secondary whenever there is anything to check: its tip,
+/// then its coins, in that order. The tip used to be read last and only when the
+/// two answers differed, which bought a round trip back on the path where the
+/// two nodes agree — and had a block-crossing race in it. A coin that confirms
+/// between the two reads is absent from an answer composed before the block and
+/// sits below a tip read after it, so the rules see "indexed, and does not have
+/// it" and accuse a node that did nothing wrong. One round trip out of a
+/// sixty-second block, and it fails closed and self-clears on retry, which is
+/// still not worth a false accusation. Read first, the tip is a lower bound on
+/// what the answer covers, and the same coin falls into rule 2.
 ///
 /// An empty `offered` costs no request at all. There is nothing to hold the
 /// primary to, the send is about to fail for want of coins whatever this said,
@@ -297,6 +304,14 @@ pub fn against(
     if offered.is_empty() {
         return Corroboration::Agreed { checked: 0 };
     }
+
+    // The tip first and the coins after, so that the tip is a lower bound on
+    // what the coin answer covers rather than a figure from after it. See the
+    // note on the ordering above.
+    let secondary_tip = match secondary.block_count() {
+        Ok(tip) => tip,
+        Err(reason) => return Corroboration::Unavailable { reason },
+    };
 
     let held: HashSet<Outpoint> = match secondary.address_utxos(&[address]) {
         Ok(found) => found
@@ -314,12 +329,6 @@ pub fn against(
     if missing.is_empty() {
         return Corroboration::Agreed { checked: kept };
     }
-
-    // Only now, and only because the verdict turns on it.
-    let secondary_tip = match secondary.block_count() {
-        Ok(tip) => tip,
-        Err(reason) => return Corroboration::Unavailable { reason },
-    };
 
     let unexplained: Vec<Outpoint> = missing
         .iter()
@@ -505,6 +514,8 @@ impl<R: ChainReader> ChainReader for Corroborated<'_, R> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use verus_flows::testing::ScriptedReader;
 
     use super::*;
@@ -590,6 +601,84 @@ mod tests {
                 Some(refuse) => Err(refuse()),
                 None => self.primary.block_count(),
             }
+        }
+
+        passthrough! {
+            chain_info() -> ChainInfo;
+            best_block_hash() -> String;
+            block_hash(height: u32) -> String;
+            mempool() -> Vec<String>;
+            block(height_or_hash: &str) -> serde_json::Value;
+            address_deltas(addresses: &[&str], range: Option<(u32, u32)>) -> Vec<AddressDelta>;
+            address_mempool(addresses: &[&str]) -> Vec<MempoolDelta>;
+            address_balance(addresses: &[&str]) -> AddressBalance;
+            currency(name_or_id: &str) -> CurrencyPolicy;
+            currency_definition(name_or_id: &str) -> CurrencySummary;
+            estimate_conversion(from: &str, to: &str, amount: &str, via: Option<&str>) -> ConversionEstimate;
+            currency_state(name_or_id: &str) -> serde_json::Value;
+            currency_state_range(name_or_id: &str, from: u32, to: u32, step: u32) -> Vec<CurrencyStateAt>;
+            list_currencies() -> Vec<CurrencySummary>;
+            currency_converters(currencies: &[&str]) -> Vec<CurrencyConverter>;
+            estimate_fee(blocks: u32) -> Option<Amount>;
+            identity(name_or_id: &str) -> IdentityRecord;
+            identities_with_address(address: &str) -> Vec<IdentityAtAddress>;
+            identity_at(name_or_id: &str, height: u32) -> IdentityRecord;
+            identity_content(name_or_id: &str) -> IdentityContent;
+            identity_registration(name_or_id: &str) -> String;
+            vdxf_id(name: &str) -> [u8; 20];
+            offers(currency_or_id: &str, is_currency: bool, with_tx: bool) -> Vec<OfferListing>;
+            verify_message(identity: &str, signature: &str, message: &str) -> bool;
+            raw_transaction(txid: &str) -> serde_json::Value;
+            decode_raw_transaction(hex: &str) -> serde_json::Value;
+            confirmations(txid: &str) -> Option<u32>;
+        }
+    }
+
+    /// A second source that crosses a block between the two reads it gets.
+    ///
+    /// Models one specific moment and nothing else: the UTXO answer was composed
+    /// before a block was mined and the tip read after it. `ScriptedReader`
+    /// cannot express that — its coin answer does not move when its tip does —
+    /// and the race is invisible without it, because the verdict then depends on
+    /// *which of the two reads happens first* rather than on the fixture.
+    ///
+    /// The field is `primary` for the reason [`Refuses`] gives: it is the name
+    /// `passthrough!` writes against.
+    struct Crossing {
+        primary: ScriptedReader,
+        /// The tip before the block, and after.
+        before: u32,
+        after: u32,
+        /// Set once the coin answer has been handed over, which is the instant
+        /// the block is taken to arrive.
+        answered: Cell<bool>,
+    }
+
+    impl Crossing {
+        fn across(before: u32, after: u32) -> Self {
+            Self {
+                // Holding nothing, so the coin the primary offers is missing and
+                // the tip is what sorts it.
+                primary: ScriptedReader::new(before),
+                before,
+                after,
+                answered: Cell::new(false),
+            }
+        }
+    }
+
+    impl ChainReader for Crossing {
+        fn block_count(&self) -> Result<u32, RpcError> {
+            Ok(if self.answered.get() {
+                self.after
+            } else {
+                self.before
+            })
+        }
+
+        fn address_utxos(&self, addresses: &[&str]) -> Result<Vec<AddressUtxo>, RpcError> {
+            self.answered.set(true);
+            self.primary.address_utxos(addresses)
         }
 
         passthrough! {
@@ -1056,5 +1145,32 @@ mod tests {
             1,
             "an address this reader never checked was silently answered as empty",
         );
+    }
+
+    /// A block crossing between the two reads must not manufacture an
+    /// accusation.
+    ///
+    /// The second source's coin answer is composed before a block is mined and
+    /// its tip read after it. With the tip read last — which is how this shipped,
+    /// to save a round trip on the path where the two nodes agree — the coin that
+    /// confirmed in that block is missing from the answer *and* below the tip, so
+    /// rules 2 and 3 both say the node has indexed the block and does not have
+    /// the coin. That is `Diverged`: an accusation of serving another chain,
+    /// against an honest node, produced by the wallet's own request ordering.
+    ///
+    /// Reading the tip first makes it a lower bound on what the coin answer
+    /// covers, and the same coin lands in rule 2 where it belongs.
+    #[test]
+    fn a_block_crossing_between_the_two_reads_does_not_manufacture_an_accusation() {
+        let primary = ScriptedReader::new(1_001).with_utxo(ADDRESS, 1_001, 100_000);
+        let secondary = Crossing::across(1_000, 1_001);
+
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep { secondary_tip, .. } => assert_eq!(
+                secondary_tip, 1_000,
+                "the tip was read after the coins rather than before them",
+            ),
+            other => panic!("a block crossing mid-check accused an honest node: {other:?}"),
+        }
     }
 }
