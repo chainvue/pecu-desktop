@@ -593,9 +593,12 @@ impl OutOfStep {
 ///
 /// It costs one extra `getaddressutxos` to each node — one to read what the
 /// primary offers, one to ask the second whether it has them — plus a
-/// `getblockcount` to each: the primary's always, because two of the three
-/// height rules are about it, and the second's only when the two answers
-/// differ, because that is the only time its tip decides anything. Read
+/// `getblockcount` to each, both always: two of the height rules are about the
+/// primary's tip, and the second's is read before its coins rather than after so
+/// that a block crossing between the two cannot manufacture an accusation. A
+/// `getblockhash` to each on top of that, and only where the heights have
+/// excused every missing coin, because an excuse made of heights the answering
+/// node chose is worth nothing until the two of them name the same block. Read
 /// [`pecu_chain::corroborate`] for the comparison rule, for why the primary's
 /// tip cannot be borrowed from anywhere cheaper, and for what this does not
 /// cover.
@@ -735,10 +738,11 @@ fn shortfall(error: SendError, gap: OutOfStep, secondary: &str) -> SendError {
 /// Which outpoints at `address` a second node will vouch for, and what it set
 /// aside.
 ///
-/// Two requests to the primary, one or two to the secondary. The primary's
-/// answer is read here rather than taken from a later `spendable`, because a
-/// comparison wants both sides from the same moment — and because the build
-/// below is then handed a filter rather than a verdict.
+/// Two requests to the primary and two to the secondary, plus one more to each
+/// on the path where the heights excuse every missing coin. The primary's answer
+/// is read here rather than taken from a later `spendable`, because a comparison
+/// wants both sides from the same moment — and because the build below is then
+/// handed a filter rather than a verdict.
 ///
 /// # Why the primary's tip is read here too
 ///
@@ -765,9 +769,11 @@ fn shortfall(error: SendError, gap: OutOfStep, secondary: &str) -> SendError {
 ///
 /// The verdicts get different sentences, deliberately. "These two nodes
 /// disagree", "the second one is behind", "the second one is ahead and has seen
-/// this coin spent", "the second one could not answer" and "there is no second
-/// one" have five different remedies, and merging any of them sends somebody
-/// after the wrong problem.
+/// this coin spent", "the second one could not answer", "the node you are using
+/// could not answer" and "there is no second one" have six different remedies,
+/// and merging any of them sends somebody after the wrong problem. The fifth is
+/// the newest and the easiest to fold into the fourth by accident: both are a
+/// node going quiet, and they are two different machines.
 fn corroborated_funding<R: ChainReader>(
     reader: &R,
     secondary: &Corroborator<'_>,
@@ -778,7 +784,7 @@ fn corroborated_funding<R: ChainReader>(
     let offered = offered.map_err(|error| SendError::Flow(error.into()))?;
     let primary_tip = primary_tip.map_err(|error| SendError::Flow(error.into()))?;
 
-    match corroborate::against(secondary.chain, address, &offered, primary_tip) {
+    match corroborate::against(reader, secondary.chain, address, &offered, primary_tip) {
         Corroboration::Agreed { .. } => Ok(Vouched {
             allowed: corroborate::agreed_outpoints(&offered, &[]),
             out_of_step: None,
@@ -845,6 +851,21 @@ fn corroborated_funding<R: ChainReader>(
                 secondary: secondary.url.to_string(),
             }
             .into())
+        }
+        // The *funding* node went silent, on the one question corroboration puts
+        // to it: name the block at a height both nodes claim to have reached.
+        // Reported the way every other read on this path reports a node that
+        // stopped answering, and deliberately not as `SecondSourceSilent` — that
+        // sentence names an endpoint, and naming the one that answered correctly
+        // sends somebody to check a working server. Not an accusation either:
+        // `pecu_chain::corroborate` argues why a node that cannot name a block it
+        // says it has is broken rather than lying.
+        Corroboration::PrimarySilent { reason } => {
+            tracing::warn!(
+                %reason,
+                "the funding node could not name the block both nodes were asked about",
+            );
+            Err(SendError::Flow(reason.into()))
         }
     }
 }

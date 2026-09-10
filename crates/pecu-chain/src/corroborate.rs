@@ -85,6 +85,19 @@
 //!    block the primary has not seen yet, by this wallet's own key, and the two
 //!    are simply out of step in the other direction.
 //!
+//! Those three sort the disagreement. They do not settle it, because every
+//! height in them is a number the answering node chose — the next section is
+//! about that. So a verdict that ends up *excusing* every missing coin is held
+//! to one more question, and it is not about heights at all:
+//!
+//! 4. Do the two nodes name the **same block** at a height both say they have
+//!    reached? The lower of the two tips is such a height, and a hash is not a
+//!    field either node gets to fill in: it is the block. Two nodes on one
+//!    chain agree there; two nodes on different chains cannot, however they
+//!    number things. If they disagree, the excuse rules 1 to 3 just granted was
+//!    an excuse about somebody else's chain, and the verdict is
+//!    [`Corroboration::Diverged`] whatever the heights said.
+//!
 //! Rule 2 is why the scenario in the issue is caught at all. A node serving
 //! VRSC outputs while calling itself VRSCTEST offers coins from around block
 //! 4,207,412 against a VRSCTEST second source whose tip is around 1,203,115:
@@ -96,31 +109,42 @@
 //!
 //! # The heights are the answering node's own field
 //!
-//! Every height in the three rules above arrives in the primary's
-//! `getaddressutxos` reply, and so does the primary's tip. A node willing to
-//! invent an outpoint will give it whatever height suits it: report a tip just
-//! above the secondary's and put the invented coins in the blocks between the
-//! two, and rule 2 says lag; report a tip *below* the secondary's and rule 3
-//! says out of step. Both are worth stating plainly, and neither is the hole it
-//! looks like.
+//! Every height in rules 1 to 3 arrives in the primary's `getaddressutxos`
+//! reply, and so does the primary's tip. A node willing to invent an outpoint
+//! will give it whatever height suits it: report a tip just above the
+//! secondary's and put the invented coins in the blocks between the two, and
+//! rule 2 says lag; report a tip *below* the secondary's and rule 3 says out of
+//! step. Both shapes were reachable, and the second one is the defect issue #45
+//! was opened about — a primary forwarding a **shorter** chain's answers, every
+//! invented coin of which sits below the second source's tip, rendering as
+//! "nothing is wrong, try again once the node you are using catches up".
 //!
-//! What a chosen height buys is the softer **sentence**. What it cannot buy is
-//! a wider **allowed set**. All three answers withhold exactly the same
-//! outpoints from the build — the ones the secondary did not name — and what
-//! differs is the wording and whether the coins that *were* corroborated may
-//! still pay. An invented outpoint is unspendable under every verdict, because
-//! [`Corroborated`] is built from what the secondary recognised and from
-//! nothing else. The worst a chosen height achieves is a payment funded from
-//! the user's real coins, described by a caption about two nodes being out of
-//! step rather than by an accusation.
+//! What a chosen height buys is the softer **sentence**, and the sentence is
+//! not cosmetic: `Diverged` refuses a payment outright and `OutOfStep`
+//! completes it from whatever survived, so wherever a genuine coin survives the
+//! verdict decides whether money moves. What a chosen height cannot buy, and
+//! never could, is a wider **allowed set**. Every verdict withholds exactly the
+//! outpoints the secondary did not name, and [`Corroborated`] is built from what
+//! the secondary recognised and from nothing else, so an invented outpoint is
+//! unspendable under all of them.
 //!
-//! So the heights sort honest disagreement from the attack; they do not contain
-//! it. The check that would settle which chain a node is on is a **block hash
-//! at a shared height** — ask both for `getblockhash` at some height both have
-//! reached, and two nodes on different chains cannot agree, however they choose
-//! to number things. That is one more request to each, it is not implemented
-//! here, and it is what would turn this module from a heuristic about heights
-//! into a statement about chains.
+//! Rule 4 is what takes the sentence away too, and it is why rules 1 to 3 are
+//! no longer the last thing standing between the attack and a reassuring
+//! caption. `getblockhash` at the lower of the two tips is a question about a
+//! height both nodes claim, whose answer neither of them chooses, so the whole
+//! chosen-height class closes at once and in both directions. Two residual
+//! limits, stated rather than left to be found:
+//!
+//! * **A reorganisation deeper than the gap between the two tips** would make
+//!   two honest nodes name different blocks at the shared height. At Verus's one
+//!   block a minute that is not a reorg, and it is the same judgement already
+//!   written into [`CREDIBLE_LAG`].
+//! * **A node that will not answer `getblockhash`** is neither agreed with nor
+//!   accused. The check did not happen, and that is
+//!   [`Corroboration::Unavailable`] when it is the second source and
+//!   [`Corroboration::PrimarySilent`] when it is the funding node — two states
+//!   rather than one, because the remedy is a different machine. Silence is not
+//!   a pass anywhere else in this module and it is not one here.
 //!
 //! **Not the mempool.** Legitimately different between two healthy nodes, and
 //! `getaddressutxos` does not report it in the first place.
@@ -163,12 +187,14 @@ pub type Outpoint = (Txid, u32);
 /// tighter bound would actually buy against a deliberate liar: nothing, because
 /// the same reply carries the coins' heights *and* the primary's own tip, so a
 /// node that wanted the softer verdict would report a tip a few blocks above
-/// the secondary's and put its invented coins in between — see the module docs.
-/// The bound is worth having because it catches the version of this attack that
-/// exists, a proxy forwarding a real mainnet node's answers unaltered, where the
-/// two chains' heights are three million blocks apart. Against that, a week and
-/// a day are the same check, and a week is the one that never accuses an honest
-/// node.
+/// the secondary's and put its invented coins in between. That is the
+/// chosen-height dodge, and what closes it is rule 4 in the module docs — the
+/// block hash at the lower of the two tips, which neither node fills in — and
+/// not a tighter number here. The bound is still worth having because it is
+/// free and it catches the version of this attack that exists, a proxy
+/// forwarding a real mainnet node's answers unaltered, where the two chains'
+/// heights are three million blocks apart. Against that, a week and a day are
+/// the same check, and a week is the one that never accuses an honest node.
 pub const CREDIBLE_LAG: u32 = 10_080;
 
 /// What a second source said about the coins the primary offered.
@@ -234,6 +260,12 @@ pub enum Corroboration {
         /// coins that *are* accounted for are not counted here, because the
         /// number is going into a sentence accusing somebody's node of serving
         /// another chain.
+        ///
+        /// When rule 4 is what reached this verdict — the two nodes named
+        /// different blocks at a height both claim — that is every withheld
+        /// coin, and the count is not a softening of the accusation but the
+        /// whole of it: the heights that excused those coins were heights on
+        /// another chain, so they accounted for nothing.
         unexplained: Vec<Outpoint>,
         kept: usize,
     },
@@ -247,14 +279,40 @@ pub enum Corroboration {
     /// endpoint cannot answer the question" from "these two nodes disagree", or
     /// somebody will go and chase the wrong problem.
     Unavailable { reason: RpcError },
+    /// The **primary** could not answer the one question this module puts to
+    /// it.
+    ///
+    /// Rule 4 asks both nodes to name the block at the lower of the two tips,
+    /// and that is the only thing read from the funding node here — everything
+    /// else about it arrived in the reply the caller already holds. The height
+    /// asked about is at or below the tip that node itself just reported, so a
+    /// node that cannot name it has stopped answering rather than formed an
+    /// opinion about a chain, and this is not an accusation.
+    ///
+    /// Kept apart from [`Corroboration::Unavailable`] because the two have
+    /// different remedies and name different machines. "The second source could
+    /// not be asked" would send somebody to check an endpoint that is answering
+    /// perfectly, and a refusal naming the wrong server is worse than one naming
+    /// none. A caller already has a way to report a funding node that will not
+    /// answer — it is the same one every other read on the send path uses — and
+    /// this variant exists so it can.
+    PrimarySilent { reason: RpcError },
 }
 
 /// Ask `secondary` which of `address`'s outputs it also has.
 ///
 /// `offered` is what the **primary** answered for the same address, and
-/// `primary_tip` is the height it answered from. Nothing here reads the primary
-/// — the caller already has both, and asking again would be comparing two
-/// different moments.
+/// `primary_tip` is the height it answered from. Both are passed in rather than
+/// read here — the caller already has them, and asking again would be comparing
+/// two different moments.
+///
+/// The primary reader itself is needed for exactly one question: rule 4, the
+/// block hash at a height both nodes claim to have reached. That one cannot be
+/// hoisted into the caller, because the height it asks about is the lower of the
+/// two tips and the secondary's tip is not known until this function has read
+/// it. Nothing else is asked of the primary, and a funding node that will not
+/// answer it lands in [`Corroboration::PrimarySilent`] rather than in a refusal
+/// naming the other endpoint.
 ///
 /// # Why the caller supplies the primary's tip, and what it costs
 ///
@@ -280,15 +338,28 @@ pub enum Corroboration {
 /// "the primary's own tip" and manufacture the accusation this rule exists to
 /// make possible.
 ///
-/// One request to the secondary in the ordinary case. A second —
-/// `getblockcount` again, to it this time — only when the two answers differ,
-/// because that is the only time its tip decides anything.
+/// Two requests to the secondary whenever there is anything to check: its tip,
+/// then its coins, in that order. The tip used to be read last and only when the
+/// two answers differed, which bought a round trip back on the path where the
+/// two nodes agree — and had a block-crossing race in it. A coin that confirms
+/// between the two reads is absent from an answer composed before the block and
+/// sits below a tip read after it, so the rules see "indexed, and does not have
+/// it" and accuse a node that did nothing wrong. One round trip out of a
+/// sixty-second block, and it fails closed and self-clears on retry, which is
+/// still not worth a false accusation. Read first, the tip is a lower bound on
+/// what the answer covers, and the same coin falls into rule 2.
+///
+/// One more request to each node on top of that, and only where the heights have
+/// excused every missing coin: rule 4 asks both to name the block at the lower
+/// of the two tips. On the ordinary send, where the second source recognises
+/// everything offered, neither of those is made.
 ///
 /// An empty `offered` costs no request at all. There is nothing to hold the
 /// primary to, the send is about to fail for want of coins whatever this said,
 /// and a second operator learns nothing about an address this wallet is not
 /// going to spend from.
 pub fn against(
+    primary: &impl ChainReader,
     secondary: &impl ChainReader,
     address: &str,
     offered: &[AddressUtxo],
@@ -297,6 +368,14 @@ pub fn against(
     if offered.is_empty() {
         return Corroboration::Agreed { checked: 0 };
     }
+
+    // The tip first and the coins after, so that the tip is a lower bound on
+    // what the coin answer covers rather than a figure from after it. See the
+    // note on the ordering above.
+    let secondary_tip = match secondary.block_count() {
+        Ok(tip) => tip,
+        Err(reason) => return Corroboration::Unavailable { reason },
+    };
 
     let held: HashSet<Outpoint> = match secondary.address_utxos(&[address]) {
         Ok(found) => found
@@ -315,12 +394,6 @@ pub fn against(
         return Corroboration::Agreed { checked: kept };
     }
 
-    // Only now, and only because the verdict turns on it.
-    let secondary_tip = match secondary.block_count() {
-        Ok(tip) => tip,
-        Err(reason) => return Corroboration::Unavailable { reason },
-    };
-
     let unexplained: Vec<Outpoint> = missing
         .iter()
         .filter(|utxo| !out_of_step(utxo.height, primary_tip, secondary_tip))
@@ -331,15 +404,81 @@ pub fn against(
         .map(|utxo| (utxo.utxo.txid, utxo.utxo.vout))
         .collect();
 
-    if unexplained.is_empty() {
-        Corroboration::OutOfStep {
+    if !unexplained.is_empty() {
+        return Corroboration::Diverged { unexplained, kept };
+    }
+
+    // The heights excused every missing coin, and every height in them is the
+    // primary's own. Rule 4, and only here: before the wallet says nothing is
+    // wrong, make both nodes name the same block.
+    match same_chain(primary, secondary, primary_tip.min(secondary_tip)) {
+        SharedBlock::Agreed => Corroboration::OutOfStep {
             withheld,
             kept,
             secondary_tip,
             primary_tip,
-        }
+        },
+        // Whatever the heights said about these coins, they said it about
+        // another chain — so they accounted for none of them, and every withheld
+        // coin is unexplained.
+        SharedBlock::Differ => Corroboration::Diverged {
+            unexplained: withheld,
+            kept,
+        },
+        SharedBlock::PrimarySilent(reason) => Corroboration::PrimarySilent { reason },
+        SharedBlock::SecondarySilent(reason) => Corroboration::Unavailable { reason },
+    }
+}
+
+/// What two nodes said when asked to name the same block.
+enum SharedBlock {
+    /// Both named it, and named the same one. One chain.
+    Agreed,
+    /// Both named it and named different ones. Two chains, and no arrangement
+    /// of tips or coin heights makes that anything else.
+    Differ,
+    /// The funding node would not say.
+    PrimarySilent(RpcError),
+    /// The second source would not say.
+    SecondarySilent(RpcError),
+}
+
+/// Whether two nodes name the same block at `height`.
+///
+/// Rule 4 from the module docs, and the only question this module puts to the
+/// primary. It is what bounds rule 3's deliberately unbounded branch, and it is
+/// the reason a node reporting a tip below the second source's no longer buys
+/// itself a caption about being behind.
+///
+/// `height` has to be one both nodes claim to have reached, which is why
+/// [`against`] passes the lower of the two tips and nothing else: `getblockhash`
+/// above a node's own tip is an error on a real daemon, so a height either of
+/// them has not got would measure which of two requests failed rather than which
+/// chain anybody is on. The lower tip is also the deepest shared height
+/// available, which is what makes it unreachable by a primary choosing numbers —
+/// inflating its own tip moves the height down onto the secondary's side, not up
+/// out of reach.
+///
+/// Compared case-insensitively because the hash is hex and the casing is a
+/// rendering. `verusd` answers lowercase; accusing a proxy that upper-cased it
+/// of serving another chain would be a false accusation over presentation.
+fn same_chain(
+    primary: &impl ChainReader,
+    secondary: &impl ChainReader,
+    height: u32,
+) -> SharedBlock {
+    let ours = match primary.block_hash(height) {
+        Ok(hash) => hash,
+        Err(reason) => return SharedBlock::PrimarySilent(reason),
+    };
+    let theirs = match secondary.block_hash(height) {
+        Ok(hash) => hash,
+        Err(reason) => return SharedBlock::SecondarySilent(reason),
+    };
+    if ours.eq_ignore_ascii_case(&theirs) {
+        SharedBlock::Agreed
     } else {
-        Corroboration::Diverged { unexplained, kept }
+        SharedBlock::Differ
     }
 }
 
@@ -366,12 +505,25 @@ fn out_of_step(height: u32, primary_tip: u32, secondary_tip: u32) -> bool {
     // likelier reading is a coin this wallet already spent, whose spending
     // transaction confirmed into a block the primary has not reached.
     //
-    // Deliberately unbounded, where the branch above is bounded. The bound
-    // above guards the branch that lets a coin through as "merely new"; this
-    // one guards nothing, because a coin the secondary does not have is
-    // withheld from the build under either answer and only the sentence
-    // changes. A primary reporting an absurdly low tip to reach this branch
-    // buys a caption, not a coin.
+    // Deliberately unbounded, where the branch above is bounded — and the
+    // comment that used to be here said the unboundedness guarded nothing,
+    // "because only the sentence changes". That is false, and it is issue #45.
+    // No invented coin becomes spendable either way, true: a coin the secondary
+    // does not have is withheld from the build under both answers. But
+    // `Diverged` refuses the payment outright and `OutOfStep` completes it from
+    // whatever survived, so wherever a genuine coin survived this branch decides
+    // whether money moves — and it decided it in favour of any primary that had
+    // reported a tip below the secondary's, which is the shape of a node
+    // forwarding a shorter chain.
+    //
+    // Clamping the gap here is the wrong repair, and issue #45 says why: it
+    // turns an honestly resyncing node more than a week behind, still offering a
+    // coin the wallet has since spent elsewhere, into "this node is serving
+    // another chain" — the exact false accusation CREDIBLE_LAG exists to
+    // prevent, aimed at the most careful user there is. What bounds this branch
+    // instead is rule 4, one level up in `against`: an excuse made of heights
+    // stands only while the two nodes name the same block at a height both have,
+    // and a primary on a shorter chain does not.
     secondary_tip > primary_tip
 }
 
@@ -505,6 +657,8 @@ impl<R: ChainReader> ChainReader for Corroborated<'_, R> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use verus_flows::testing::ScriptedReader;
 
     use super::*;
@@ -514,8 +668,20 @@ mod tests {
     /// the string.
     const ADDRESS: &str = "RQVsJRf98iq8YmRQdehzRcbLGHEx6YfjdH";
 
+    /// A block hash from some other chain entirely.
+    ///
+    /// `ScriptedReader` derives every hash from the height, so two scripted
+    /// nodes are on the same chain at every height *by construction* — which is
+    /// precisely the thing rule 4 asks about, and precisely why a fixture that
+    /// could not say "these are not those blocks" could not reach it.
+    /// `with_best_hash` is the one builder that says it. It answers the same
+    /// hash at every height, which is more than a real fork does and enough for
+    /// a comparison at one.
+    const ANOTHER_CHAIN: &str =
+        "00000000000000000000000000000000000000000000000000000000deadbeef";
+
     /// What the primary offers, as the corroborator receives it.
-    fn offered(reader: &ScriptedReader) -> Vec<AddressUtxo> {
+    fn offered(reader: &impl ChainReader) -> Vec<AddressUtxo> {
         reader
             .address_utxos(&[ADDRESS])
             .expect("a scripted node answers")
@@ -526,19 +692,19 @@ mod tests {
     /// `send::corroborated_funding` reads it the same way and from the same
     /// node, so a test that made one up could pin a verdict no caller can
     /// produce.
-    fn hold(primary: &ScriptedReader, secondary: &impl ChainReader) -> Corroboration {
+    fn hold(primary: &impl ChainReader, secondary: &impl ChainReader) -> Corroboration {
         hold_offering(primary, secondary, &offered(primary))
     }
 
     /// The same, for the few tests that alter what the primary offered before
     /// handing it over.
     fn hold_offering(
-        primary: &ScriptedReader,
+        primary: &impl ChainReader,
         secondary: &impl ChainReader,
         offered: &[AddressUtxo],
     ) -> Corroboration {
         let tip = primary.block_count().expect("a scripted node answers");
-        against(secondary, ADDRESS, offered, tip)
+        against(primary, secondary, ADDRESS, offered, tip)
     }
 
     /// A node that answers every other question and refuses one of these two.
@@ -551,10 +717,18 @@ mod tests {
     /// verdict now turns on it — a node that will not say how far it has got
     /// cannot tell lag from divergence either.
     struct Refuses {
+        /// The node every unrefused question is forwarded to.
+        ///
+        /// Named `primary` because that is the field `passthrough!` writes
+        /// against, and not because of which side of the comparison this double
+        /// stands on — it stands on both. `Refuses::hash` takes the inner reader
+        /// precisely so that it can be the *funding* node in a test, which the
+        /// two older constructors, hard-coding an empty chain at 1,000, cannot.
         primary: ScriptedReader,
         /// Built fresh per call, because `RpcError` is not `Clone`.
         utxos: Option<fn() -> RpcError>,
         tip: Option<fn() -> RpcError>,
+        hash: Option<fn() -> RpcError>,
     }
 
     impl Refuses {
@@ -563,6 +737,7 @@ mod tests {
                 primary: ScriptedReader::new(1_000),
                 utxos: Some(refuse),
                 tip: None,
+                hash: None,
             }
         }
 
@@ -573,6 +748,23 @@ mod tests {
                 primary: ScriptedReader::new(1_000),
                 utxos: None,
                 tip: Some(refuse),
+                hash: None,
+            }
+        }
+
+        /// Answers everything except `getblockhash`, holding whatever `inner`
+        /// holds.
+        ///
+        /// Rule 4 is the first question this module asks of *both* nodes, so it
+        /// is the first one where a refusal has two different meanings depending
+        /// on which side refused — and the double has to be able to stand on
+        /// either side to say so.
+        fn hash(inner: ScriptedReader, refuse: fn() -> RpcError) -> Self {
+            Self {
+                primary: inner,
+                utxos: None,
+                tip: None,
+                hash: Some(refuse),
             }
         }
     }
@@ -590,6 +782,90 @@ mod tests {
                 Some(refuse) => Err(refuse()),
                 None => self.primary.block_count(),
             }
+        }
+
+        fn block_hash(&self, height: u32) -> Result<String, RpcError> {
+            match self.hash {
+                Some(refuse) => Err(refuse()),
+                None => self.primary.block_hash(height),
+            }
+        }
+
+        passthrough! {
+            chain_info() -> ChainInfo;
+            best_block_hash() -> String;
+            mempool() -> Vec<String>;
+            block(height_or_hash: &str) -> serde_json::Value;
+            address_deltas(addresses: &[&str], range: Option<(u32, u32)>) -> Vec<AddressDelta>;
+            address_mempool(addresses: &[&str]) -> Vec<MempoolDelta>;
+            address_balance(addresses: &[&str]) -> AddressBalance;
+            currency(name_or_id: &str) -> CurrencyPolicy;
+            currency_definition(name_or_id: &str) -> CurrencySummary;
+            estimate_conversion(from: &str, to: &str, amount: &str, via: Option<&str>) -> ConversionEstimate;
+            currency_state(name_or_id: &str) -> serde_json::Value;
+            currency_state_range(name_or_id: &str, from: u32, to: u32, step: u32) -> Vec<CurrencyStateAt>;
+            list_currencies() -> Vec<CurrencySummary>;
+            currency_converters(currencies: &[&str]) -> Vec<CurrencyConverter>;
+            estimate_fee(blocks: u32) -> Option<Amount>;
+            identity(name_or_id: &str) -> IdentityRecord;
+            identities_with_address(address: &str) -> Vec<IdentityAtAddress>;
+            identity_at(name_or_id: &str, height: u32) -> IdentityRecord;
+            identity_content(name_or_id: &str) -> IdentityContent;
+            identity_registration(name_or_id: &str) -> String;
+            vdxf_id(name: &str) -> [u8; 20];
+            offers(currency_or_id: &str, is_currency: bool, with_tx: bool) -> Vec<OfferListing>;
+            verify_message(identity: &str, signature: &str, message: &str) -> bool;
+            raw_transaction(txid: &str) -> serde_json::Value;
+            decode_raw_transaction(hex: &str) -> serde_json::Value;
+            confirmations(txid: &str) -> Option<u32>;
+        }
+    }
+
+    /// A second source that crosses a block between the two reads it gets.
+    ///
+    /// Models one specific moment and nothing else: the UTXO answer was composed
+    /// before a block was mined and the tip read after it. `ScriptedReader`
+    /// cannot express that — its coin answer does not move when its tip does —
+    /// and the race is invisible without it, because the verdict then depends on
+    /// *which of the two reads happens first* rather than on the fixture.
+    ///
+    /// The field is `primary` for the reason [`Refuses`] gives: it is the name
+    /// `passthrough!` writes against.
+    struct Crossing {
+        primary: ScriptedReader,
+        /// The tip before the block, and after.
+        before: u32,
+        after: u32,
+        /// Set once the coin answer has been handed over, which is the instant
+        /// the block is taken to arrive.
+        answered: Cell<bool>,
+    }
+
+    impl Crossing {
+        fn across(before: u32, after: u32) -> Self {
+            Self {
+                // Holding nothing, so the coin the primary offers is missing and
+                // the tip is what sorts it.
+                primary: ScriptedReader::new(before),
+                before,
+                after,
+                answered: Cell::new(false),
+            }
+        }
+    }
+
+    impl ChainReader for Crossing {
+        fn block_count(&self) -> Result<u32, RpcError> {
+            Ok(if self.answered.get() {
+                self.after
+            } else {
+                self.before
+            })
+        }
+
+        fn address_utxos(&self, addresses: &[&str]) -> Result<Vec<AddressUtxo>, RpcError> {
+            self.answered.set(true);
+            self.primary.address_utxos(addresses)
         }
 
         passthrough! {
@@ -1056,5 +1332,205 @@ mod tests {
             1,
             "an address this reader never checked was silently answered as empty",
         );
+    }
+
+    /// Issue #45, which is #29 with the two tips swapped.
+    ///
+    /// The wallet is set to the longer chain and the node in use forwards a
+    /// shorter one's answers — its tip and every coin height included. Every
+    /// invented coin then sits *below* the second source's tip, which is rule 3,
+    /// which excused it with no bound at all: the verdict was `OutOfStep` and the
+    /// sentence was "nothing is wrong, try again once the node you are using
+    /// catches up", said to somebody whose node is lying to them.
+    ///
+    /// One coin in common, so this is not only about a sentence. With `kept > 0`
+    /// the two verdicts differ about whether the payment happens: `Diverged`
+    /// refuses it, `OutOfStep` completes it from whatever survived. Rule 4 is
+    /// what tells them apart — the two nodes do not name the same block at the
+    /// shared height, so the heights that excused the coin were heights on
+    /// another chain.
+    #[test]
+    fn a_primary_forwarding_a_shorter_chain_is_a_disagreement_and_not_an_excuse() {
+        let primary = ScriptedReader::new(1_203_115)
+            .with_utxo(ADDRESS, 1_203_000, 100_000)
+            .with_utxo(ADDRESS, 1_203_001, 200_000)
+            .with_best_hash(ANOTHER_CHAIN);
+        let secondary = ScriptedReader::new(4_207_412).with_utxo(ADDRESS, 1_203_000, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, kept } => {
+                assert_eq!(unexplained.len(), 1);
+                assert_eq!(
+                    kept, 1,
+                    "the coin in common is what makes this verdict decide a payment",
+                );
+            }
+            other => panic!("a node forwarding a shorter chain was excused: {other:?}"),
+        }
+    }
+
+    /// And the figures the issue was filed with, where nothing survives.
+    ///
+    /// `OutOfStep { kept: 0, secondary_tip: 4207412, primary_tip: 1203115 }` is
+    /// what it reported, and `kept == 0` refuses the payment either way — so no
+    /// money was ever reachable in this state. What was wrong is that the refusal
+    /// said the wrong thing: wait for the node you are using to catch up, about a
+    /// node on another chain that is never going to.
+    #[test]
+    fn a_primary_forwarding_a_shorter_chain_is_still_a_disagreement_when_nothing_survives() {
+        let primary = ScriptedReader::new(1_203_115)
+            .with_utxo(ADDRESS, 1_203_000, 100_000)
+            .with_utxo(ADDRESS, 1_203_001, 200_000)
+            .with_best_hash(ANOTHER_CHAIN);
+        let secondary = ScriptedReader::new(4_207_412);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, kept } => {
+                assert_eq!(unexplained.len(), 2);
+                assert_eq!(kept, 0);
+            }
+            other => panic!("the figures in the issue were read as lag: {other:?}"),
+        }
+    }
+
+    /// The pair the fix must not touch, at the same heights as the one above.
+    ///
+    /// Identical fixture, one thing changed: the two nodes are on the same chain.
+    /// A second source three million blocks ahead is an odd thing to meet, but
+    /// the ordinary version of it — a primary behind, still offering a coin this
+    /// wallet has already spent — is the commonest honest pair in this direction,
+    /// and a fix that refused it would have turned every such payment into an
+    /// accusation. Rule 4 is what makes this a check rather than a blanket
+    /// refusal of a primary that is behind, so it is worth pinning against the
+    /// test above and not only on its own.
+    #[test]
+    fn two_nodes_that_name_the_same_block_are_still_merely_out_of_step() {
+        let primary = ScriptedReader::new(1_203_115)
+            .with_utxo(ADDRESS, 1_203_000, 100_000)
+            .with_utxo(ADDRESS, 1_203_001, 200_000);
+        let secondary = ScriptedReader::new(4_207_412).with_utxo(ADDRESS, 1_203_000, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep {
+                withheld,
+                kept,
+                secondary_tip,
+                primary_tip,
+            } => {
+                assert_eq!(withheld.len(), 1);
+                assert_eq!(kept, 1);
+                assert!(
+                    secondary_tip > primary_tip,
+                    "the pair this is about is the second source being ahead",
+                );
+            }
+            other => panic!("two nodes on one chain were accused of being two: {other:?}"),
+        }
+    }
+
+    /// The other half of the chosen-height class, which rule 4 closes with the
+    /// same question.
+    ///
+    /// This is the dodge the module docs used to concede: report a tip a little
+    /// way above the second source's and put the invented coins in between, and
+    /// rule 2 calls them merely unindexed. It is also why the shared height is
+    /// the *lower* of the two tips and not a fixed distance below the primary's —
+    /// inflating its own tip moves the height asked about down onto the second
+    /// source's side, where it certainly has the block, rather than up out of
+    /// reach where "it cannot say" would have been an answer worth buying.
+    #[test]
+    fn a_primary_claiming_a_tip_far_above_the_second_sources_is_checked_where_that_node_has_blocks() {
+        let reached = 1_200_000;
+        let primary = ScriptedReader::new(reached + CREDIBLE_LAG * 2)
+            .with_utxo(ADDRESS, reached, 100_000)
+            .with_utxo(ADDRESS, reached + 1, 200_000)
+            .with_best_hash(ANOTHER_CHAIN);
+        let secondary = ScriptedReader::new(reached).with_utxo(ADDRESS, reached, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::Diverged { unexplained, kept } => {
+                assert_eq!(unexplained.len(), 1);
+                assert_eq!(kept, 1);
+            }
+            other => panic!("a coin placed one block above the second source's tip bought a caption: {other:?}"),
+        }
+    }
+
+    /// A block crossing between the two reads must not manufacture an
+    /// accusation.
+    ///
+    /// The second source's coin answer is composed before a block is mined and
+    /// its tip read after it. With the tip read last — which is how this shipped,
+    /// to save a round trip on the path where the two nodes agree — the coin that
+    /// confirmed in that block is missing from the answer *and* below the tip, so
+    /// rules 2 and 3 both say the node has indexed the block and does not have
+    /// the coin. That is `Diverged`: an accusation of serving another chain,
+    /// against an honest node, produced by the wallet's own request ordering.
+    ///
+    /// Reading the tip first makes it a lower bound on what the coin answer
+    /// covers, and the same coin lands in rule 2 where it belongs.
+    #[test]
+    fn a_block_crossing_between_the_two_reads_does_not_manufacture_an_accusation() {
+        let primary = ScriptedReader::new(1_001).with_utxo(ADDRESS, 1_001, 100_000);
+        let secondary = Crossing::across(1_000, 1_001);
+
+        match hold(&primary, &secondary) {
+            Corroboration::OutOfStep { secondary_tip, .. } => assert_eq!(
+                secondary_tip, 1_000,
+                "the tip was read after the coins rather than before them",
+            ),
+            other => panic!("a block crossing mid-check accused an honest node: {other:?}"),
+        }
+    }
+
+    /// A funding node that will not name the shared block is its own state.
+    ///
+    /// Rule 4 is the first thing this module asks of the primary, so it is the
+    /// first place the primary can go silent — and "the second source could not
+    /// be asked" would be a false sentence pointing at a machine that answered
+    /// every question put to it. Not an accusation either: the height asked about
+    /// is at or below the tip that node just reported, and a node that cannot
+    /// name a block it says it has is broken rather than lying.
+    #[test]
+    fn a_primary_that_will_not_name_the_shared_block_is_not_the_second_sources_fault() {
+        let primary = Refuses::hash(
+            ScriptedReader::new(1_000)
+                .with_utxo(ADDRESS, 900, 100_000)
+                .with_utxo(ADDRESS, 901, 200_000),
+            || RpcError::Transport("connection reset".to_string()),
+        );
+        let secondary = ScriptedReader::new(1_010).with_utxo(ADDRESS, 900, 100_000);
+
+        match hold(&primary, &secondary) {
+            Corroboration::PrimarySilent { .. } => {}
+            other => panic!("a silent funding node was reported as something else: {other:?}"),
+        }
+    }
+
+    /// And a second source that will not name it has not agreed either.
+    ///
+    /// The same rule the rest of this module runs on: a source that cannot answer
+    /// is a failure and not a pass. A filtering proxy that serves
+    /// `getaddressutxos` and `getblockcount` and refuses `getblockhash` would
+    /// otherwise have every height excuse restored to it unexamined.
+    #[test]
+    fn a_second_source_that_will_not_name_the_shared_block_is_unavailable_rather_than_agreement() {
+        let primary = ScriptedReader::new(1_000)
+            .with_utxo(ADDRESS, 900, 100_000)
+            .with_utxo(ADDRESS, 901, 200_000);
+        let secondary = Refuses::hash(
+            ScriptedReader::new(1_010).with_utxo(ADDRESS, 900, 100_000),
+            || RpcError::MethodUnavailable {
+                method: "getblockhash",
+            },
+        );
+
+        match hold(&primary, &secondary) {
+            Corroboration::Unavailable { reason } => assert!(
+                matches!(reason, RpcError::MethodUnavailable { .. }),
+                "the reason was lost: {reason}",
+            ),
+            other => panic!("a refused block hash was read as agreement: {other:?}"),
+        }
     }
 }
