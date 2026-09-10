@@ -183,6 +183,14 @@ pub const CASES: &[Case] = &[
         "dashboard-shielded",
         crate::fixtures::funded_with_shielded,
     ),
+    // Beside the funded dashboard rather than anywhere else, because the pair
+    // is the point: the same rows, and one of the two says why there is no
+    // token in them.
+    (
+        "dashboard",
+        "dashboard-tokens-uncounted",
+        crate::fixtures::tokens_uncounted,
+    ),
     (
         "dashboard",
         "chart-young-wallet",

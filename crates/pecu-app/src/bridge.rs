@@ -1292,6 +1292,13 @@ fn apply_portfolio(ui: &AppWindow, vm: &PortfolioVm) {
     // `has_breakdown` is: Slint cannot fold a model inside an expression. Why
     // it is carried at all is argued at the property declaration.
     state.set_holds_tokens(vm.assets.iter().any(|asset| !asset.native));
+    // …and whether that answer is trustworthy. A read that could not reach an
+    // address has not said the address holds no tokens, so `holds_tokens` can
+    // be false because there are none or because nobody could count — and the
+    // panel says which. Passed through rather than re-derived from `stale`: the
+    // core decided it beside the figures it is about, and the two flags happen
+    // to share a cause today while answering different questions.
+    state.set_tokens_unknown(vm.tokens_unknown);
     state.set_assets(ModelRc::from(Rc::new(VecModel::from(assets))));
 }
 
