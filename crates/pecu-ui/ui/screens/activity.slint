@@ -147,6 +147,49 @@ export component ActivityScreen inherits VerticalLayout {
     max-width: Sp.content-max;
     spacing: Sp.s5;
 
+    // Which money the bare numbers on this screen are in, said once.
+    //
+    // # Once, and not on the rows
+    //
+    // Every native amount below is in the same currency, so a ticker per row
+    // would be one word repeated down a column somebody is scanning for the
+    // numbers. That is why the rows ask `Money` for `show-currency: false`,
+    // and this line exists so that decision stops meaning the screen never
+    // names the currency at all.
+    //
+    // # Here rather than on the day heading
+    //
+    // The heading repeats. Three of them in the reference set, and one per day
+    // in a history with any length to it — "once per screen" and "on the day
+    // heading" are the same sentence only for a list with one day in it. The
+    // heading is also a `Note` the core words and sends, so putting a ticker
+    // in it would be a change to another crate for a screen's question.
+    //
+    // Above the summary strip rather than inside it, because the strip is
+    // conditioned on `ActivityState.stats` and nothing but the fixtures ever
+    // fills it — there is no `set_stats` in `bridge.rs`. A ticker inside that
+    // `if` would be drawn in every reference image and in no running wallet,
+    // which is precisely the build the issue is about. Above it is also the
+    // truthful position rather than merely the reachable one: `Sent · 30d` and
+    // `Received · 30d` are bare figures in this same currency, so the sentence
+    // stands over everything it is about instead of over the list alone.
+    //
+    // # Why the guard is the ticker itself and not `loading`
+    //
+    // `WalletState.ticker` is empty until a node names the chain. The other
+    // prose that interpolates it is gated behind a sibling property that
+    // arrives in the same call, and reaching for `!WalletState.loading` here
+    // would look like the same move and not be one: `bridge::apply_wallet`
+    // also clears `loading`, on unlock, before any portfolio exists. There is
+    // a window in which the wallet is loaded and the chain is still unnamed,
+    // and in it this line would read "Amounts are in ." Gated on the value, an
+    // unnamed chain gets no line rather than a sentence with a hole in it.
+    if WalletState.ticker != "": Text {
+        text: @tr("Amounts are in {} unless the row names another currency.", WalletState.ticker);
+        font-size: Typo.caption;
+        color: Theme.text-tertiary;
+    }
+
     // The summary, above the filters, because it describes the whole list
     // rather than the slice being looked at.
     if ActivityState.stats.length > 0: HorizontalLayout {
