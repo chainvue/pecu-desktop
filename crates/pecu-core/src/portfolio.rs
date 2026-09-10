@@ -493,6 +493,7 @@ impl Reading {
             amount_display: coins(held),
             native: true,
             counts_shielded: shielded.is_some(),
+            ..unpriced()
         }];
 
         // Tokens after the native currency, and only ones actually held. A row
@@ -518,6 +519,7 @@ impl Reading {
                 // There is one shielded pool and it holds the chain's own
                 // currency, so no token row can fold one in.
                 counts_shielded: false,
+                ..unpriced()
             });
         }
 
@@ -789,6 +791,26 @@ pub(crate) fn short(id: &str) -> String {
 
 fn sats(amount: Amount) -> String {
     amount.to_sat().to_string()
+}
+
+/// An asset row with no value on it yet, which is what a read produces.
+///
+/// A balance read talks to a node about addresses and learns nothing about what
+/// anything is worth — prices come out of reserve state, through
+/// [`crate::market::Book`], on a schedule of their own. So every row leaves here
+/// saying it does not know, and `Core::emit_portfolio` fills them in from the
+/// book in hand on the way out.
+///
+/// The em dash rather than an empty string, because a row that reaches a screen
+/// without passing the book is then visibly unpriced instead of invisibly
+/// blank. There is one such path today and it is deliberate: a dashboard
+/// restored from cache, whose prices belong to a block that is gone.
+fn unpriced() -> AssetVm {
+    AssetVm {
+        value_sats: None,
+        value_display: crate::market::UNKNOWN.to_string(),
+        ..AssetVm::default()
+    }
 }
 
 /// `12482.42` → `12 482.4200 0000`.

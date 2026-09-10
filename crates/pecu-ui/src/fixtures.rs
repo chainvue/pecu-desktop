@@ -1324,6 +1324,13 @@ pub fn funded(ui: &AppWindow) {
             // replaces the row rather than setting a flag on this one, because
             // the flag and the amount are one statement.
             counts_shielded: false,
+            // 12 482.42 at the 0.5372 DAI.vETH the MARKETS column beside it is
+            // showing, which is the arithmetic a reviewer can check across the
+            // two cards of this one picture. Every figure in `market_rows`
+            // comes out of `market::rows` over the scripted chain; this is
+            // what `Book::value_of` does with the same book, to the rounding
+            // `format::approx_sats` applies.
+            value: "6 705.88".into(),
         },
         AssetRow {
             name: "Bridge.vETH".into(),
@@ -1341,6 +1348,11 @@ pub fn funded(ui: &AppWindow) {
             // There is one shielded pool and it holds the chain's own currency,
             // so no token row can ever have one folded in.
             counts_shielded: false,
+            // 48.50 at the 7.09 DAI.vETH on the row two cards over. The second
+            // row is priced for a reason: a picture where only the chain's own
+            // currency had a value would not show whether the column works for
+            // the rows it was asked for, which are the token rows.
+            value: "343.88".into(),
         },
     ]))));
 
@@ -1608,6 +1620,12 @@ pub fn funded_with_shielded(ui: &AppWindow) {
             currency_id: VRSCTEST.into(),
             native: true,
             counts_shielded: true,
+            // The value moves with the amount, because it is the amount priced:
+            // 12 484.92 at 0.5372 rather than 12 482.42 at it. A picture where
+            // the shielded pool was folded into the holding and not into what
+            // the holding is worth would be two figures on one row disagreeing
+            // about what is in the row.
+            value: "6 707.22".into(),
         },
     );
 }

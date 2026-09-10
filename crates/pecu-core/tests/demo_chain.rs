@@ -896,6 +896,163 @@ async fn the_dashboard_gets_prices_without_visiting_the_markets_screen() {
     );
 }
 
+/// The dashboard's values and the markets table come out of one price book.
+///
+/// # The failure this exists to prevent
+///
+/// Issue #14 asks for a value on every holding, and the whole of the risk in it
+/// is that there are now two screens quoting one book. Somebody who wants to
+/// check the ASSETS column divides: their VRSCTEST holding is 527.75 and the row
+/// says it is worth 283.52, so the wallet is quoting 0.5372 DAI.vETH to the
+/// coin — which is a figure the markets table prints two columns away. If the
+/// dashboard were holding values from the book before last, that division would
+/// not come out, and nothing on either screen would say which of the two was
+/// behind.
+///
+/// Two things are asserted, and neither is the formatting.
+///
+/// **The figures agree.** Not by recomputing the price here, which would only
+/// test that this file can multiply: the implied price is taken out of the
+/// dashboard — value divided by amount — and compared against the string the
+/// markets table is showing at the same moment, to the precision that table
+/// prints.
+///
+/// **A markets read republishes the dashboard.** This is the part that cannot
+/// be seen from one event. The book is replaced on a schedule of its own, with
+/// nothing about the balances changing, so the values on screen have to move
+/// with it — `Core::emit_markets` publishes both views in one call for exactly
+/// this reason. The second phase takes a wallet that has settled, asks for a
+/// markets read alone, and waits for the dashboard. Without that one line the
+/// portfolio never arrives and this times out.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_dashboard_values_what_it_holds_from_the_book_the_markets_table_shows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (dispatcher, mut events) = pecu_core::start(
+        &tokio::runtime::Handle::current(),
+        pecu_core::Config {
+            nodes: vec![pecu_chain::Node::builtin(
+                0,
+                "Scripted chain",
+                "mock://scripted",
+            )],
+            network: pecu_chain::Network::Testnet,
+            mock: true,
+            home: dir.path().to_path_buf(),
+        },
+    );
+
+    dispatcher.send(pecu_protocol::Command::CreateWallet {
+        name: "demo".to_string(),
+        passphrase: pecu_protocol::Secret::from("correct-horse-battery-staple-9931"),
+    });
+
+    // Both views, as the wallet settles. Whichever of the two reads finishes
+    // first, a priced dashboard only exists once both have — which is the
+    // coupling, seen from the outside.
+    let (priced, rows) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut portfolio: Option<pecu_protocol::PortfolioVm> = None;
+        let mut rows: Vec<pecu_protocol::MarketRowVm> = Vec::new();
+        loop {
+            match events.recv().await {
+                Some(pecu_protocol::Event::Portfolio(vm)) => portfolio = Some(vm),
+                Some(pecu_protocol::Event::Markets { rows: fresh, .. }) if !fresh.is_empty() => {
+                    rows = fresh;
+                }
+                Some(_) => {}
+                None => panic!("the core stopped before pricing the dashboard"),
+            }
+            let ready = portfolio
+                .as_ref()
+                .and_then(|vm| vm.assets.iter().find(|asset| asset.native))
+                .is_some_and(|native| native.value_sats.is_some());
+            if ready && !rows.is_empty() {
+                break (portfolio.expect("checked just above"), rows);
+            }
+        }
+    })
+    .await
+    .expect("a dashboard with a value on it, and the table it has to agree with");
+
+    let native = priced
+        .assets
+        .iter()
+        .find(|asset| asset.native)
+        .expect("the chain's own currency has a row");
+    let row = rows
+        .iter()
+        .find(|row| row.name == "VRSCTEST")
+        .expect("the chain's own currency has a market row");
+
+    assert_eq!(
+        implied_price(native),
+        row.price,
+        "the dashboard values {} {} at {} — which is not the price the markets \
+         table is showing for it, so the two screens are quoting different books",
+        native.amount_display,
+        native.name,
+        native.value_display,
+    );
+    // And the figure itself, so that a test which agreed with a table that had
+    // gone wrong would still fail. 527.75 coins at 0.5372 DAI.vETH.
+    assert_eq!(native.value_display, "283.52", "{native:?}");
+
+    // ── A book that moves takes the dashboard with it ────────────────────
+    //
+    // Nothing is asked about the balances here. A markets read alone has to
+    // produce a dashboard, or the values on screen outlive the prices they were
+    // taken from.
+    dispatcher.send(pecu_protocol::Command::RefreshMarkets);
+    let again = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match events.recv().await {
+                Some(pecu_protocol::Event::Portfolio(vm)) => {
+                    if vm.assets.iter().any(|asset| asset.native) {
+                        break vm;
+                    }
+                }
+                Some(_) => {}
+                None => panic!("the core stopped before republishing the dashboard"),
+            }
+        }
+    })
+    .await
+    .expect("a markets read republishes the holdings it has just repriced");
+
+    let native = again
+        .assets
+        .iter()
+        .find(|asset| asset.native)
+        .expect("the chain's own currency has a row");
+    assert_eq!(
+        implied_price(native),
+        row.price,
+        "the repriced dashboard disagrees with the table: {native:?}",
+    );
+}
+
+/// What the dashboard is quoting, read back off it the way a person would.
+///
+/// Value divided by amount, as a price, in the words the markets table uses —
+/// so the comparison is between two strings a person can see on two screens
+/// rather than between a figure and a recomputation of itself.
+///
+/// Integers until the last step, because that is the rule the value path keeps:
+/// the division is taken in satoshis and only the ratio becomes a float, for
+/// the formatter that demands one. Nothing here is money.
+#[allow(clippy::cast_precision_loss)]
+fn implied_price(asset: &pecu_protocol::AssetVm) -> String {
+    let value: i128 = asset
+        .value_sats
+        .as_ref()
+        .expect("a priced row")
+        .parse()
+        .expect("satoshis, as decimal");
+    let held: i128 = asset.amount_sats.parse().expect("satoshis, as decimal");
+    let per_coin = i128::from(pecu_protocol::SATS_PER_COIN);
+    let sats = (value * per_coin + held / 2) / held;
+    pecu_protocol::format::price(sats as f64 / per_coin as f64)
+}
+
 /// A conversion is priced end to end, by the node rather than by the wallet.
 ///
 /// The distinction this asserts is the one the convert screen exists to make.

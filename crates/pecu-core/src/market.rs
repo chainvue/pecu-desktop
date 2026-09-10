@@ -564,6 +564,67 @@ impl Book {
         })
     }
 
+    /// What a holding is worth in the quote currency, in satoshis of **it**.
+    ///
+    /// `None` when this book cannot price the currency — no started pool holds
+    /// it, or the one that does published a price of nothing. That is not a
+    /// value of zero and must never be rendered as one: zero is a claim that
+    /// somebody's coins are worthless, and what is true is that this wallet
+    /// does not know. [`UNKNOWN`] is what the row gets instead.
+    ///
+    /// # No float touches the amount
+    ///
+    /// The price is a float, because the chain publishes reserve ratios as
+    /// JSON floats and this module's header argues that at length. The
+    /// *holding* is not: it arrives as an exact count of satoshis and leaves as
+    /// one. So the price is first reduced to satoshis of the quote per whole
+    /// unit — [`sats_of`], the same integer the chart plots — and the product is
+    /// taken in `i128`, where a `u64` of satoshis times an `i64` price cannot
+    /// overflow. Rounded to the nearest satoshi rather than truncated, so a
+    /// value is not systematically a little light.
+    ///
+    /// What that costs is half a satoshi of precision *per unit held*, because
+    /// the price is rounded to the quote currency's own smallest unit before
+    /// being multiplied out. On the largest holding this chain could express
+    /// that is a fraction of a cent, and it is below the two decimal places
+    /// anything shows. What it is not is a lost satoshi of anybody's money: the
+    /// amount this is computed from is untouched, and nothing spends this.
+    pub fn value_of(&self, target: &str, held: u64) -> Option<i64> {
+        let price = sats_of(self.quote_for(target)?.price)?;
+        let per_coin = i128::from(pecu_protocol::SATS_PER_COIN);
+        let valued = (i128::from(held) * i128::from(price) + per_coin / 2) / per_coin;
+        i64::try_from(valued).ok()
+    }
+
+    /// Put a value on every row of a holdings list, from this book.
+    ///
+    /// In place, and over the whole list, because the property worth having is
+    /// about the list rather than about a row: every figure on the dashboard
+    /// comes from one book at one call, so two rows cannot be priced a
+    /// notarization apart from each other — and `Core::emit_portfolio` is the
+    /// only caller, so they cannot be priced apart from the markets table
+    /// either. See `docs/` and that function for the whole of the argument.
+    ///
+    /// Every row is written, including the ones that cannot be priced. A value
+    /// left over from an earlier book would be the exact failure this exists to
+    /// prevent.
+    pub fn value_holdings(&self, assets: &mut [pecu_protocol::AssetVm]) {
+        for asset in assets {
+            // Parsed back out of the string the core put in. The protocol
+            // carries satoshis as decimal text — see `pecu_protocol::models` —
+            // and a holding that does not parse is not going to be valued by
+            // guessing at it.
+            let valued = asset
+                .amount_sats
+                .parse::<u64>()
+                .ok()
+                .and_then(|held| self.value_of(&asset.currency_id, held));
+            asset.value_display = valued
+                .map_or_else(|| UNKNOWN.to_string(), pecu_protocol::format::approx_sats);
+            asset.value_sats = valued.map(|sats| sats.to_string());
+        }
+    }
+
     /// The pool a conversion between these two would go through.
     ///
     /// A conversion runs through **one** fractional currency holding both
