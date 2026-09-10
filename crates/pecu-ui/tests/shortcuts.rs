@@ -14,12 +14,15 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use std::cell::Cell;
 use std::rc::Rc;
 
 use pecu_ui::{snapshot, Actions, AppWindow, MarketState, WalletState};
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, SharedString};
+use support::window_to_draw;
 
 /// Press a key, with whatever modifiers are already held.
 fn press(window: &AppWindow, text: impl Into<SharedString>) {
@@ -65,7 +68,7 @@ fn unlocked_window(
 
 #[test]
 fn the_keyboard_reaches_the_wallet() {
-    let window = snapshot::install().expect("offscreen platform");
+    let (_turn, window) = window_to_draw();
     let ui = unlocked_window(&window);
 
     // ── Navigation ──────────────────────────────────────────────────────
@@ -159,7 +162,7 @@ fn the_keyboard_reaches_the_wallet() {
 /// below it later.
 #[test]
 fn escape_closes_an_open_market() {
-    let window = snapshot::install().expect("offscreen platform");
+    let (_turn, window) = window_to_draw();
     let ui = unlocked_window(&window);
 
     let asked: Rc<Cell<i32>> = Rc::default();
@@ -218,7 +221,7 @@ fn escape_closes_an_open_market() {
 /// would leave a phrase held in memory behind a screen nobody can see.
 #[test]
 fn escape_leaves_the_recovery_phrase_screen() {
-    let window = snapshot::install().expect("offscreen platform");
+    let (_turn, window) = window_to_draw();
     let ui = unlocked_window(&window);
 
     let cancelled: Rc<Cell<u32>> = Rc::default();

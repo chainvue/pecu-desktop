@@ -24,9 +24,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use pecu_ui::{AppWindow, WalletState};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::ComponentHandle;
+use support::window_to_read;
 
 /// Roles that a person operates, and must therefore be able to tell apart.
 ///
@@ -192,7 +195,7 @@ fn each_control(mut visit: impl FnMut(&str, &ElementHandle, AccessibleRole)) {
 /// other was decoration.
 #[test]
 fn the_breadcrumb_out_of_a_market_can_be_pressed() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::market_detail(&ui);
@@ -230,7 +233,7 @@ fn the_breadcrumb_out_of_a_market_can_be_pressed() {
 /// pass on something harmless while the important controls stayed inert.
 #[test]
 fn a_screen_reader_can_actually_press_a_button() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::sending(&ui);
@@ -263,7 +266,7 @@ fn a_screen_reader_can_actually_press_a_button() {
 
 #[test]
 fn every_control_a_screen_reader_can_reach_has_a_name() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let mut nameless = Vec::new();
     let mut checked = 0usize;
@@ -326,7 +329,7 @@ fn every_control_a_screen_reader_can_reach_has_a_name() {
 /// Anything else is nameless, and the exclusion above would hide it.
 #[test]
 fn no_text_input_is_left_without_a_name() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let mut bare = Vec::new();
     let mut inputs = 0usize;
@@ -372,7 +375,7 @@ fn no_text_input_is_left_without_a_name() {
 /// somebody is about to hand out.
 #[test]
 fn an_address_is_spoken_in_groups() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::receiving(&ui);

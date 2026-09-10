@@ -22,9 +22,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use i_slint_backend_testing::ElementQuery;
 use pecu_ui::{AppWindow, Note, SendState, WalletState};
 use slint::ComponentHandle;
+use support::window_to_read;
 
 /// The shell, on screen rather than behind the unlock form.
 fn unlocked() -> AppWindow {
@@ -75,7 +78,7 @@ fn texts(ui: &AppWindow) -> Vec<String> {
 /// test rather than in three that must not overlap.
 #[test]
 fn the_interface_can_be_switched_to_another_language() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
 

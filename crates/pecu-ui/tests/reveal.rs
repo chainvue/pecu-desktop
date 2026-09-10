@@ -20,9 +20,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use pecu_ui::{AppWindow, SeedState, WalletState};
 use slint::ComponentHandle;
+use support::window_to_read;
 
 /// The shell, on screen rather than the unlock form.
 fn unlocked() -> AppWindow {
@@ -54,7 +57,7 @@ fn named(ui: &AppWindow, label: &str) -> Vec<ElementHandle> {
 /// test, and the awkwardness is worth less than the coverage.
 #[test]
 fn the_button_on_a_row_asks_for_that_rows_key() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     // Three keys in the fixture: `main`, backed up; `savings`, generated and
     // never written down; `cold-storage`, a WIF import.
@@ -101,7 +104,7 @@ fn the_button_on_a_row_asks_for_that_rows_key() {
 /// phrase" instead, two elements to the left.
 #[test]
 fn a_key_imported_as_a_private_key_is_not_offered_a_phrase() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::keys(&ui);
@@ -137,7 +140,7 @@ fn a_key_imported_as_a_private_key_is_not_offered_a_phrase() {
 /// would be the wallet asking them to re-earn a backup they already made.
 #[test]
 fn a_re_read_names_its_key_and_ends_without_a_quiz() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::backup_reread(&ui);
@@ -166,7 +169,7 @@ fn a_re_read_names_its_key_and_ends_without_a_quiz() {
 /// out of the one sitting that is worth quizzing.
 #[test]
 fn a_first_backup_still_has_to_be_written_down() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::backup_phrase(&ui);
@@ -192,7 +195,7 @@ fn a_first_backup_still_has_to_be_written_down() {
 /// it.
 #[test]
 fn the_gate_in_front_of_the_words_names_the_key() {
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::backup_passphrase(&ui);
