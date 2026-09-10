@@ -1800,7 +1800,7 @@ impl Core {
             .and_then(|node| node.network.as_ref())
             .map_or("VRSC", pecu_chain::Network::ticker);
 
-        let portfolio = reading.portfolio(ticker);
+        let portfolio = reading.portfolio(ticker, self.scanned_shielded());
         let _ = self.events.send(Event::Portfolio(portfolio.clone()));
 
         // The per-key figures moved with this read, and they travel on the
@@ -4194,6 +4194,35 @@ const SCAN_ATTEMPTS: u32 = 3;
         self.shielded
             .as_ref()
             .map_or(0, shielded::Shielded::balance)
+    }
+
+    /// The shielded pool, but only when a scan has actually produced it.
+    ///
+    /// [`Self::shielded_balance`] answers zero for an account nobody has looked
+    /// in, which is the right answer where it is used — a send form checking an
+    /// amount against a balance it cannot promise. It is the wrong answer for a
+    /// figure on a holdings list, because there it would be added to a total
+    /// and read as a statement that the private half is empty. So this returns
+    /// `None` for the three states that are not a scan result, matching what
+    /// `WalletVm::shielded_funds` already says on screen.
+    ///
+    /// Reads memory. The scan happened when it happened; this asks nobody.
+    ///
+    /// # The row lags the headline by one refresh, and does not lie about it
+    ///
+    /// A finished scan republishes the wallet and not the portfolio, so between
+    /// a scan landing and the next block the hero shows a shielded column that
+    /// the ASSETS row has not counted. What it does not do is misstate itself:
+    /// the row's caption is built from this same value, so during that window
+    /// it reads "spendable + maturing" and that is exactly what it is.
+    /// Closing the gap means keeping the last reading — or the last
+    /// `PortfolioVm` — alive across a scan, which is a question about what the
+    /// actor retains and when it is dropped on lock, and belongs to whoever
+    /// asks it rather than to this row.
+    fn scanned_shielded(&self) -> Option<verus_sdk::money::Amount> {
+        let held = self.shielded.as_ref()?;
+        held.scanned_to()?;
+        Some(verus_sdk::money::Amount::from_sat(held.balance()))
     }
 
     /// What the key that would sign a payment holds, on its own.

@@ -411,6 +411,12 @@ export struct AssetRow {
     // component, so the name is not an identifier.
     currency-id: string,
     native: bool,
+    // Whether `amount` has the shielded pool folded into it, which is what the
+    // native row's caption is chosen from. It travels beside the figure rather
+    // than being inferred from `native`, because the row folds the pool in only
+    // when a scan has produced one — so the caption and the number it describes
+    // are decided together and cannot come apart.
+    counts-shielded: bool,
 }
 
 export struct ActivityRow {

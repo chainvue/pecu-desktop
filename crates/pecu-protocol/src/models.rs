@@ -399,6 +399,19 @@ pub struct AssetVm {
     pub amount_display: String,
     /// True for the chain's own currency, which sorts first and is never hidden.
     pub native: bool,
+    /// The figure above includes the shielded pool.
+    ///
+    /// Carried rather than inferred from `native`, because the two are not the
+    /// same question: the native row is the only one that *can* fold the pool
+    /// in, and it does so only when a scan has actually produced a figure. An
+    /// unscanned account is not a zero — see [`ShieldedFunds`] — so a row that
+    /// added one anyway would be stating a balance no scan supports.
+    ///
+    /// The interface uses it to choose which of two captions the row carries,
+    /// and the caption is the whole point: this figure and the headline above
+    /// it legitimately differ, and two totals on one screen with nothing
+    /// saying why is worse than the omission it fixes.
+    pub counts_shielded: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

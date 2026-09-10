@@ -100,6 +100,9 @@ fn with_a_second_token(ui: &AppWindow) {
         secondary: OTHER_VETH.into(),
         currency_id: OTHER_VETH.into(),
         native: false,
+        // A token row never folds in the shielded pool: there is one pool and
+        // it holds the chain's own currency.
+        counts_shielded: false,
     });
     wallet.set_assets(ModelRc::new(VecModel::from(assets)));
 }

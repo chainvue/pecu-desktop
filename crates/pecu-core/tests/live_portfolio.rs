@@ -60,7 +60,10 @@ fn a_real_address_reads_coherently() {
         .as_ref()
         .expect("the node should answer getaddressdeltas");
 
-    let portfolio = reading.portfolio("VRSCTEST");
+    // `None`: this test reads transparent addresses over the network and
+    // has no shielded scan behind it, which is the state a wallet with no
+    // light server is in permanently.
+    let portfolio = reading.portfolio("VRSCTEST", None);
     assert!(!portfolio.stale);
     assert!(
         portfolio.assets.first().is_some_and(|asset| asset.native),
@@ -223,7 +226,7 @@ fn a_real_read_round_trips_through_the_cache() {
     assert!(reading.failure.is_none(), "{:?}", reading.failure);
 
     let now = 1_800_000_000;
-    let portfolio_vm = reading.portfolio("VRSCTEST");
+    let portfolio_vm = reading.portfolio("VRSCTEST", None);
     let rows = reading.rows(now);
 
     {
