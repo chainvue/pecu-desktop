@@ -26,10 +26,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use i_slint_backend_testing::ElementQuery;
 use pecu_ui::{AppWindow, WalletState};
 use slint::ComponentHandle;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use support::window_to_read;
 
 /// Said of the shielded pool: a separate pool, never in the headline.
 const OUTSIDE: &str = "not counted above";
@@ -39,22 +41,6 @@ const NOT_YET: &str = "not counted yet";
 
 /// Said of leaving money: the headline has already taken it off.
 const ALREADY_GONE: &str = "already deducted";
-
-/// One window on this process at a time.
-///
-/// The same reason `tests/tokens.rs` has one: the testing backend is
-/// process-global, and the threads Cargo runs a file's tests as will deadlock
-/// fighting over it. `into_inner` on a poisoned lock so that a test which
-/// failed holding it does not turn the rest into lock panics and bury the
-/// failure worth reading.
-static ONE_WINDOW_AT_A_TIME: Mutex<()> = Mutex::new(());
-
-/// Hold the window to this thread for the rest of the test.
-fn alone() -> MutexGuard<'static, ()> {
-    ONE_WINDOW_AT_A_TIME
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-}
 
 /// The shell, on screen rather than the unlock form.
 fn unlocked() -> AppWindow {
@@ -113,8 +99,7 @@ fn said_beside(ui: &AppWindow, figure: &str, caption: &str) -> bool {
 
 #[test]
 fn the_shielded_figure_is_never_shown_without_saying_it_is_outside_the_total() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = dashboard(pecu_ui::fixtures::funded_with_shielded);
     assert!(
@@ -130,8 +115,7 @@ fn the_shielded_figure_is_never_shown_without_saying_it_is_outside_the_total() {
 
 #[test]
 fn a_pool_nobody_has_looked_in_is_not_labelled_as_missing_from_the_total() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     // `funded` leaves `shielded-any` false, which is the state of an unscanned
     // account and of a scanned empty one alike — the two the row is written to
@@ -152,8 +136,7 @@ fn a_pool_nobody_has_looked_in_is_not_labelled_as_missing_from_the_total() {
 
 #[test]
 fn money_on_its_way_is_marked_as_not_being_in_the_total_yet() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = dashboard(pecu_ui::fixtures::funded);
     assert!(
@@ -175,8 +158,7 @@ fn money_on_its_way_is_marked_as_not_being_in_the_total_yet() {
 
 #[test]
 fn money_already_taken_off_the_total_does_not_claim_to_be_missing_from_it() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     // Set from the test rather than in the fixture: no reference image renders
     // a wallet with something leaving, and adding one would be a picture of a

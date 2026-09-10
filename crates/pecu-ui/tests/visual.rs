@@ -43,15 +43,19 @@
 //!
 //! # Why everything happens in one `#[test]`
 //!
-//! Slint permits exactly one platform per process, and `snapshot::install()`
-//! sets it. Two test functions would race to install it and the second would
-//! fail. One test, every case in sequence — and every failure collected before
-//! reporting, so a change that moves four screens is one message rather than
-//! four runs.
+//! Not because a platform is once per process. It is once per *thread*, and
+//! `tests/support/mod.rs` sets out what the rule actually is — two test
+//! functions here would each get their own. Because every case has to be
+//! compared before anything is reported: one test, every case in sequence, and
+//! every failure collected first, so a change that moves four screens is one
+//! message rather than four runs.
+
+mod support;
 
 use std::path::{Path, PathBuf};
 
 use pecu_ui::snapshot;
+use support::window_to_draw;
 
 /// Per-channel tolerance for a pixel to count as changed.
 ///
@@ -112,7 +116,7 @@ fn the_interface_matches_its_reference_images() {
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).expect("snapshot directory");
 
-    let window = snapshot::install().expect("offscreen platform");
+    let (_turn, window) = window_to_draw();
     let mut failures = Vec::new();
     let mut written = Vec::new();
 

@@ -58,11 +58,17 @@ impl Platform for Offscreen {
     }
 }
 
-/// Install the offscreen platform. **Callable once per process.**
+/// Install the offscreen platform. **Callable once per thread.**
 ///
-/// Slint allows exactly one platform per process, which is why the visual test
-/// renders every case inside a single `#[test]` rather than one test each — and
-/// why this returns the window instead of hiding it in a global.
+/// Slint keeps the platform in a thread-local, so this is once per thread and
+/// not once per process — `tests/shortcuts.rs` installs it in three tests of one
+/// binary. A second install on the same thread fails, which is why this hands
+/// the window back rather than hiding it in a global.
+///
+/// Tests call `tests/support::window_to_draw` instead of calling this directly,
+/// so that the one-window-at-a-time guard and the argument for it live in one
+/// place. This stays public for `examples/render_shots.rs`, which is not a test
+/// and cannot reach a test module.
 pub fn install() -> Result<Rc<MinimalSoftwareWindow>, Box<dyn std::error::Error>> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     // `SetPlatformError` is its own type and does not convert into

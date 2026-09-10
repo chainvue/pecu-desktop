@@ -17,12 +17,14 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use pecu_ui::{AppWindow, AssetRow, ConvertState, HaltState, Note, WalletState};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use support::window_to_read;
 
 /// The i-address the `funded` fixture gives Bridge.vETH.
 const BRIDGE_VETH: &str = "iBoaN7swKAwXgYf1huA3PxBXi5stcfgGMh";
@@ -62,35 +64,6 @@ fn claims_conversions_work(said: &[String]) -> bool {
             .iter()
             .any(|claim| text.contains(claim))
     })
-}
-
-/// One window on this process at a time.
-///
-/// # Why this is here and not in the other interface tests
-///
-/// Cargo runs the tests in a file as threads of one process, and the testing
-/// backend is process-global: it is installed once by `init_no_event_loop` and
-/// then hands out windows. Eight of these starting at once deadlocked — every
-/// thread asleep, no CPU burned, the run never finishing — and it did so about
-/// half the time, which is the worst kind: the first three runs of this file
-/// passed in eight seconds and the fourth hung a whole workspace test. Forced
-/// to one thread the same eight pass in eight seconds, every time.
-///
-/// So the windows are taken one after another. The file keeps its eight
-/// sentences rather than being folded into one test, which is what
-/// `tests/translation.rs` had to do for a different piece of process-global
-/// state — its three tests really did have to run in order, and these do not.
-///
-/// `into_inner` on a poisoned lock rather than a panic: a test that failed
-/// while holding this has already reported the failure worth reading, and
-/// turning the seven after it into lock panics would bury it.
-static ONE_WINDOW_AT_A_TIME: Mutex<()> = Mutex::new(());
-
-/// Hold the window to this thread for the rest of the test.
-fn alone() -> MutexGuard<'static, ()> {
-    ONE_WINDOW_AT_A_TIME
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The shell, on screen rather than the unlock form.
@@ -166,8 +139,7 @@ fn texts(ui: &AppWindow) -> Vec<String> {
 /// wrong currency in the pay field of the next one.
 #[test]
 fn pressing_a_token_row_opens_convert_with_that_currency_to_pay() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     for id in [BRIDGE_VETH, OTHER_VETH] {
         let ui = unlocked();
@@ -201,8 +173,7 @@ fn pressing_a_token_row_opens_convert_with_that_currency_to_pay() {
 /// telling the reader which of them is an offer.
 #[test]
 fn the_row_for_the_chains_own_currency_offers_no_conversion() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = on("dashboard");
     assert!(
@@ -242,8 +213,7 @@ fn the_row_for_the_chains_own_currency_offers_no_conversion() {
 /// an amount nobody typed for the currency it is now about.
 #[test]
 fn an_amount_typed_for_one_currency_does_not_follow_it_to_another() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = on("dashboard");
     ui.global::<ConvertState>().set_pay_draft("250".into());
@@ -263,8 +233,7 @@ fn an_amount_typed_for_one_currency_does_not_follow_it_to_another() {
 /// The shortcut never builds a conversion of something into itself.
 #[test]
 fn the_shortcut_never_builds_a_conversion_into_itself() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = on("dashboard");
     // The form was last left buying the very token whose row is about to be
@@ -293,8 +262,7 @@ fn the_shortcut_never_builds_a_conversion_into_itself() {
 /// The send form says which currency it sends.
 #[test]
 fn the_send_form_says_which_currency_it_sends() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::sending(&ui);
@@ -317,8 +285,7 @@ fn the_send_form_says_which_currency_it_sends() {
 /// none, which is how a wallet teaches people to stop reading its captions.
 #[test]
 fn a_wallet_holding_only_the_chains_own_currency_is_told_nothing_about_tokens() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     for screen in ["dashboard", "send"] {
         let ui = unlocked();
@@ -348,8 +315,7 @@ fn a_wallet_holding_only_the_chains_own_currency_is_told_nothing_about_tokens() 
 /// silent absence with a confident wrong signpost is the worse of the two.
 #[test]
 fn a_chain_with_conversions_switched_off_does_not_offer_a_conversion_as_the_way_out() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = on("dashboard");
     ui.global::<HaltState>().set_conversions_halted(true);
@@ -382,8 +348,7 @@ fn a_chain_with_conversions_switched_off_does_not_offer_a_conversion_as_the_way_
 /// them being updated and the other not.
 #[test]
 fn the_send_form_does_not_send_somebody_to_convert_while_it_is_shut() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = unlocked();
     pecu_ui::fixtures::sending(&ui);
@@ -415,8 +380,7 @@ fn the_send_form_does_not_send_somebody_to_convert_while_it_is_shut() {
 /// screen after unlock and the portfolio can land before the halt does.
 #[test]
 fn a_chain_this_wallet_could_not_ask_is_not_reported_as_taking_conversions() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     for severity in ["", "unknown"] {
         // Both screens in one loop: the two sentences live in two files, and
@@ -456,8 +420,7 @@ fn a_chain_this_wallet_could_not_ask_is_not_reported_as_taking_conversions() {
 /// signed bytes it is holding.
 #[test]
 fn the_row_hands_back_a_form_whatever_convert_was_left_showing() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     for (left_on, expected) in [
         ("review", "cancel"),
@@ -509,8 +472,7 @@ fn the_row_hands_back_a_form_whatever_convert_was_left_showing() {
 /// line about a currency nobody just picked.
 #[test]
 fn a_refusal_from_earlier_is_not_waiting_on_the_form_the_row_opens() {
-    let _alone = alone();
-    i_slint_backend_testing::init_no_event_loop();
+    let _turn = window_to_read();
 
     let ui = on("dashboard");
     ui.global::<ConvertState>().set_problem(Note {

@@ -2,20 +2,24 @@
 //!
 //! # Its own test binary, and one `#[test]` inside it
 //!
-//! Slint permits exactly one platform per process and `snapshot::install()`
-//! sets it, so this cannot live beside `tests/visual.rs` — a second install in
-//! the same process fails. Cargo gives each integration test file its own
-//! binary, which is what makes two platform-owning tests possible at all.
+//! Slint keeps its platform in a thread-local, not in a process-wide slot, so
+//! a second install elsewhere in the process is fine and this could have lived
+//! beside `tests/visual.rs`. What it could not have done is share that file's
+//! window. It stays its own binary because it is its own subject, and
+//! `tests/support/mod.rs` records the rule this paragraph used to get wrong.
 //!
-//! And one test inside it, for the same reason plus a second: the harness runs
-//! tests on separate threads, and a Slint component belongs to the thread it
-//! was created on.
+//! And one test inside it, for a reason that is not about the platform at all:
+//! the harness runs tests on separate threads, and a Slint component belongs to
+//! the thread it was created on.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+mod support;
 
 use pecu_protocol::SeedWordVm;
 use pecu_ui::{seed, AppWindow, SeedState};
 use slint::{ComponentHandle, Model};
+use support::window_to_draw;
 
 /// Not a real mnemonic, and not twenty-four of anything: this file gets read,
 /// and a checked-in BIP-39 phrase is indistinguishable at a glance from
@@ -41,7 +45,7 @@ fn rows(ui: &AppWindow) -> Vec<String> {
 
 #[test]
 fn the_phrase_is_masked_except_while_it_is_being_shown() {
-    let _window = pecu_ui::snapshot::install().expect("offscreen platform");
+    let (_turn, _window) = window_to_draw();
     let ui = AppWindow::new().expect("window");
 
     // Opening lays the grid out from the word COUNT alone. No word has been

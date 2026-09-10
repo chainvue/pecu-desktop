@@ -12,9 +12,12 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use pecu_protocol::{NoteVm, Severity, UiError};
-use pecu_ui::{snapshot, toast, AppWindow};
+use pecu_ui::{toast, AppWindow};
 use slint::ComponentHandle;
+use support::window_to_draw;
 
 fn notice(code: &'static str, severity: Severity) -> UiError {
     UiError::simple(code, NoteVm::plain(code), "what to do", severity)
@@ -22,7 +25,7 @@ fn notice(code: &'static str, severity: Severity) -> UiError {
 
 #[test]
 fn nothing_the_wallet_says_is_lost() {
-    let _window = snapshot::install().expect("offscreen platform");
+    let (_turn, _window) = window_to_draw();
     let ui = AppWindow::new().expect("a window");
     toast::install(&ui);
 
@@ -98,7 +101,7 @@ fn nothing_the_wallet_says_is_lost() {
 /// is the true one.
 #[test]
 fn a_repeated_code_shows_the_newest_wording() {
-    let _window = snapshot::install().expect("offscreen platform");
+    let (_turn, _window) = window_to_draw();
     let ui = AppWindow::new().expect("a window");
     toast::install(&ui);
 
