@@ -681,6 +681,13 @@ fn pick_challenge(word_count: usize, bytes: &[u8; 32]) -> Vec<u32> {
 mod tests {
     use super::*;
 
+    /// A passphrase these tests can actually set.
+    ///
+    /// Named rather than spelled at each call site because it now has to clear
+    /// `MIN_PASSPHRASE_CHARS`, and a fixture that quietly fell under a rule the
+    /// suite is meant to be exercising would fail thirty tests for one reason.
+    const PASS: &str = "correct horse battery staple";
+
     #[test]
     fn a_created_wallet_is_unlocked_and_has_one_key() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -688,7 +695,7 @@ mod tests {
         assert!(!wallet.exists());
 
         wallet
-            .create("test", &Secret::from("a passphrase"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         assert!(wallet.exists());
@@ -711,7 +718,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("a passphrase"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         let view = wallet.view();
@@ -737,7 +744,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("a passphrase"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         assert!(!wallet.view().shielded_address.is_empty());
 
@@ -755,7 +762,7 @@ mod tests {
         // It comes back on unlock, without a second passphrase prompt beyond
         // the one that unlocked the wallet.
         wallet
-            .unlock(&Secret::from("a passphrase"))
+            .unlock(&Secret::from(PASS))
             .expect("unlock");
         assert!(wallet.view().shielded_address.starts_with("zs1"));
     }
@@ -767,10 +774,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
 
         let mut first = Wallet::open_or_absent(dir.path().join("one.json"));
-        first.create("one", &Secret::from("same")).expect("create");
+        first.create("one", &Secret::from(PASS)).expect("create");
 
         let mut second = Wallet::open_or_absent(dir.path().join("two.json"));
-        second.create("two", &Secret::from("same")).expect("create");
+        second.create("two", &Secret::from(PASS)).expect("create");
 
         assert_ne!(
             first.active_address(),
@@ -786,7 +793,7 @@ mod tests {
 
         let mut wallet = Wallet::open_or_absent(path.clone());
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         let address = wallet.active_address().expect("an address");
 
@@ -814,7 +821,7 @@ mod tests {
             .import(
                 "main",
                 Imported::Phrase(Secret::from(mistyped)),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect_err("a broken checksum must be refused");
 
@@ -839,7 +846,7 @@ mod tests {
             .import(
                 "main",
                 Imported::Phrase(Secret::from(phrase)),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect("restore");
 
@@ -872,7 +879,7 @@ mod tests {
                 .import(
                     "main",
                     Imported::Phrase(Secret::from(phrase)),
-                    &Secret::from("pass"),
+                    &Secret::from(PASS),
                 )
                 .expect("restore");
             addresses.push(wallet.active_address());
@@ -894,7 +901,7 @@ mod tests {
             .import(
                 "main",
                 Imported::Phrase(Secret::from(text)),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .is_err());
 
@@ -903,7 +910,7 @@ mod tests {
             .import(
                 "main",
                 Imported::Text(Secret::from(text)),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect("free text must import when chosen");
         assert!(accepting.active_address().is_some());
@@ -920,7 +927,7 @@ mod tests {
             .import(
                 "main",
                 Imported::Wif(Secret::from(bitcoin_wif)),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect_err("a foreign WIF must be refused");
 
@@ -933,7 +940,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         wallet
@@ -942,7 +949,7 @@ mod tests {
                 Imported::Wif(Secret::from(
                     "UusoQWsobQKUkezgBJa22D9G4t9Avo6k8wD5UUxmmfAEoTN8bawc",
                 )),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect("import");
 
@@ -962,7 +969,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         let challenge = wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         assert_eq!(challenge.word_count, 24);
@@ -1013,7 +1020,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         let challenge = wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         let words = wallet.backup_words();
 
@@ -1050,7 +1057,7 @@ mod tests {
 
         let mut wallet = Wallet::open_or_absent(path.clone());
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         assert!(wallet.backup_in_progress());
@@ -1076,7 +1083,7 @@ mod tests {
 
         let mut wallet = Wallet::open_or_absent(path.clone());
         let first = wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         let original = wallet.backup_words();
 
@@ -1089,9 +1096,9 @@ mod tests {
         let mut reopened = Wallet::open_or_absent(path);
         assert_eq!(reopened.view().needs_backup.as_deref(), Some("main"));
 
-        reopened.unlock(&Secret::from("pass")).expect("unlock");
+        reopened.unlock(&Secret::from(PASS)).expect("unlock");
         let second = reopened
-            .begin_reveal("main", &Secret::from("pass"))
+            .begin_reveal("main", &Secret::from(PASS))
             .expect("reveal");
 
         assert_eq!(reopened.backup_words(), original, "a different phrase");
@@ -1103,13 +1110,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         wallet.finish_backup().expect("finish");
 
         assert!(wallet.begin_reveal("main", &Secret::from("wrong")).is_err());
         assert!(!wallet.backup_in_progress());
-        assert!(wallet.begin_reveal("main", &Secret::from("pass")).is_ok());
+        assert!(wallet.begin_reveal("main", &Secret::from(PASS)).is_ok());
     }
 
     /// An imported key has no words the user has not already seen, so nothing
@@ -1119,7 +1126,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
         wallet.finish_backup().expect("finish");
 
@@ -1129,7 +1136,7 @@ mod tests {
                 Imported::Wif(Secret::from(
                     "UusoQWsobQKUkezgBJa22D9G4t9Avo6k8wD5UUxmmfAEoTN8bawc",
                 )),
-                &Secret::from("pass"),
+                &Secret::from(PASS),
             )
             .expect("import");
 
@@ -1161,7 +1168,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut wallet = Wallet::open_or_absent(dir.path().join("vault.json"));
         wallet
-            .create("test", &Secret::from("pass"))
+            .create("test", &Secret::from(PASS))
             .expect("create");
 
         wallet.auto_lock = Some(std::time::Duration::from_hours(1));
@@ -1175,7 +1182,7 @@ mod tests {
         assert!(!wallet.should_auto_lock());
 
         // "Never" means never.
-        wallet.unlock(&Secret::from("pass")).expect("unlock");
+        wallet.unlock(&Secret::from(PASS)).expect("unlock");
         wallet.auto_lock = None;
         assert!(!wallet.should_auto_lock());
     }

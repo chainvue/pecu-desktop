@@ -353,6 +353,71 @@ fn an_empty_passphrase_is_refused() {
     ));
 }
 
+/// `cat123` was accepted, silently, by both places a passphrase is set.
+///
+/// The Argon2id parameters are good — 64 MiB and 3 passes, around 3.4× OWASP's
+/// interactive minimum — and they buy time per guess. They do nothing about a
+/// passphrase that is in the first ten thousand guesses, and the vault file is
+/// what leaves with the laptop.
+#[test]
+fn a_guessable_passphrase_is_refused_wherever_one_is_chosen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("vault.json");
+
+    assert!(
+        matches!(
+            Vault::create(&path, "test", &Secret::from("cat123")),
+            Err(VaultError::PassphraseTooShort { minimum })
+                if minimum == pecu_protocol::MIN_PASSPHRASE_CHARS
+        ),
+        "a new vault took a six-character passphrase",
+    );
+    assert!(
+        !path.exists(),
+        "a refused passphrase left a vault file behind",
+    );
+
+    // And the other half, which is the whole reason this is not a UI check:
+    // a floor applied only where a wallet is created moves the weak passphrase
+    // to Change passphrase rather than removing it.
+    let (vault, _path) = new_vault(&dir);
+    assert!(matches!(
+        vault.change_passphrase(&Secret::from(PASS), &Secret::from("cat123")),
+        Err(VaultError::PassphraseTooShort { .. })
+    ));
+    assert!(
+        vault.is_unlocked(),
+        "a refused change disturbed the open vault",
+    );
+}
+
+/// Nothing about the floor may reach the way *in*.
+///
+/// The companion to `the_floor_applies_to_choosing_a_passphrase_and_never_to_
+/// using_one` in `vault.rs`, one level up: that one asserts `derive` has no
+/// length rule, and this one asserts that the public call every unlock goes
+/// through does not acquire one somewhere else on the way. A short passphrase
+/// offered to `unlock` is *wrong*, which is a different answer from *too
+/// short* — and the day it becomes "too short" is the day a wallet sealed
+/// before this rule existed stops opening.
+#[test]
+fn unlocking_never_judges_the_length_of_what_it_is_given() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_vault, path) = new_vault(&dir);
+
+    let reopened = Vault::open(&path).expect("open");
+    assert!(
+        matches!(
+            reopened.unlock(&Secret::from("cat123")),
+            Err(VaultError::WrongPassphrase)
+        ),
+        "unlock reported on the length of the passphrase it was handed",
+    );
+    reopened
+        .unlock(&Secret::from(PASS))
+        .expect("the vault still opens");
+}
+
 /// Adding a second key to an already-open wallet should not re-prompt.
 #[test]
 fn adding_a_key_needs_the_vault_open_but_not_the_passphrase() {
@@ -537,7 +602,14 @@ fn a_failed_passphrase_change_leaves_the_vault_alone() {
     let before = std::fs::read_to_string(&path).expect("read");
 
     assert!(matches!(
-        vault.change_passphrase(&Secret::from("not the passphrase"), &Secret::from("new")),
+        // A new passphrase that clears the floor, so the refusal under test is
+        // the one this case is about — the OLD passphrase being wrong. It read
+        // "new" before, which is now refused a step earlier and would have made
+        // this assertion pass for the wrong reason.
+        vault.change_passphrase(
+            &Secret::from("not the passphrase"),
+            &Secret::from("a different passphrase"),
+        ),
         Err(VaultError::WrongPassphrase)
     ));
     assert!(matches!(

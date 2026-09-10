@@ -5,7 +5,7 @@ import { Btn, Card, Eyebrow, ListRow, Segmented, StatusPill } from "../component
 import { KeyRow, KnownAddressRow } from "../vm/structs.slint";
 import { NodesScreen } from "network.slint";
 import { Actions, AppInfo, NetworkState, SeedState, SendState, WalletState } from "../vm/state.slint";
-import { Field } from "../components/form.slint";
+import { Field, PassphraseRule } from "../components/form.slint";
 import { NoticeTitle } from "../components/note.slint";
 
 // One labelled block of settings.
@@ -160,6 +160,24 @@ export component PassphraseChange inherits VerticalLayout {
             font-size: Typo.caption;
             color: Theme.text-secondary;
         }
+        // The same rule and the same words the setup screen shows, from the
+        // same component. This form is the reason the issue exists: a floor
+        // applied only where a wallet is created moves the weak passphrase here
+        // rather than removing it.
+        //
+        // Above the box, like the other two forms and for the same reason: the
+        // requirement is worth reading before a passphrase is invented rather
+        // than after Change passphrase has quietly gone dead. The label above
+        // the confirmation already goes red to complain about the box under
+        // it, so the direction is this file's own.
+        //
+        // It applies to the NEW one only. `current` above is whatever this
+        // wallet was sealed with, possibly years before this rule existed, and
+        // asking it to clear a floor it predates would lock its owner out of
+        // the one screen that could fix it.
+        rule := PassphraseRule {
+            typed: fresh.text;
+        }
         fresh := Field {
             password: true;
             placeholder: @tr("A new passphrase");
@@ -199,7 +217,7 @@ export component PassphraseChange inherits VerticalLayout {
         Btn {
             text: @tr("Change passphrase");
             variant: "primary";
-            enabled: current.text != "" && fresh.text != "" && root.matched;
+            enabled: current.text != "" && rule.long-enough && root.matched;
             clicked => { root.submit(); }
         }
     }
@@ -207,7 +225,7 @@ export component PassphraseChange inherits VerticalLayout {
     // Both secrets leave in one call and every field is blanked before it
     // returns — the same discipline as every other secret-bearing path here.
     function submit() {
-        if (current.text == "" || fresh.text == "" || !root.matched) { return; }
+        if (current.text == "" || !rule.long-enough || !root.matched) { return; }
         Actions.change-passphrase(current.text, fresh.text);
         current.text = "";
         fresh.text = "";

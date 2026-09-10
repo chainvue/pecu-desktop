@@ -6,7 +6,7 @@ use std::sync::RwLock;
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use pecu_protocol::Secret;
+use pecu_protocol::{Secret, MIN_PASSPHRASE_CHARS};
 use verus_sdk::verus_keys::{KeyError, PrivateKey};
 use zeroize::Zeroizing;
 
@@ -48,6 +48,25 @@ pub enum VaultError {
 
     #[error("a passphrase is required")]
     EmptyPassphrase,
+
+    /// The passphrase being **chosen** is shorter than
+    /// [`MIN_PASSPHRASE_CHARS`].
+    ///
+    /// Its own variant rather than a `WrongPassphrase`, because the two call
+    /// for opposite next steps: one means try again, the other means think
+    /// again. Reported to the interface with the number in it, so the sentence
+    /// on screen and the rule in here cannot say different things.
+    ///
+    /// # This can never be the reason a wallet will not open
+    ///
+    /// It is raised at the two places a passphrase is *set* — [`Vault::create`]
+    /// and the new half of [`Vault::change_passphrase`] — and nowhere else.
+    /// `derive`, which is what [`Vault::unlock`] and every reveal run through,
+    /// keeps the empty check it always had and gains nothing. A vault sealed
+    /// with `cat123` before this rule existed still opens with `cat123`; what
+    /// its owner cannot do is choose that again.
+    #[error("a passphrase needs at least {minimum} characters")]
+    PassphraseTooShort { minimum: usize },
 
     #[error("this file is not a vault this version understands: {0}")]
     Corrupt(String),
@@ -125,9 +144,7 @@ pub struct Vault {
 impl Vault {
     /// Create a new vault and write it.
     pub fn create(path: &Path, name: &str, passphrase: &Secret) -> Result<Self, VaultError> {
-        if passphrase.expose().is_empty() {
-            return Err(VaultError::EmptyPassphrase);
-        }
+        check_chosen(passphrase)?;
 
         let mut wallet_id = [0u8; 16];
         getrandom::fill(&mut wallet_id).map_err(|_| VaultError::NoEntropy)?;
@@ -705,9 +722,14 @@ impl Vault {
     /// whose memory says one passphrase and whose file says another is a vault
     /// that stops opening after the next restart.
     pub fn change_passphrase(&self, old: &Secret, new: &Secret) -> Result<(), VaultError> {
-        if new.expose().is_empty() {
-            return Err(VaultError::EmptyPassphrase);
-        }
+        // The new one is judged before the old one is verified, which is where
+        // this check already sat when it only refused an empty string. Order
+        // matters and this is the right way round: the alternative spends an
+        // Argon2 run — the deliberately expensive one — before telling somebody
+        // their new passphrase was never going to be accepted. It discloses
+        // nothing either way; whether the *old* passphrase was right is a
+        // separate answer that still costs the derivation.
+        check_chosen(new)?;
 
         let (previous_kdf, previous_wrapped) = {
             let doc = self.doc.read().map_err(|_| VaultError::Locked)?;
@@ -841,7 +863,51 @@ fn restrict(path: &Path) {
     let _ = path;
 }
 
+/// Judge a passphrase somebody is **choosing**.
+///
+/// # The one function this rule is allowed to be in
+///
+/// Not in [`derive`] below, and the distinction is the whole design. `derive`
+/// runs on the way *in* — every unlock, every reveal, and the old half of a
+/// passphrase change all go through it — so a length rule there would refuse to
+/// open a vault that this wallet itself sealed before the rule existed. There
+/// is no way to re-check an existing wallet without its passphrase and no way
+/// to warn its owner except at the moment they type it, which is the moment
+/// they would instead be locked out. So the rule is scoped to the two callers
+/// that are *setting* a passphrase, and an existing wallet meets it the next
+/// time its owner changes theirs, or never, and opens either way.
+///
+/// # Characters, not bytes
+///
+/// `chars().count()` rather than `len()`, so that twelve characters is twelve
+/// characters in every script. `len()` counts bytes: it would wave a
+/// six-character Cyrillic passphrase through as twelve, and refuse a twelve-
+/// character one somewhere else in the range. The interface counts the same
+/// way, so the sentence on screen and the refusal here agree about what a
+/// character is.
+fn check_chosen(passphrase: &Secret) -> Result<(), VaultError> {
+    let typed = passphrase.expose();
+    if typed.is_empty() {
+        return Err(VaultError::EmptyPassphrase);
+    }
+    if typed.chars().count() < MIN_PASSPHRASE_CHARS {
+        return Err(VaultError::PassphraseTooShort {
+            minimum: MIN_PASSPHRASE_CHARS,
+        });
+    }
+    Ok(())
+}
+
 /// Argon2id over the passphrase.
+///
+/// # Do not put a length rule here
+///
+/// This is the way *in*: every unlock, every phrase reveal, and the old half of
+/// a passphrase change. It judges nothing about the passphrase it is handed
+/// beyond it existing, and it must not start — see [`check_chosen`], which is
+/// where the floor belongs and why. A minimum length in this function locks the
+/// owner of every wallet sealed before that minimum existed out of it
+/// permanently, and there is no reset.
 fn derive(kdf: &Kdf, passphrase: &Secret) -> Result<Zeroizing<[u8; KEY_BYTES]>, VaultError> {
     if passphrase.expose().is_empty() {
         return Err(VaultError::EmptyPassphrase);
@@ -962,4 +1028,100 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The passphrase from issue #16, which this vault used to accept.
+    const GUESSABLE: &str = "cat123";
+
+    fn a_kdf() -> Kdf {
+        Kdf {
+            algorithm: "argon2id".to_string(),
+            salt: hex::encode([7u8; SALT_BYTES]),
+            // Argon2's cheapest legal parameters. This test is about which
+            // passphrases `derive` will accept, not about how long it takes to
+            // accept them, and the shipped 64 MiB would make it slow for no
+            // added answer.
+            memory_kib: 8,
+            iterations: 1,
+            parallelism: 1,
+        }
+    }
+
+    /// The two halves of the rule, next to each other, because the whole point
+    /// is that they disagree.
+    ///
+    /// # What would break if they agreed
+    ///
+    /// Every wallet sealed before the floor existed. `derive` is what
+    /// [`Vault::unlock`] runs, and what [`Vault::reveal_phrase`] and the old
+    /// half of [`Vault::change_passphrase`] run — it is the whole of the way
+    /// *in*. A minimum length there would refuse to open a vault this same
+    /// program wrote, and the passphrase cannot be re-checked against the new
+    /// rule without asking for it, which is the moment its owner would instead
+    /// be turned away for good. There is no reset and no second copy.
+    ///
+    /// So `check_chosen` refuses `cat123` and `derive` must not, and this is
+    /// the assertion that says so out loud.
+    #[test]
+    fn the_floor_applies_to_choosing_a_passphrase_and_never_to_using_one() {
+        let short = Secret::from(GUESSABLE);
+
+        assert!(
+            matches!(
+                check_chosen(&short),
+                Err(VaultError::PassphraseTooShort { minimum }) if minimum == MIN_PASSPHRASE_CHARS
+            ),
+            "a passphrase being chosen must clear the floor",
+        );
+
+        assert!(
+            derive(&a_kdf(), &short).is_ok(),
+            "the unlock path grew a length rule — every wallet sealed with a \
+             shorter passphrase than {MIN_PASSPHRASE_CHARS} characters can no \
+             longer be opened",
+        );
+    }
+
+    /// The boundary, and that it is counted in characters.
+    ///
+    /// `len()` would make the four-character Cyrillic word below eight bytes
+    /// and let a passphrase through at half the intended length — and, in the
+    /// direction that is merely embarrassing, would disagree with the count
+    /// the interface shows beside the box.
+    #[test]
+    fn the_floor_is_counted_in_characters() {
+        let at_the_floor: String = "a".repeat(MIN_PASSPHRASE_CHARS);
+        let one_short: String = "a".repeat(MIN_PASSPHRASE_CHARS - 1);
+
+        assert!(check_chosen(&Secret::from(at_the_floor.as_str())).is_ok());
+        assert!(matches!(
+            check_chosen(&Secret::from(one_short.as_str())),
+            Err(VaultError::PassphraseTooShort { .. })
+        ));
+
+        // Twelve Cyrillic characters: twelve by this rule, twenty-four bytes.
+        let cyrillic = "пароль-длина";
+        assert_eq!(cyrillic.chars().count(), MIN_PASSPHRASE_CHARS);
+        assert!(check_chosen(&Secret::from(cyrillic)).is_ok());
+
+        // Eleven of them, which `len()` would have called twenty-two and
+        // waved through.
+        let eleven: String = cyrillic.chars().take(MIN_PASSPHRASE_CHARS - 1).collect();
+        assert!(eleven.len() > MIN_PASSPHRASE_CHARS);
+        assert!(matches!(
+            check_chosen(&Secret::from(eleven.as_str())),
+            Err(VaultError::PassphraseTooShort { .. })
+        ));
+
+        // Empty stays its own answer rather than becoming "too short". They
+        // are different sentences on screen and different next steps.
+        assert!(matches!(
+            check_chosen(&Secret::from("")),
+            Err(VaultError::EmptyPassphrase)
+        ));
+    }
 }

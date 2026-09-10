@@ -4,8 +4,8 @@
 
 import { Motion, R, Sp, Theme, Typo } from "../theme/theme.slint";
 import { Btn, Card, Segmented } from "../components/base.slint";
-import { Actions, SeedState } from "../vm/state.slint";
-import { Field } from "../components/form.slint";
+import { Actions, AppInfo, SeedState } from "../vm/state.slint";
+import { Field, PassphraseRule } from "../components/form.slint";
 import { NoticeTitle } from "../components/note.slint";
 import { Note } from "../vm/structs.slint";
 
@@ -30,6 +30,25 @@ export component PassphraseForm inherits VerticalLayout {
     property <bool> matched: root.mode != "create" || field.text == root.again;
     property <bool> mismatch: root.mode == "create" && root.again != "" && !root.matched;
 
+    // The length floor, and only while a passphrase is being CHOSEN.
+    //
+    // This is the whole no-lockout argument, restated where somebody editing
+    // this form will read it. Unlocking is the same component in the other
+    // mode, and a wallet sealed before this rule existed has to keep opening —
+    // so `submittable` asks only for something non-empty there, and the floor
+    // applies to `create` alone. The vault draws the same line in the same
+    // place: it is in `Vault::create`, and `derive`, which every unlock runs,
+    // has never seen it.
+    //
+    // Held on the root rather than read off the `PassphraseRule` below, for
+    // the reason the block above already gives about `field`: that element
+    // lives inside an `if` and Slint cannot address an element through one.
+    // Both comparisons read the floor from `AppInfo`, so there are two
+    // comparisons and one number.
+    property <bool> long-enough:
+        field.text.character-count >= AppInfo.min-passphrase-chars;
+    property <bool> submittable: root.mode == "create" ? root.long-enough : field.text != "";
+
     spacing: Sp.s7;
 
     VerticalLayout {
@@ -53,6 +72,18 @@ export component PassphraseForm inherits VerticalLayout {
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
+        }
+    }
+
+    // Above the box, so the requirement is read before a passphrase is
+    // invented rather than after Create wallet has gone dead. Only while one is
+    // being chosen — see `submittable`.
+    if root.mode == "create": HorizontalLayout {
+        alignment: center;
+        PassphraseRule {
+            width: 360px;
+            typed: field.text;
+            centred: true;
         }
     }
 
@@ -123,7 +154,7 @@ export component PassphraseForm inherits VerticalLayout {
                 ? @tr("Working…")
                 : root.mode == "create" ? @tr("Create wallet") : @tr("Unlock");
             variant: "primary";
-            enabled: !root.busy && field.text != "" && root.matched;
+            enabled: !root.busy && root.submittable && root.matched;
             clicked => { root.submit(); }
         }
     }
@@ -151,7 +182,7 @@ export component PassphraseForm inherits VerticalLayout {
     // Rust, so clearing it here is the only reach we have — the residual is
     // documented on `pecu_protocol::Secret`.
     function submit() {
-        if (field.text == "") { return; }
+        if (!root.submittable) { return; }
         if (root.mode == "create") {
             if (!root.matched) { return; }
             Actions.create-wallet(field.text);
@@ -275,6 +306,16 @@ export component RestoreForm inherits VerticalLayout {
                 color: Theme.text-secondary;
             }
         }
+        // On this box and not on the one above it: a recovery phrase is
+        // checked against BIP-39, which is a rule it either meets or does not,
+        // and a length floor over it would be a rule nobody chose.
+        HorizontalLayout {
+            alignment: center;
+            rule := PassphraseRule {
+                width: 420px;
+                typed: pass.text;
+            }
+        }
         HorizontalLayout {
             alignment: center;
             pass := Field {
@@ -325,7 +366,7 @@ export component RestoreForm inherits VerticalLayout {
         Btn {
             text: root.busy ? @tr("Working…") : @tr("Restore wallet");
             variant: "primary";
-            enabled: !root.busy && material.text != "" && pass.text != "" && root.matched;
+            enabled: !root.busy && material.text != "" && rule.long-enough && root.matched;
             clicked => { root.submit(); }
         }
     }
@@ -333,7 +374,7 @@ export component RestoreForm inherits VerticalLayout {
     // Both secrets leave in one call and every field is blanked before it
     // returns, same as every other secret-bearing path here.
     function submit() {
-        if (material.text == "" || pass.text == "" || !root.matched) { return; }
+        if (material.text == "" || !rule.long-enough || !root.matched) { return; }
         Actions.restore-wallet(
             kind.index == 2 ? "wif" : kind.index == 1 ? "text" : "phrase",
             material.text,

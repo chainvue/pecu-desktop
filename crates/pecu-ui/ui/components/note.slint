@@ -505,6 +505,20 @@ export component NoticeTitle inherits Text {
         : root.note.code == "passphrase-wrong"
             ? @tr("That is not the passphrase this wallet is using")
         : root.note.code == "passphrase-changed" ? @tr("Passphrase changed")
+        // The floor the vault applies, said in the vault's own number. It
+        // arrives as an argument rather than being written out here, so this
+        // sentence cannot go on naming twelve after the rule has moved.
+        //
+        // Reachable from three forms — setting up, restoring, and changing —
+        // and each of them also states the requirement *before* anything is
+        // typed. Somebody who reads this one has got past a disabled button,
+        // which means either a keyboard path nobody photographed or an
+        // interface that is not this one. It has to be right in both cases.
+        : root.note.code == "passphrase-too-short"
+            ? @tr("A passphrase needs at least {0} characters", root.note.args[0])
+        : root.note.code == "passphrase-empty" ? @tr("A passphrase is required")
+        : root.note.code == "passphrase-change-failed"
+            ? @tr("Could not change the passphrase")
         : root.note.code == "wallet-locked" ? @tr("The wallet is locked")
         : root.note.code == "backup-record-failed" ? @tr("Could not record the backup")
         : root.note.code == "backup-in-progress"
