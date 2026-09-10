@@ -23,8 +23,11 @@
 #![cfg(feature = "mock")]
 #![allow(clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use pecu_chain::Chain;
 use pecu_core::portfolio;
+use support::wait_for;
 use verus_sdk::verus_keys::PrivateKey;
 
 /// An address derived from a fixed scalar rather than typed out.
@@ -205,22 +208,16 @@ async fn the_actor_reads_a_dashboard_from_the_scripted_chain() {
     // Wait for the balance to arrive rather than for a fixed time. A refresh
     // runs off the actor, and the scripted chain sleeps on every read so the
     // loading states are reachable.
-    let balance = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::Portfolio(portfolio))
-                    if !portfolio.balance.spendable_sats.is_empty()
-                        && portfolio.balance.spendable_sats != "0" =>
-                {
-                    break portfolio.balance;
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before sending a balance"),
-            }
+    let balance = wait_for(&mut events, "a balance on the dashboard", |event| match event {
+        pecu_protocol::Event::Portfolio(portfolio)
+            if !portfolio.balance.spendable_sats.is_empty()
+                && portfolio.balance.spendable_sats != "0" =>
+        {
+            Some(portfolio.balance)
         }
+        _ => None,
     })
-    .await
-    .expect("a dashboard within thirty seconds");
+    .await;
 
     assert_eq!(balance.spendable_sats, "41525000000");
     assert_eq!(balance.immature_sats, "11250000000");
@@ -325,21 +322,15 @@ async fn resolve(
         },
     ));
 
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::SendValidation(verdict))
-                    if verdict.to_note.code != "verusid-resolving" =>
-                {
-                    break verdict;
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before answering about {typed}"),
-            }
+    wait_for(events, &format!("a settled verdict on `{typed}`"), |event| match event {
+        pecu_protocol::Event::SendValidation(verdict)
+            if verdict.to_note.code != "verusid-resolving" =>
+        {
+            Some(verdict)
         }
+        _ => None,
     })
     .await
-    .unwrap_or_else(|_| panic!("`{typed}` never resolved"))
 }
 
 /// An identity you looked up is never counted among the ones you control.
@@ -422,21 +413,13 @@ async fn identities(
     Vec<pecu_protocol::IdentityVm>,
     Vec<pecu_protocol::IdentityVm>,
 ) {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::Identities { yours, looked_up })
-                    if ready(&yours, &looked_up) =>
-                {
-                    break (yours, looked_up);
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before answering about identities"),
-            }
+    wait_for(events, "identities the caller recognises", |event| match event {
+        pecu_protocol::Event::Identities { yours, looked_up } if ready(&yours, &looked_up) => {
+            Some((yours, looked_up))
         }
+        _ => None,
     })
     .await
-    .expect("an identities event within thirty seconds")
 }
 
 /// Refreshing the watch list does not open anything.
@@ -476,17 +459,11 @@ async fn refreshing_the_watch_list_opens_no_sheet() {
     dispatcher.send(pecu_protocol::Command::LookUpIdentity(
         "stranger@".to_string(),
     ));
-    let opened = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::IdentityDetail(Some(vm))) => break vm,
-                Some(_) => {}
-                None => panic!("the core stopped before opening the sheet"),
-            }
-        }
+    let opened = wait_for(&mut events, "the sheet a lookup opens", |event| match event {
+        pecu_protocol::Event::IdentityDetail(Some(vm)) => Some(vm),
+        _ => None,
     })
-    .await
-    .expect("the lookup opens the sheet");
+    .await;
     assert_eq!(opened.name, "stranger.VRSCTEST@");
 
     // Now refresh, which re-reads the watched row. Nothing may open.
@@ -498,6 +475,13 @@ async fn refreshing_the_watch_list_opens_no_sheet() {
     assert_eq!(looked_up.len(), 1, "the refresh lost the watched row");
 
     // Drain briefly: an `IdentityDetail` arriving here is the bug.
+    //
+    // A clock, and one of the two #47 deliberately left as clocks. This waits
+    // for something to *not* happen, so there is no state to wait on and no
+    // predicate that could end it early. A loaded machine makes this assertion
+    // weaker rather than red — the worst it can do is fail to see a sheet that
+    // was opened — which is the opposite of the failure the rest of this file's
+    // budgets had.
     let stray = tokio::time::timeout(std::time::Duration::from_millis(1500), async {
         loop {
             if let Some(pecu_protocol::Event::IdentityDetail(Some(vm))) = events.recv().await {
@@ -553,17 +537,11 @@ async fn a_name_claim_outlives_the_wallet_that_started_it() {
     // on. In the running application the shell asks at startup; here the test
     // has to.
     dispatcher.send(pecu_protocol::Command::ProbeNodes);
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::Network(vm)) if vm.effective.is_some() => break,
-                Some(_) => {}
-                None => panic!("the core stopped before a node answered"),
-            }
-        }
+    wait_for(&mut events, "a node that says which chain it is on", |event| match event {
+        pecu_protocol::Event::Network(vm) if vm.effective.is_some() => Some(()),
+        _ => None,
     })
-    .await
-    .expect("a node answers within thirty seconds");
+    .await;
 
     dispatcher.send(pecu_protocol::Command::StartRegistration {
         name: "pecu".to_string(),
@@ -622,19 +600,13 @@ async fn wait_for_registration(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<pecu_protocol::Event>,
     ready: impl Fn(Option<&pecu_protocol::RegistrationVm>) -> bool,
 ) -> Option<pecu_protocol::RegistrationVm> {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::Registration(claim)) if ready(claim.as_deref()) => {
-                    break claim.map(|boxed| *boxed);
-                }
-                Some(_) => {}
-                None => panic!("the core stopped before reporting a claim"),
-            }
+    wait_for(events, "a claim the caller recognises", |event| match event {
+        pecu_protocol::Event::Registration(claim) if ready(claim.as_deref()) => {
+            Some(claim.map(|boxed| *boxed))
         }
+        _ => None,
     })
     .await
-    .expect("a registration event within thirty seconds")
 }
 
 /// Arriving at the Identities screen re-reads, even when the list is not empty.
@@ -688,17 +660,7 @@ async fn arriving_at_the_screen_re_reads_a_list_that_is_already_full() {
         pecu_protocol::ScreenId::Identities,
     ));
 
-    let again = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            if let Some(pecu_protocol::Event::Identities { yours, .. }) = events.recv().await {
-                if yours.len() >= OWNED {
-                    break yours;
-                }
-            }
-        }
-    })
-    .await
-    .expect("arriving at the screen asked the chain again");
+    let (again, _) = identities(&mut events, |yours, _| yours.len() >= OWNED).await;
     assert_eq!(again.len(), OWNED);
 }
 
@@ -759,20 +721,15 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
         pecu_protocol::ScreenId::Markets,
     ));
 
-    let rows = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            if let Some(pecu_protocol::Event::Markets { rows, quote }) = events.recv().await {
-                if !rows.is_empty() {
-                    // The column has to be able to say what it is denominated
-                    // in, or every figure under it is a ratio of nothing.
-                    assert_eq!(quote, "DAI.vETH");
-                    break rows;
-                }
-            }
-        }
+    let (rows, quote) = wait_for(&mut events, "a filled markets screen", |event| match event {
+        pecu_protocol::Event::Markets { rows, quote } if !rows.is_empty() => Some((rows, quote)),
+        _ => None,
     })
-    .await
-    .expect("arriving at the markets screen read the chain");
+    .await;
+
+    // The column has to be able to say what it is denominated in, or every
+    // figure under it is a ratio of nothing.
+    assert_eq!(quote, "DAI.vETH");
 
     let vrsctest = rows
         .iter()
@@ -819,15 +776,13 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
     // And the detail, which must come out of the same book rather than a second
     // read that could quote a different block.
     dispatcher.send(pecu_protocol::Command::OpenMarket(vrsctest.address.clone()));
-    let detail = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if let Some(pecu_protocol::Event::MarketDetail(Some(detail))) = events.recv().await {
-                break detail;
-            }
+    let detail = wait_for(&mut events, "the detail of the row that was opened", |event| {
+        match event {
+            pecu_protocol::Event::MarketDetail(Some(detail)) => Some(detail),
+            _ => None,
         }
     })
-    .await
-    .expect("opening a row answered");
+    .await;
 
     assert_eq!(detail.name, "VRSCTEST");
     assert_eq!(detail.price, "0.5372");
@@ -867,17 +822,15 @@ async fn opening_the_markets_screen_prices_the_chain_currency() {
     dispatcher.send(pecu_protocol::Command::OpenMarket(
         "iBBRjDbPf3wdFpghLotJQ3ESjtPBxn6NS3".to_string(),
     ));
-    let moving = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if let Some(pecu_protocol::Event::MarketDetail(Some(detail))) = events.recv().await {
-                if detail.name == "vrealv1" {
-                    break detail;
-                }
+    let moving = wait_for(&mut events, "the detail of a market with a history", |event| {
+        match event {
+            pecu_protocol::Event::MarketDetail(Some(detail)) if detail.name == "vrealv1" => {
+                Some(detail)
             }
+            _ => None,
         }
     })
-    .await
-    .expect("a market with a history");
+    .await;
 
     assert!(moving.series.len() > 20, "{}", moving.series.len());
     // Oldest first, rising, and a day apart — the supply falls and the holding
@@ -929,17 +882,13 @@ async fn the_dashboard_gets_prices_without_visiting_the_markets_screen() {
         passphrase: pecu_protocol::Secret::from("correct-horse-battery-staple-9931"),
     });
 
-    let rows = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            if let Some(pecu_protocol::Event::Markets { rows, .. }) = events.recv().await {
-                if !rows.is_empty() {
-                    break rows;
-                }
-            }
+    let rows = wait_for(&mut events, "prices nobody navigated to a screen for", |event| {
+        match event {
+            pecu_protocol::Event::Markets { rows, .. } if !rows.is_empty() => Some(rows),
+            _ => None,
         }
     })
-    .await
-    .expect("a new wallet reads the markets once, with no navigation at all");
+    .await;
 
     assert!(
         rows.iter().any(|row| row.name == "VRSCTEST"),
@@ -982,17 +931,11 @@ async fn a_conversion_is_priced_by_the_node_and_not_by_the_mid_price() {
     });
 
     // The balance has to be in before an amount can be checked against it.
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            if let Some(pecu_protocol::Event::Portfolio(portfolio)) = events.recv().await {
-                if !portfolio.assets.is_empty() {
-                    break;
-                }
-            }
-        }
+    wait_for(&mut events, "a balance with assets in it", |event| match event {
+        pecu_protocol::Event::Portfolio(portfolio) if !portfolio.assets.is_empty() => Some(()),
+        _ => None,
     })
-    .await
-    .expect("a balance");
+    .await;
 
     let quote = quote_for(&dispatcher, &mut events, VRSCTEST, DAI, "250").await;
 
@@ -1042,15 +985,9 @@ async fn quote_for(
         },
     ));
 
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            match events.recv().await {
-                Some(pecu_protocol::Event::ConvertQuote(quote)) => break *quote,
-                Some(_) => {}
-                None => panic!("the core stopped before pricing {pay}"),
-            }
-        }
+    wait_for(events, &format!("a quote for {pay}"), |event| match event {
+        pecu_protocol::Event::ConvertQuote(quote) => Some(*quote),
+        _ => None,
     })
     .await
-    .expect("a quote")
 }
