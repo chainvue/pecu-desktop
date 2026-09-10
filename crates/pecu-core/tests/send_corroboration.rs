@@ -301,10 +301,30 @@ fn with_utxos(wallet: &Wallet, held: Vec<AddressUtxo>) -> pecu_mock::MockChain {
 /// does not have that coin" — lag from disagreement — so a test about either
 /// has to be able to move it.
 fn with_utxos_at(wallet: &Wallet, held: Vec<AddressUtxo>, tip: u32) -> pecu_mock::MockChain {
+    on_chain(wallet, held, tip, 0)
+}
+
+/// The same, on a named chain rather than on the default one.
+///
+/// `MockChain` derives a block hash from the height, so two stock mocks name the
+/// same block at every height — they are on the same chain by construction, and
+/// `chain_fork` is how a fixture says otherwise. That matters because
+/// corroboration asks both nodes to name the block at a height both claim to have
+/// reached, which is the only question in the comparison whose answer neither
+/// node chooses; a suite that could not express "these are not those blocks"
+/// could not reach it, and every test above would be pinning the height rules
+/// alone.
+fn on_chain(
+    wallet: &Wallet,
+    held: Vec<AddressUtxo>,
+    tip: u32,
+    chain_fork: u32,
+) -> pecu_mock::MockChain {
     let mut state = pecu_mock::MockState {
         chain_name: "VRSCTEST".to_string(),
         chain_id: TESTNET_ID.to_string(),
         tip,
+        chain_fork,
         ..pecu_mock::MockState::default()
     };
     state.utxos.insert(wallet.address.clone(), held);
@@ -772,4 +792,139 @@ fn a_shield_is_funded_from_the_same_transparent_coins_and_is_checked_the_same_wa
         Err(other) => panic!("the wrong refusal: {other:?}"),
         Ok(_) => panic!("a node serving another chain's coins funded a shield"),
     }
+}
+
+/// Issue #45, end to end: #29's scenario with the two tips swapped.
+///
+/// The wallet is set to the longer chain. The node in use forwards a **shorter**
+/// chain's answers — its tip and every coin height with them — so every coin it
+/// invents sits *below* the second source's tip. That is rule 3 in
+/// `pecu_chain::corroborate`, which excused a missing coin with no bound
+/// whenever the second source was the node in front, on the reading that the
+/// coin is one this wallet has already spent. The verdict was `OutOfStep` and
+/// the payment went out filtered, under a caption saying nothing was wrong.
+///
+/// One coin in common, which is the half that makes this about money rather than
+/// about a sentence: with something left to pay from, `OutOfStep` completes the
+/// payment and `Diverged` refuses it. The refusal has to be `Uncorroborated` and
+/// not one of the two out-of-step sentences — "wait for the node you are using to
+/// catch up" is advice about a node that is on another chain and is never going
+/// to arrive.
+#[test]
+fn a_node_forwarding_a_shorter_chains_answers_is_refused_rather_than_excused() {
+    let wallet = wallet();
+    let coin = |index: u8, height: u32, satoshis: u64| AddressUtxo {
+        utxo: Utxo {
+            txid: txid(0x45, index),
+            vout: 0,
+            satoshis: Amount::from_sat(satoshis),
+            script_pubkey: wallet.script.clone(),
+        },
+        address: wallet.address.clone(),
+        height,
+        is_spendable: true,
+    };
+
+    // The node in use: another chain's blocks, and a tip three million below the
+    // one the wallet is set to.
+    let primary = on_chain(
+        &wallet,
+        vec![
+            coin(0, TESTNET_TIP - 500, 5 * COIN),
+            coin(1, TESTNET_TIP - 499, 5 * COIN),
+        ],
+        TESTNET_TIP,
+        1,
+    );
+    // The shipped endpoint, on the chain the wallet asked for, holding one of
+    // the two.
+    let secondary = with_utxos_at(
+        &wallet,
+        vec![coin(0, TESTNET_TIP - 500, 5 * COIN)],
+        MAINNET_TIP,
+    );
+
+    let outcome = send::prepare(
+        &Chain::Mock(primary),
+        Some(&Corroborator {
+            chain: &Chain::Mock(secondary),
+            url: SHIPPED_URL,
+        }),
+        &wallet.vault,
+        LABEL,
+        &draft(false),
+        "",
+    );
+
+    match outcome {
+        Err(send::SendError::Refused(SpendRefused::Uncorroborated { count, secondary })) => {
+            assert_eq!(count, 1, "the coin only the node in use has should be named");
+            assert_eq!(secondary, SHIPPED_URL);
+        }
+        // Either of these would be the defect: the payment completing filtered
+        // under a caption about two nodes being out of step, or a refusal telling
+        // somebody to wait for whichever node it named.
+        Err(other) => panic!("a node forwarding a shorter chain produced: {other:?}"),
+        Ok(_) => panic!("a node forwarding a shorter chain funded a payment"),
+    }
+}
+
+/// And the two nodes from that test, put back on one chain, must still pay.
+///
+/// The same heights, the same coins, the same three-million-block gap — one
+/// thing changed, which is that both nodes name the same blocks. This is the
+/// honest shape the fix must leave alone: a node in use that is behind, still
+/// offering a coin the second source has watched be spent. It pays from what
+/// survived and the review says how much was left out.
+///
+/// Paired with the test above deliberately. A fix that refused a primary for
+/// being behind would pass that one and fail this one, and nothing else in this
+/// file would have noticed.
+#[test]
+fn the_same_pair_on_one_chain_still_pays_from_what_the_shipped_endpoint_vouched_for() {
+    let wallet = wallet();
+    let coin = |index: u8, height: u32, satoshis: u64| AddressUtxo {
+        utxo: Utxo {
+            txid: txid(0x45, index),
+            vout: 0,
+            satoshis: Amount::from_sat(satoshis),
+            script_pubkey: wallet.script.clone(),
+        },
+        address: wallet.address.clone(),
+        height,
+        is_spendable: true,
+    };
+
+    let primary = with_utxos_at(
+        &wallet,
+        vec![
+            coin(0, TESTNET_TIP - 500, 5 * COIN),
+            coin(1, TESTNET_TIP - 499, 5 * COIN),
+        ],
+        TESTNET_TIP,
+    );
+    let secondary = with_utxos_at(
+        &wallet,
+        vec![coin(0, TESTNET_TIP - 500, 5 * COIN)],
+        MAINNET_TIP,
+    );
+
+    let prepared = send::prepare(
+        &Chain::Mock(primary),
+        Some(&Corroborator {
+            chain: &Chain::Mock(secondary),
+            url: SHIPPED_URL,
+        }),
+        &wallet.vault,
+        LABEL,
+        &draft(false),
+        "",
+    )
+    .expect("the corroborated coin can pay");
+
+    assert_eq!(prepared.withheld.count, 1);
+    assert!(
+        prepared.withheld.already_spent,
+        "the second source is ahead, so the coin it will not vouch for is a spent one",
+    );
 }

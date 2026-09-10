@@ -206,12 +206,38 @@ fn coins(value: f64) -> Amount {
     Amount::from_sat(sats as u64)
 }
 
+/// The hash of a block, as a node on one chain answers it.
+///
+/// Two halves, because a hash answers two questions at once: which chain, and
+/// which block on it. The height alone was not enough — see
+/// [`MockState::chain_fork`] — and `0` reproduces the height-only hash this
+/// emitted before, so every existing fixture answers exactly as it did.
+///
+/// `best_block_hash` goes through here too, so that it and `block_hash(tip)`
+/// agree the way they do on a real node. A double where they disagree makes
+/// every reorg check fire spuriously.
+fn block_hash_at(chain_fork: u32, height: u32) -> String {
+    format!("{chain_fork:032x}{height:032x}")
+}
+
 /// What the scripted chain will answer with.
 #[derive(Clone, Debug)]
 pub struct MockState {
     pub chain_name: String,
     pub chain_id: String,
     pub tip: u32,
+    /// Which chain this node's blocks belong to.
+    ///
+    /// `getblockhash` on a real node answers about the chain that node is on,
+    /// and a mock deriving the whole hash from the height alone puts every
+    /// scripted node on the same chain at every height. That made one scenario
+    /// inexpressible here — two nodes serving *different* chains, which is what
+    /// `pecu_chain::corroborate` asks about when it holds one node's coins
+    /// against another's, and what issues #29 and #45 are both about.
+    ///
+    /// `0`, the default, produces the height-only hash this answered before,
+    /// byte for byte. Any other value is another chain, agreeing with nobody.
+    pub chain_fork: u32,
     /// Per address: the outputs it holds.
     pub utxos: BTreeMap<String, Vec<AddressUtxo>>,
     /// Per address: its movement history, oldest first.
@@ -319,6 +345,7 @@ impl Default for MockState {
             chain_name: "VRSCTEST".to_string(),
             chain_id: "iJhCezBExJHvtyH3fGhNnt2NhU4Ztkf2yq".to_string(),
             tip: 1_173_695,
+            chain_fork: 0,
             utxos: BTreeMap::new(),
             deltas: BTreeMap::new(),
             mempool: BTreeMap::new(),
@@ -659,11 +686,11 @@ impl ChainReader for MockChain {
     }
 
     fn best_block_hash(&self) -> Result<String, RpcError> {
-        self.read(|s| Ok(format!("{:064x}", s.tip)))
+        self.read(|s| Ok(block_hash_at(s.chain_fork, s.tip)))
     }
 
     fn block_hash(&self, height: u32) -> Result<String, RpcError> {
-        self.read(|_| Ok(format!("{height:064x}")))
+        self.read(|s| Ok(block_hash_at(s.chain_fork, height)))
     }
 
     fn mempool(&self) -> Result<Vec<String>, RpcError> {
